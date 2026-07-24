@@ -358,10 +358,19 @@ var knownPrefixes = map[string]string{
 	atomNamespace:    "atom",
 }
 
-// collectExtensions walks extension elements and folds them into metadata.
-// Repeated same-key elements become arrays; the key is the bare local name,
-// falling back to a namespace-prefixed key only when two namespaces collide on
-// the same local name within this entry.
+// collectExtensions walks extension elements and folds them into metadata. The
+// key is the bare local name, falling back to a namespace-prefixed key only
+// when two namespaces collide on the same local name within this entry.
+//
+// To keep metadata types consistent across entries (a feed may carry one
+// <vr:software> in one post and several in another), the JSON type is chosen
+// from the element's *structure*, not its count:
+//
+//   - Object-valued elements (attributes and/or children, e.g. vr:software,
+//     vr:topic, vr:image) are collection/record-like and are ALWAYS arrays,
+//     even when a single occurrence appears.
+//   - Plain chardata scalars (e.g. vr:source, itunes:duration) stay scalars,
+//     and only become an array if the same element repeats within the entry.
 func collectExtensions(metadata map[string]any, extras []xmlAny) {
 	if len(extras) == 0 {
 		return
@@ -382,14 +391,22 @@ func collectExtensions(metadata map[string]any, extras []xmlAny) {
 			key = prefixedKey(x.XMLName)
 		}
 		val := xmlAnyValue(x)
-		appendMetadata(metadata, key, val)
+		_, isObject := val.(map[string]any)
+		appendMetadata(metadata, key, val, isObject)
 	}
 }
 
-func appendMetadata(metadata map[string]any, key string, val any) {
+// appendMetadata folds val into metadata[key]. When forceArray is set (object
+// values), the key is always an array; otherwise scalars are stored bare and
+// only promoted to an array on repetition.
+func appendMetadata(metadata map[string]any, key string, val any, forceArray bool) {
 	existing, ok := metadata[key]
 	if !ok {
-		metadata[key] = val
+		if forceArray {
+			metadata[key] = []any{val}
+		} else {
+			metadata[key] = val
+		}
 		return
 	}
 	if arr, ok := existing.([]any); ok {
@@ -435,7 +452,9 @@ func xmlAnyValue(x xmlAny) any {
 			if len(childCollisions[key]) > 1 {
 				key = prefixedKey(c.XMLName)
 			}
-			appendMetadata(obj, key, xmlAnyValue(c))
+			cVal := xmlAnyValue(c)
+			_, isObject := cVal.(map[string]any)
+			appendMetadata(obj, key, cVal, isObject)
 		}
 		return obj
 	}

@@ -162,10 +162,14 @@ func TestRSSAtomMapping(t *testing.T) {
 		t.Errorf("software[0] = %#v", sw0)
 	}
 
-	// Single attr-only vr:language → object (not array).
-	lang, ok := e.Metadata["language"].(map[string]any)
-	if !ok || lang["term"] != "R" {
-		t.Errorf("language metadata = %#v", e.Metadata["language"])
+	// A single object-valued vr:language is still an array, so the type stays
+	// consistent whether an entry has one or many.
+	lang, ok := e.Metadata["language"].([]any)
+	if !ok || len(lang) != 1 {
+		t.Fatalf("language metadata = %#v (want single-element array)", e.Metadata["language"])
+	}
+	if lang[0].(map[string]any)["term"] != "R" {
+		t.Errorf("language[0] = %#v", lang[0])
 	}
 
 	// Chardata-only vr:source → string.
@@ -173,10 +177,13 @@ func TestRSSAtomMapping(t *testing.T) {
 		t.Errorf("source metadata = %#v", e.Metadata["source"])
 	}
 
-	// vr:image attr object with alt+href.
-	img, ok := e.Metadata["image"].(map[string]any)
-	if !ok || img["alt"] != "A terrarium." {
-		t.Errorf("image metadata = %#v", e.Metadata["image"])
+	// Single object-valued vr:image → single-element array.
+	imgArr, ok := e.Metadata["image"].([]any)
+	if !ok || len(imgArr) != 1 {
+		t.Fatalf("image metadata = %#v (want single-element array)", e.Metadata["image"])
+	}
+	if imgArr[0].(map[string]any)["alt"] != "A terrarium." {
+		t.Errorf("image[0] = %#v", imgArr[0])
 	}
 
 	// vr:type must NOT appear in metadata.
@@ -238,6 +245,35 @@ func TestRSS20Mapping(t *testing.T) {
 	}
 	if e.Metadata["episode"] != "42" {
 		t.Errorf("episode = %#v", e.Metadata["episode"])
+	}
+}
+
+// TestRSSObjectExtensionAlwaysArray guards the invariant that object-valued
+// extension elements keep the same JSON type regardless of how many times they
+// appear in an entry: an entry with a single <vr:software> must produce an
+// array, matching entries that carry several.
+func TestRSSObjectExtensionAlwaysArray(t *testing.T) {
+	const single = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:vr="https://opensource.posit.co/ns/content">
+  <entry>
+    <id>https://example.com/one</id>
+    <title>One</title>
+    <updated>2026-01-01T00:00:00Z</updated>
+    <vr:type>post</vr:type>
+    <vr:software term="ggsql" href="https://opensource.posit.co/software/ggsql/"/>
+  </entry>
+</feed>`
+
+	srv := serveFeed(t, single)
+	r, _ := fetchOne(t, srv.URL)
+	e := r.ContentEntries()[0]
+
+	software, ok := e.Metadata["software"].([]any)
+	if !ok {
+		t.Fatalf("single vr:software should be an array, got %T: %#v", e.Metadata["software"], e.Metadata["software"])
+	}
+	if len(software) != 1 || software[0].(map[string]any)["term"] != "ggsql" {
+		t.Errorf("software = %#v", software)
 	}
 }
 

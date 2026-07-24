@@ -186,11 +186,13 @@ type xmlAny struct {
 namespace** (via `XMLName.Space`) and attributes. We then walk `Extra` and
 build metadata values:
 
-- Repeated same-name elements (e.g. multiple `vr:software`) → a JSON array.
-- Elements with only attributes (e.g. `<vr:software term="pak" href="…"/>`) →
-  an object of the attributes: `{"term":"pak","href":"…"}`.
+- Object-valued elements (attributes and/or children, e.g.
+  `<vr:software term="pak" href="…"/>`) are **always** a JSON array of objects
+  — even a single occurrence — so the type stays consistent whether an entry
+  has one `vr:software` or several. Each object is the element's attributes:
+  `{"term":"pak","href":"…"}`.
 - Elements with only chardata (e.g. `<vr:source>tidyverse</vr:source>`) → the
-  string value.
+  string value; repeated occurrences promote to an array.
 - Elements with children → nested object/array recursively.
 - **Key** = local name (`software`). On collision across namespaces, fall back
   to `prefix:local` using a small known-namespace prefix map
