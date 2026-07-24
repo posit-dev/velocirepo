@@ -298,43 +298,25 @@ func TestRSSMalformedFeed(t *testing.T) {
 }
 
 func TestFeedFilename(t *testing.T) {
-	// Filenames keep a human-readable slug prefix but always carry a short hash
-	// suffix derived from the full URL, so distinct feeds never collide.
-	prefixes := map[string]string{
-		"https://opensource.posit.co/blog/index.md.xml":      "blog-",
-		"https://opensource.posit.co/people/index.md.xml":    "people-",
-		"https://opensource.posit.co/resources/index.md.xml": "resources-",
-		"https://example.com/feed.xml":                       "example-com-",
-		"https://example.com/podcast.xml":                    "podcast-",
-		"https://example.com/":                               "example-com-",
+	cases := map[string]string{
+		"https://opensource.posit.co/blog/index.md.xml":      "blog.jsonl",
+		"https://opensource.posit.co/people/index.md.xml":    "people.jsonl",
+		"https://opensource.posit.co/resources/index.md.xml": "resources.jsonl",
+		"https://example.com/feed.xml":                       "example-com.jsonl",
+		"https://example.com/podcast.xml":                    "podcast.jsonl",
+		"https://example.com/":                               "example-com.jsonl",
 	}
-	for in, wantPrefix := range prefixes {
-		got := feedFilename(in)
-		if !strings.HasPrefix(got, wantPrefix) || !strings.HasSuffix(got, ".jsonl") {
-			t.Errorf("feedFilename(%q) = %q, want prefix %q and .jsonl suffix", in, got, wantPrefix)
+	for in, want := range cases {
+		if got := feedFilename(in); got != want {
+			t.Errorf("feedFilename(%q) = %q, want %q", in, got, want)
 		}
-	}
-}
-
-// TestFeedFilenameNoCollision guards that two distinct feeds whose paths slug
-// to the same readable name still produce different filenames, so their entries
-// are never merged (and deduped by id) into one file.
-func TestFeedFilenameNoCollision(t *testing.T) {
-	a := feedFilename("https://one.example.com/blog/index.xml")
-	b := feedFilename("https://two.example.com/blog/index.xml")
-	if a == b {
-		t.Errorf("distinct feeds collided on filename %q", a)
-	}
-	if !strings.HasPrefix(a, "blog-") || !strings.HasPrefix(b, "blog-") {
-		t.Errorf("expected readable blog- prefix, got %q and %q", a, b)
 	}
 }
 
 func TestRSSContentFilename(t *testing.T) {
 	r := &RSS{FeedURL: "https://opensource.posit.co/blog/index.md.xml"}
-	got := r.ContentFilename()
-	if !strings.HasPrefix(got, "blog-") || !strings.HasSuffix(got, ".jsonl") {
-		t.Errorf("ContentFilename() = %q, want blog-<hash>.jsonl", got)
+	if got := r.ContentFilename(); got != "blog.jsonl" {
+		t.Errorf("ContentFilename() = %q, want blog.jsonl", got)
 	}
 }
 

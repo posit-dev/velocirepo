@@ -511,19 +511,16 @@ func normalizeTime(raw string) string {
 	return raw
 }
 
-// feedFilename derives a stable JSONL file name from a feed URL. It combines a
-// human-readable slug (the last meaningful path segment, stripping index.*
-// filenames) with a short hash of the full URL. The hash suffix guarantees two
-// distinct feeds in the same project never collide onto one file — even when
-// their paths slug to the same name (e.g. two hosts both serving
-// /blog/index.xml) — which would otherwise merge unrelated entries by id.
+// feedFilename derives a stable, human-readable JSONL file name from a feed
+// URL: the last meaningful path segment (stripping index.* filenames), e.g.
+// https://…/blog/index.md.xml → blog.jsonl. When no usable slug can be derived
+// it falls back to a short hash of the URL.
 func feedFilename(feedURL string) string {
 	slug := feedSlug(feedURL)
-	hash := shortHash(feedURL)
 	if slug == "" {
-		return "feed-" + hash + ".jsonl"
+		return "feed-" + shortHash(feedURL) + ".jsonl"
 	}
-	return slug + "-" + hash + ".jsonl"
+	return slug + ".jsonl"
 }
 
 func feedSlug(feedURL string) string {
