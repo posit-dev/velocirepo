@@ -201,6 +201,22 @@ var dataFixHandlers = []dataFixHandler{
 		},
 	},
 	{
+		issueType: store.IssueProjectMismatch,
+		prepare: func(issues []store.Issue) *dataFixAction {
+			paths := collectUniquePaths(issues)
+			if len(paths) == 0 {
+				return nil
+			}
+			return &dataFixAction{
+				confirmMessage: fmt.Sprintf("Fix project_id field in %d record(s) across %d file(s)?", len(issues), len(paths)),
+				successFormat:  "  Fixed %d record(s)\n",
+				fix: func() *store.FixResult {
+					return store.FixProjectMismatches(paths)
+				},
+			}
+		},
+	},
+	{
 		issueType: store.IssueOrphanDir,
 		prepare: func(issues []store.Issue) *dataFixAction {
 			paths := collectOrphanPaths(issues)

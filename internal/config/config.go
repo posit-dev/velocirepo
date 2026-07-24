@@ -74,6 +74,7 @@ type Project struct {
 	OpenVSX       StringList `toml:"openvsx"`
 	YouTube       StringList `toml:"youtube"`
 	LinkedIn      StringList `toml:"linkedin"`
+	RSS           StringList `toml:"rss"`
 }
 
 type SourceEntry struct {

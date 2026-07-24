@@ -430,6 +430,12 @@ var fetchSourceDescriptors = []fetchSourceDescriptor{
 			return &source.LinkedIn{Client: client, Token: tokens.LinkedIn, Target: target}
 		},
 	},
+	{
+		Descriptor: sourceinfo.Must("rss"),
+		metricFactory: func(client *http.Client, _ Tokens, target string) source.Source {
+			return &source.RSS{Client: client, FeedURL: target}
+		},
+	},
 }
 
 func missingToken(token, reason string) string {
@@ -575,4 +581,8 @@ func YouTube(ctx context.Context, cfg *config.Config, tokens Tokens, opts Option
 
 func LinkedIn(ctx context.Context, cfg *config.Config, tokens Tokens, opts Options) ([]Result, error) {
 	return runDescriptor(ctx, cfg, tokens, opts, "linkedin")
+}
+
+func RSS(ctx context.Context, cfg *config.Config, tokens Tokens, opts Options) ([]Result, error) {
+	return runDescriptor(ctx, cfg, tokens, opts, "rss")
 }

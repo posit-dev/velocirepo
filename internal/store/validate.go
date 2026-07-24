@@ -29,6 +29,7 @@ const (
 	IssueUnexpectedFile
 	IssueSourceMismatch
 	IssueDeprecatedMetric
+	IssueProjectMismatch
 )
 
 func (t IssueType) String() string {
@@ -53,6 +54,8 @@ func (t IssueType) String() string {
 		return "source mismatch"
 	case IssueDeprecatedMetric:
 		return "deprecated metric"
+	case IssueProjectMismatch:
+		return "project mismatch"
 	default:
 		return "unknown"
 	}
@@ -520,6 +523,81 @@ func fixSourceInFile(path string) (int, error) {
 	return fixed, writeLines(path, lines)
 }
 
+// FixProjectMismatches backfills or corrects the project_id field in content
+// JSONL files, deriving the correct value from the parent directory name
+// (data/content/<source>/<project-id>/<file>.jsonl).
+func FixProjectMismatches(paths []string) *FixResult {
+	result := &FixResult{}
+	for _, path := range paths {
+		n, err := fixProjectIDInFile(path)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("%s: %w", path, err))
+		} else {
+			result.Fixed += n
+		}
+	}
+	return result
+}
+
+func fixProjectIDInFile(path string) (int, error) {
+	projectID := filepath.Base(filepath.Dir(path))
+
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var lines [][]byte
+	fixed := 0
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(line, &raw); err != nil {
+			cp := make([]byte, len(line))
+			copy(cp, line)
+			lines = append(lines, cp)
+			continue
+		}
+
+		var pid string
+		if p, ok := raw["project_id"]; ok {
+			_ = json.Unmarshal(p, &pid)
+		}
+
+		if pid != projectID {
+			raw["project_id"], _ = json.Marshal(projectID)
+			rewritten, err := json.Marshal(raw)
+			if err != nil {
+				cp := make([]byte, len(line))
+				copy(cp, line)
+				lines = append(lines, cp)
+				continue
+			}
+			lines = append(lines, rewritten)
+			fixed++
+		} else {
+			cp := make([]byte, len(line))
+			copy(cp, line)
+			lines = append(lines, cp)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	_ = f.Close()
+
+	if fixed == 0 {
+		return 0, nil
+	}
+
+	return fixed, writeLines(path, lines)
+}
+
 func FixDeprecatedMetrics(paths []string) *FixResult {
 	result := &FixResult{}
 	for _, path := range paths {
@@ -849,12 +927,12 @@ func validateContentCategory(categoryDir string, projectIDs map[string]bool, res
 				continue
 			}
 
-			validateContentDir(projPath, sourceName, result)
+			validateContentDir(projPath, sourceName, projID, result)
 		}
 	}
 }
 
-func validateContentDir(dir, sourceName string, result *ValidationResult) {
+func validateContentDir(dir, sourceName, projectID string, result *ValidationResult) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -877,11 +955,11 @@ func validateContentDir(dir, sourceName string, result *ValidationResult) {
 			continue
 		}
 
-		validateContentFile(path, sourceName, result)
+		validateContentFile(path, sourceName, projectID, result)
 	}
 }
 
-func validateContentFile(path, sourceName string, result *ValidationResult) {
+func validateContentFile(path, sourceName, projectID string, result *ValidationResult) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -943,6 +1021,23 @@ func validateContentFile(path, sourceName string, result *ValidationResult) {
 				Path:    path,
 				Line:    lineNum,
 				Message: fmt.Sprintf("line %d: source %q does not match directory %q", lineNum, e.Source, sourceName),
+				Fixable: true,
+			})
+		}
+		if e.ProjectID == "" {
+			result.Issues = append(result.Issues, Issue{
+				Type:    IssueProjectMismatch,
+				Path:    path,
+				Line:    lineNum,
+				Message: fmt.Sprintf("line %d: empty project_id field", lineNum),
+				Fixable: true,
+			})
+		} else if e.ProjectID != projectID {
+			result.Issues = append(result.Issues, Issue{
+				Type:    IssueProjectMismatch,
+				Path:    path,
+				Line:    lineNum,
+				Message: fmt.Sprintf("line %d: project_id %q does not match directory %q", lineNum, e.ProjectID, projectID),
 				Fixable: true,
 			})
 		}

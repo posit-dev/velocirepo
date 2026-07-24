@@ -27,6 +27,14 @@ func WriteContent(dataDir, sourceName, projectID, filename string, entries []sou
 
 	merged := mergeContentEntries(existing, entries)
 
+	// Stamp project_id on every line from the write path, so all content
+	// sources record it uniformly and pre-existing lines are backfilled on the
+	// next write. Keeps content JSONL consistent with metrics/events and lets
+	// RewriteProjectID keep them in sync on rename.
+	for i := range merged {
+		merged[i].ProjectID = projectID
+	}
+
 	if err := writeJSONLAtomic(path, merged, "content entry"); err != nil {
 		return err
 	}

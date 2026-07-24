@@ -33,6 +33,10 @@ func TestWriteContent(t *testing.T) {
 	if read[0].ID != "vid1" || read[0].Title != "First Video" {
 		t.Errorf("unexpected entry 0: %+v", read[0])
 	}
+	// WriteContent stamps project_id from the write path on every line.
+	if read[0].ProjectID != "my-proj" || read[1].ProjectID != "my-proj" {
+		t.Errorf("expected project_id stamped as my-proj, got %q and %q", read[0].ProjectID, read[1].ProjectID)
+	}
 }
 
 func TestWriteContentMerge(t *testing.T) {
@@ -76,6 +80,49 @@ func TestWriteContentMerge(t *testing.T) {
 	}
 }
 
+func TestWriteContentRSSFields(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+
+	entries := []source.ContentEntry{
+		{
+			Source:      "rss",
+			Target:      "https://opensource.posit.co/blog/index.md.xml",
+			ID:          "https://opensource.posit.co/blog/post/",
+			Title:       "A Post",
+			Description: "Summary",
+			Content:     "## Body\n\nfull markdown",
+			PublishedAt: "2026-07-23T00:00:00Z",
+			UpdatedAt:   "2026-07-23T21:03:49Z",
+			Type:        "post",
+		},
+	}
+
+	if err := WriteContent(dataDir, "rss", "osw", "blog.jsonl", entries); err != nil {
+		t.Fatal(err)
+	}
+	// Re-write identical entries; upsert-by-id must keep a single line.
+	if err := WriteContent(dataDir, "rss", "osw", "blog.jsonl", entries); err != nil {
+		t.Fatal(err)
+	}
+
+	// content + updated_at surface through the DuckDB view.
+	results, _, err := QueryLive(dataDir, nil, nil,
+		"SELECT id, content, CAST(updated_at AS VARCHAR) AS updated_at FROM content WHERE source = 'rss'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 row after upsert, got %d", len(results))
+	}
+	if results[0]["content"] != "## Body\n\nfull markdown" {
+		t.Errorf("content = %v", results[0]["content"])
+	}
+	if results[0]["updated_at"] != "2026-07-23 21:03:49" {
+		t.Errorf("updated_at = %v", results[0]["updated_at"])
+	}
+}
+
 func TestContentDuckDBView(t *testing.T) {
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")
@@ -88,12 +135,15 @@ func TestContentDuckDBView(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, _, err := QueryLive(dataDir, nil, nil, "SELECT source, target, id, title, type FROM content")
+	results, _, err := QueryLive(dataDir, nil, nil, "SELECT project, source, target, id, title, type FROM content")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(results))
+	}
+	if results[0]["project"] != "proj" {
+		t.Errorf("expected project=proj, got %v", results[0]["project"])
 	}
 	if results[0]["source"] != "youtube" {
 		t.Errorf("expected source=youtube, got %v", results[0]["source"])

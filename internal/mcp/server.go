@@ -64,11 +64,11 @@ func queryTool() mcp.Tool {
 Schema:
   metrics: project VARCHAR, source VARCHAR, target VARCHAR, metric VARCHAR, date DATE, value BIGINT, tags JSON
   events: project VARCHAR, source VARCHAR, type VARCHAR, target VARCHAR, datetime TIMESTAMP, tags JSON
-  content: source VARCHAR, target VARCHAR, id VARCHAR, title VARCHAR, description VARCHAR, published_at TIMESTAMP, url VARCHAR, duration BIGINT, tags JSON, type VARCHAR, metadata JSON
+  content: project VARCHAR, source VARCHAR, target VARCHAR, id VARCHAR, title VARCHAR, description VARCHAR, content VARCHAR, published_at TIMESTAMP, updated_at TIMESTAMP, url VARCHAR, duration BIGINT, tags JSON, type VARCHAR, metadata JSON
   projects: id VARCHAR, name VARCHAR, description VARCHAR, color VARCHAR, tags VARCHAR[], website VARCHAR, logo VARCHAR
 
 Notes:
-- metrics.source: github, github-traffic, pypi, cran, homebrew, plausible, openvsx, youtube, linkedin
+- metrics.source: github, github-traffic, pypi, cran, homebrew, plausible, openvsx, youtube, linkedin, rss
 - metrics.metric examples: daily_stars, daily_forks, daily_downloads, total_downloads, daily_pageviews
 - events.type: star, fork, issue_open, issue_close, pr_open, pr_merge
 - events.tags is a JSON object with source-specific fields (e.g. {"user": "..."} for GitHub events)

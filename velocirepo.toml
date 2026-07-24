@@ -92,6 +92,13 @@ tags = ["html"]
 website = "https://opensource.posit.co"
 github ="posit-dev/open-source-website"
 plausible = "opensource.posit.co"
+rss = [
+  "https://opensource.posit.co/people/index.md.xml",
+  "https://opensource.posit.co/blog/index.md.xml",
+  "https://opensource.posit.co/events/index.md.xml",
+  "https://opensource.posit.co/resources/index.md.xml",
+  "https://opensource.posit.co/software/index.md.xml",
+]
 
 [projects.orbital-python]
 name = "Orbital for Python"

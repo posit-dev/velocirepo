@@ -200,6 +200,25 @@ var descriptors = []Descriptor{
 		FetchDescription:     "Fetch LinkedIn post metrics (impressions, likes, comments, shares) and content index. Requires LINKEDIN_TOKEN.",
 		TokenEnv:             "LINKEDIN_TOKEN",
 	},
+	{
+		Name:                 "rss",
+		DisplayName:          "RSS/Atom",
+		Category:             CategoryMetrics,
+		ContentDir:           "content/rss",
+		ConfigField:          "RSS",
+		TOMLKey:              "rss",
+		CLIFlag:              "rss",
+		CLIUsage:             "RSS or Atom feed URL",
+		AddPrompt:            "RSS/Atom feed URL",
+		UpdatePrompt:         "RSS/Atom feed URL",
+		JSONKeys:             []string{"rss"},
+		CSVColumns:           []string{"rss"},
+		MCPKey:               "rss",
+		MCPAddDescription:    "RSS or Atom feed URL",
+		MCPUpdateDescription: "RSS or Atom feed URL (empty to remove)",
+		FetchToolName:        "fetch_rss",
+		FetchDescription:     "Fetch items from an RSS or Atom feed as content entries, plus a total_items metric.",
+	},
 }
 
 var byName = func() map[string]Descriptor {

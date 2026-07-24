@@ -105,12 +105,15 @@ func createContentViewRelative(db *sql.DB, absDir string) error {
 
 	query := fmt.Sprintf(`CREATE OR REPLACE VIEW content AS
 		SELECT
+			project_id AS project,
 			source,
 			target,
 			id,
 			title,
 			description,
+			content,
 			CAST(published_at AS TIMESTAMP) AS published_at,
+			CAST(updated_at AS TIMESTAMP) AS updated_at,
 			url,
 			duration,
 			tags,
@@ -118,7 +121,7 @@ func createContentViewRelative(db *sql.DB, absDir string) error {
 			metadata
 		FROM read_json('%s',
 			format='newline_delimited',
-			columns={source: 'VARCHAR', target: 'VARCHAR', id: 'VARCHAR', title: 'VARCHAR', description: 'VARCHAR', published_at: 'VARCHAR', url: 'VARCHAR', duration: 'BIGINT', tags: 'JSON', type: 'VARCHAR', metadata: 'JSON'})`,
+			columns={project_id: 'VARCHAR', source: 'VARCHAR', target: 'VARCHAR', id: 'VARCHAR', title: 'VARCHAR', description: 'VARCHAR', content: 'VARCHAR', published_at: 'VARCHAR', updated_at: 'VARCHAR', url: 'VARCHAR', duration: 'BIGINT', tags: 'JSON', type: 'VARCHAR', metadata: 'JSON'})`,
 		escapeSQLString(glob))
 
 	if _, err := db.Exec(query); err != nil {
