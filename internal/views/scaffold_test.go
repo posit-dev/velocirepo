@@ -128,8 +128,15 @@ func TestScaffoldRenv(t *testing.T) {
 	}
 
 	rprofile := filepath.Join(dir, ".Rprofile")
-	if _, err := os.Stat(rprofile); err != nil {
+	rprofileContent, err := os.ReadFile(rprofile)
+	if err != nil {
 		t.Error(".Rprofile not created")
+	}
+	// The source() must be guarded: activate.R does not exist until the first
+	// render runs renv::activate(), and an unguarded source() aborts every
+	// Rscript (including render.sh's own bootstrap) before it can be created.
+	if !strings.Contains(string(rprofileContent), `file.exists("renv/activate.R")`) {
+		t.Errorf(".Rprofile must guard the source() with file.exists; got: %s", rprofileContent)
 	}
 
 	renvSettings := filepath.Join(dir, "renv", "settings.json")
@@ -139,6 +146,9 @@ func TestScaffoldRenv(t *testing.T) {
 
 	renderSh := filepath.Join(dir, "render.sh")
 	content, _ := os.ReadFile(renderSh)
+	if !strings.Contains(string(content), "renv::activate") {
+		t.Error("render.sh should activate renv to generate renv/activate.R")
+	}
 	if !strings.Contains(string(content), "renv::restore") {
 		t.Error("render.sh should contain renv::restore")
 	}
@@ -185,14 +195,21 @@ func TestScaffoldQuartoRRenv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, ".Rprofile")); err != nil {
+	rprofileContent, err := os.ReadFile(filepath.Join(dir, ".Rprofile"))
+	if err != nil {
 		t.Error(".Rprofile not created")
+	}
+	if !strings.Contains(string(rprofileContent), `file.exists("renv/activate.R")`) {
+		t.Errorf(".Rprofile must guard the source() with file.exists; got: %s", rprofileContent)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "renv", "settings.json")); err != nil {
 		t.Error("renv/settings.json not created")
 	}
 
 	renderSh, _ := os.ReadFile(filepath.Join(dir, "render.sh"))
+	if !strings.Contains(string(renderSh), "renv::activate") {
+		t.Error("render.sh should activate renv to generate renv/activate.R")
+	}
 	if !strings.Contains(string(renderSh), "renv::restore") {
 		t.Error("render.sh should contain renv::restore")
 	}

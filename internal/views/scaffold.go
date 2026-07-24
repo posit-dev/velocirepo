@@ -259,7 +259,11 @@ func writeTemplate(dir, filename, tmplPath string, data scaffoldData, perm os.Fi
 }
 
 func scaffoldRenv(dir string) error {
-	rprofile := `source("renv/activate.R")` + "\n"
+	// Guard the source() so the first render works before renv has been
+	// activated: render.sh calls renv::activate() to generate renv/activate.R,
+	// and every Rscript invocation runs .Rprofile first. Sourcing an absent
+	// activate.R would abort with "cannot open file" before activate can run.
+	rprofile := `if (file.exists("renv/activate.R")) source("renv/activate.R")` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, ".Rprofile"), []byte(rprofile), 0644); err != nil {
 		return fmt.Errorf("create .Rprofile: %w", err)
 	}
