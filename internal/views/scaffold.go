@@ -50,7 +50,6 @@ type ScaffoldOptions struct {
 	DBPath    string
 	DataDir   string
 	NoUV      bool
-	Renv      bool
 }
 
 type scaffoldData struct {
@@ -78,7 +77,7 @@ func Scaffold(opts ScaffoldOptions) (string, error) {
 		DataDir:  opts.DataDir,
 	}
 
-	renderTmpl := renderShTemplate(opts.Framework, opts.Renv)
+	renderTmpl := fmt.Sprintf("templates/%s/render.sh.tmpl", opts.Framework)
 	if err := writeTemplate(dir, "render.sh", renderTmpl, data, 0755); err != nil {
 		return "", err
 	}
@@ -97,12 +96,6 @@ func Scaffold(opts ScaffoldOptions) (string, error) {
 	if needsPyproject(opts.Framework) && !opts.NoUV {
 		pyTmpl := fmt.Sprintf("templates/%s/pyproject.toml.tmpl", opts.Framework)
 		if err := writeTemplate(dir, "pyproject.toml", pyTmpl, data, 0644); err != nil {
-			return "", err
-		}
-	}
-
-	if (opts.Framework == FrameworkR || opts.Framework == FrameworkQuartoR) && opts.Renv {
-		if err := scaffoldRenv(dir); err != nil {
 			return "", err
 		}
 	}
@@ -195,13 +188,6 @@ func pathInside(base, target string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-func renderShTemplate(fw Framework, renv bool) string {
-	if renv && (fw == FrameworkR || fw == FrameworkQuartoR) {
-		return fmt.Sprintf("templates/%s/render.renv.sh.tmpl", fw)
-	}
-	return fmt.Sprintf("templates/%s/render.sh.tmpl", fw)
-}
-
 func serveShTemplate(fw Framework) string {
 	switch fw {
 	case FrameworkQuartoPython, FrameworkQuartoR, FrameworkJupyter, FrameworkMarimo:
@@ -254,26 +240,6 @@ func writeTemplate(dir, filename, tmplPath string, data scaffoldData, perm os.Fi
 
 	if err := tmpl.Execute(f, data); err != nil {
 		return fmt.Errorf("execute template %s: %w", tmplPath, err)
-	}
-	return nil
-}
-
-func scaffoldRenv(dir string) error {
-	// Guard the source() so the first render works before renv has been
-	// activated: render.sh calls renv::activate() to generate renv/activate.R,
-	// and every Rscript invocation runs .Rprofile first. Sourcing an absent
-	// activate.R would abort with "cannot open file" before activate can run.
-	rprofile := `if (file.exists("renv/activate.R")) source("renv/activate.R")` + "\n"
-	if err := os.WriteFile(filepath.Join(dir, ".Rprofile"), []byte(rprofile), 0644); err != nil {
-		return fmt.Errorf("create .Rprofile: %w", err)
-	}
-	renvDir := filepath.Join(dir, "renv")
-	if err := os.MkdirAll(renvDir, 0755); err != nil {
-		return fmt.Errorf("create renv dir: %w", err)
-	}
-	settings := `{"external.libraries":[],"ignored.packages":[],"snapshot.type":"implicit","use.cache":true}` + "\n"
-	if err := os.WriteFile(filepath.Join(renvDir, "settings.json"), []byte(settings), 0644); err != nil {
-		return fmt.Errorf("create renv settings: %w", err)
 	}
 	return nil
 }

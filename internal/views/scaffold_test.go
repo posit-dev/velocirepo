@@ -112,7 +112,7 @@ func TestScaffoldNoUV(t *testing.T) {
 	}
 }
 
-func TestScaffoldRenv(t *testing.T) {
+func TestScaffoldRUsesIr(t *testing.T) {
 	viewsDir := t.TempDir()
 
 	dir, err := Scaffold(ScaffoldOptions{
@@ -121,66 +121,37 @@ func TestScaffoldRenv(t *testing.T) {
 		Framework: FrameworkR,
 		Source:    "duckdb",
 		DBPath:    "../../data/velocirepo.duckdb",
-		Renv:      true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rprofile := filepath.Join(dir, ".Rprofile")
-	rprofileContent, err := os.ReadFile(rprofile)
-	if err != nil {
-		t.Error(".Rprofile not created")
+	// ir bootstraps its own environment, so no renv scaffolding is written.
+	if _, err := os.Stat(filepath.Join(dir, ".Rprofile")); !os.IsNotExist(err) {
+		t.Error(".Rprofile should not be created; ir manages the environment")
 	}
-	// The source() must be guarded: activate.R does not exist until the first
-	// render runs renv::activate(), and an unguarded source() aborts every
-	// Rscript (including render.sh's own bootstrap) before it can be created.
-	if !strings.Contains(string(rprofileContent), `file.exists("renv/activate.R")`) {
-		t.Errorf(".Rprofile must guard the source() with file.exists; got: %s", rprofileContent)
+	if _, err := os.Stat(filepath.Join(dir, "renv")); !os.IsNotExist(err) {
+		t.Error("renv/ should not be created; ir manages the environment")
 	}
 
-	renvSettings := filepath.Join(dir, "renv", "settings.json")
-	if _, err := os.Stat(renvSettings); err != nil {
-		t.Error("renv/settings.json not created")
+	renderSh, _ := os.ReadFile(filepath.Join(dir, "render.sh"))
+	if !strings.Contains(string(renderSh), "ir run view.R") {
+		t.Errorf("render.sh should run the view via ir; got: %s", renderSh)
 	}
 
-	renderSh := filepath.Join(dir, "render.sh")
-	content, _ := os.ReadFile(renderSh)
-	if !strings.Contains(string(content), "renv::activate") {
-		t.Error("render.sh should activate renv to generate renv/activate.R")
-	}
-	if !strings.Contains(string(content), "renv::restore") {
-		t.Error("render.sh should contain renv::restore")
-	}
-}
-
-func TestScaffoldRNoRenv(t *testing.T) {
-	viewsDir := t.TempDir()
-
-	dir, err := Scaffold(ScaffoldOptions{
-		ViewsDir:  viewsDir,
-		Name:      "r-plain",
-		Framework: FrameworkR,
-		Source:    "duckdb",
-		DBPath:    "../../data/velocirepo.duckdb",
-	})
-	if err != nil {
-		t.Fatal(err)
+	// The view declares its packages inline for ir to resolve.
+	view, _ := os.ReadFile(filepath.Join(dir, "view.R"))
+	if !strings.Contains(string(view), "#| packages:") {
+		t.Errorf("view.R should declare ir packages in #| frontmatter; got: %s", view)
 	}
 
-	rprofile := filepath.Join(dir, ".Rprofile")
-	if _, err := os.Stat(rprofile); !os.IsNotExist(err) {
-		t.Error(".Rprofile should not exist without --renv")
-	}
-
-	// Should NOT have pyproject.toml for R
-	pyproject := filepath.Join(dir, "pyproject.toml")
-	if _, err := os.Stat(pyproject); !os.IsNotExist(err) {
+	// R frameworks do not use pyproject.toml.
+	if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); !os.IsNotExist(err) {
 		t.Error("pyproject.toml should not be created for R framework")
 	}
 }
 
-func TestScaffoldQuartoRRenv(t *testing.T) {
+func TestScaffoldQuartoRUsesIr(t *testing.T) {
 	viewsDir := t.TempDir()
 
 	dir, err := Scaffold(ScaffoldOptions{
@@ -189,32 +160,27 @@ func TestScaffoldQuartoRRenv(t *testing.T) {
 		Framework: FrameworkQuartoR,
 		Source:    "duckdb",
 		DBPath:    "../../data/velocirepo.duckdb",
-		Renv:      true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rprofileContent, err := os.ReadFile(filepath.Join(dir, ".Rprofile"))
-	if err != nil {
-		t.Error(".Rprofile not created")
+	if _, err := os.Stat(filepath.Join(dir, ".Rprofile")); !os.IsNotExist(err) {
+		t.Error(".Rprofile should not be created; ir manages the environment")
 	}
-	if !strings.Contains(string(rprofileContent), `file.exists("renv/activate.R")`) {
-		t.Errorf(".Rprofile must guard the source() with file.exists; got: %s", rprofileContent)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "renv", "settings.json")); err != nil {
-		t.Error("renv/settings.json not created")
+	if _, err := os.Stat(filepath.Join(dir, "renv")); !os.IsNotExist(err) {
+		t.Error("renv/ should not be created; ir manages the environment")
 	}
 
 	renderSh, _ := os.ReadFile(filepath.Join(dir, "render.sh"))
-	if !strings.Contains(string(renderSh), "renv::activate") {
-		t.Error("render.sh should activate renv to generate renv/activate.R")
+	if !strings.Contains(string(renderSh), "ir render view.qmd") {
+		t.Errorf("render.sh should render the view via ir; got: %s", renderSh)
 	}
-	if !strings.Contains(string(renderSh), "renv::restore") {
-		t.Error("render.sh should contain renv::restore")
-	}
-	if !strings.Contains(string(renderSh), "quarto render") {
-		t.Error("render.sh should render with quarto")
+
+	// The view declares its packages in the ir: block of the YAML header.
+	view, _ := os.ReadFile(filepath.Join(dir, "view.qmd"))
+	if !strings.Contains(string(view), "ir:") {
+		t.Errorf("view.qmd should declare an ir: block; got: %s", view)
 	}
 
 	// quarto-r is an R framework: no pyproject.toml.

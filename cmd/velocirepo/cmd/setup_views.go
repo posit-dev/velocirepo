@@ -14,7 +14,7 @@ func setupViewsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "setup-views",
 		Short:   "Install dependencies for all views",
-		Long:    "Run uv sync for Python views and renv::restore() for R views with renv.",
+		Long:    "Run uv sync for Python views. R views bootstrap their environment automatically on first render via ir, so they need no setup step.",
 		GroupID: "view",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			viewsDir := cfg.ViewsDir()
@@ -41,18 +41,6 @@ func setupViewsCmd() *cobra.Command {
 					c.Stderr = os.Stderr
 					if err := c.Run(); err != nil {
 						return fmt.Errorf("uv sync in %s: %w", v.Name, err)
-					}
-					didSetup = true
-				}
-
-				if _, err := os.Stat(filepath.Join(v.Dir, "renv.lock")); err == nil {
-					_, _ = fmt.Fprintf(out, "Setting up '%s' (renv::restore)...\n", v.Name)
-					c := exec.Command("Rscript", "-e", "renv::restore(prompt = FALSE)")
-					c.Dir = v.Dir
-					c.Stdout = os.Stdout
-					c.Stderr = os.Stderr
-					if err := c.Run(); err != nil {
-						return fmt.Errorf("renv::restore in %s: %w", v.Name, err)
 					}
 					didSetup = true
 				}

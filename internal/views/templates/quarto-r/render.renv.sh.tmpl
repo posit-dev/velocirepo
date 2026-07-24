@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")"
-Rscript -e 'if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv", repos = "https://cloud.r-project.org")' \
-        -e 'renv::activate()' \
-        -e 'if (file.exists("renv.lock")) renv::restore(prompt = FALSE)'
-quarto render view.qmd

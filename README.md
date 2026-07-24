@@ -854,11 +854,13 @@ velocirepo serve-view weekly-stars
 | Framework | Flag | View file | render.sh runs |
 |-----------|------|-----------|----------------|
 | [Quarto](https://quarto.org) (Python) | `-f quarto-python` | `view.qmd` | `uv run quarto render view.qmd` |
-| [Quarto](https://quarto.org) (R) | `-f quarto-r` | `view.qmd` | `quarto render view.qmd` |
+| [Quarto](https://quarto.org) (R) | `-f quarto-r` | `view.qmd` | `ir render view.qmd` |
 | [Jupyter](https://jupyter.org) | `-f jupyter` | `view.ipynb` | `uv run jupyter nbconvert ...` |
 | [Marimo](https://marimo.io) | `-f marimo` | `app.py` | `uv run marimo export html app.py` |
-| R | `-f r` | `view.R` | `Rscript view.R` |
+| R | `-f r` | `view.R` | `ir run view.R` |
 | [ggsql](https://ggsql.io) | `-f sql` | `view.sql` | `ggsql run view.sql` |
+
+R views (`-f r` and `-f quarto-r`) render through [`ir`](https://r-lib.github.io/ir/), which resolves the packages declared in the view's frontmatter into a cached, reproducible library. Install `ir` once; it bootstraps `renv`/`pak` on first render, so R views need no separate setup step.
 
 ### Data access
 
@@ -873,7 +875,6 @@ For views that need Parquet files instead, use `--source parquet` when scaffoldi
 | `-f, --framework` | Framework: quarto-python, quarto-r, jupyter, marimo, r, sql (required) |
 | `-s, --source` | Data source: duckdb (default) or parquet |
 | `--no-uv` | Skip pyproject.toml generation |
-| `--renv` | Scaffold renv for R views (`-f r` or `-f quarto-r`) |
 
 ### Rendering
 
@@ -886,7 +887,8 @@ velocirepo render-views reports      # render views matching a prefix
 ### Setup and CI
 
 ```bash
-# Install dependencies for all views (runs uv sync / renv::restore)
+# Install dependencies for all views (runs uv sync for Python views;
+# R views bootstrap automatically on first render via ir)
 velocirepo setup-views
 ```
 

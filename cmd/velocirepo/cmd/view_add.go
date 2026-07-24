@@ -10,7 +10,7 @@ import (
 
 func addViewCmd() *cobra.Command {
 	var framework, source string
-	var noUV, renv bool
+	var noUV bool
 
 	cmd := &cobra.Command{
 		Use:     "add-view <name>",
@@ -28,10 +28,6 @@ func addViewCmd() *cobra.Command {
 
 			if source != "duckdb" && source != "parquet" {
 				return fmt.Errorf("invalid source %q (use duckdb or parquet)", source)
-			}
-
-			if renv && fw != views.FrameworkR && fw != views.FrameworkQuartoR {
-				return fmt.Errorf("--renv can only be used with --framework r or quarto-r")
 			}
 
 			viewsDir := cfg.ViewsDir()
@@ -68,7 +64,6 @@ func addViewCmd() *cobra.Command {
 				DBPath:    dbPath,
 				DataDir:   dataDir,
 				NoUV:      noUV,
-				Renv:      renv,
 			})
 			if err != nil {
 				return err
@@ -82,7 +77,6 @@ func addViewCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&framework, "framework", "f", "", "framework: quarto-python, quarto-r, jupyter, marimo, r, sql (required)")
 	cmd.Flags().StringVarP(&source, "source", "s", "duckdb", "data source: duckdb or parquet")
 	cmd.Flags().BoolVar(&noUV, "no-uv", false, "skip pyproject.toml generation")
-	cmd.Flags().BoolVar(&renv, "renv", false, "scaffold renv for R views")
 	_ = cmd.MarkFlagRequired("framework")
 
 	return cmd
