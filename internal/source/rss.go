@@ -151,21 +151,24 @@ func sniffRoot(body []byte) (string, error) {
 
 // --- Atom ---
 
+// Atom core elements are namespace-qualified so that same-local-name extension
+// elements from other namespaces (e.g. <media:content>, <media:title>) are not
+// swallowed by these fields and instead flow through Extra into metadata.
 type atomFeed struct {
-	XMLName xml.Name    `xml:"feed"`
-	Entries []atomEntry `xml:"entry"`
+	XMLName xml.Name    `xml:"http://www.w3.org/2005/Atom feed"`
+	Entries []atomEntry `xml:"http://www.w3.org/2005/Atom entry"`
 }
 
 type atomEntry struct {
-	ID        string       `xml:"id"`
-	Title     string       `xml:"title"`
-	Summary   string       `xml:"summary"`
-	Content   atomText     `xml:"content"`
-	Published string       `xml:"published"`
-	Updated   string       `xml:"updated"`
-	Links     []atomLink   `xml:"link"`
-	Cats      []atomCat    `xml:"category"`
-	Authors   []atomAuthor `xml:"author"`
+	ID        string       `xml:"http://www.w3.org/2005/Atom id"`
+	Title     string       `xml:"http://www.w3.org/2005/Atom title"`
+	Summary   string       `xml:"http://www.w3.org/2005/Atom summary"`
+	Content   atomText     `xml:"http://www.w3.org/2005/Atom content"`
+	Published string       `xml:"http://www.w3.org/2005/Atom published"`
+	Updated   string       `xml:"http://www.w3.org/2005/Atom updated"`
+	Links     []atomLink   `xml:"http://www.w3.org/2005/Atom link"`
+	Cats      []atomCat    `xml:"http://www.w3.org/2005/Atom category"`
+	Authors   []atomAuthor `xml:"http://www.w3.org/2005/Atom author"`
 	Extra     []xmlAny     `xml:",any"`
 }
 
@@ -183,8 +186,8 @@ type atomCat struct {
 }
 
 type atomAuthor struct {
-	Name string `xml:"name"`
-	URI  string `xml:"uri"`
+	Name string `xml:"http://www.w3.org/2005/Atom name"`
+	URI  string `xml:"http://www.w3.org/2005/Atom uri"`
 }
 
 func (e atomEntry) toFeedItem() feedItem {
@@ -508,15 +511,19 @@ func normalizeTime(raw string) string {
 	return raw
 }
 
-// feedFilename derives a stable, human-readable JSONL file name from a feed
-// URL. It uses the last meaningful path segment (stripping index.* filenames),
-// falling back to a hash of the whole URL.
+// feedFilename derives a stable JSONL file name from a feed URL. It combines a
+// human-readable slug (the last meaningful path segment, stripping index.*
+// filenames) with a short hash of the full URL. The hash suffix guarantees two
+// distinct feeds in the same project never collide onto one file — even when
+// their paths slug to the same name (e.g. two hosts both serving
+// /blog/index.xml) — which would otherwise merge unrelated entries by id.
 func feedFilename(feedURL string) string {
 	slug := feedSlug(feedURL)
+	hash := shortHash(feedURL)
 	if slug == "" {
-		slug = hashSlug(feedURL)
+		return "feed-" + hash + ".jsonl"
 	}
-	return slug + ".jsonl"
+	return slug + "-" + hash + ".jsonl"
 }
 
 func feedSlug(feedURL string) string {
@@ -574,7 +581,9 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func hashSlug(s string) string {
+// shortHash returns a short hex digest of s, used to disambiguate feed
+// filenames that would otherwise slug to the same name.
+func shortHash(s string) string {
 	sum := sha1.Sum([]byte(s))
-	return fmt.Sprintf("feed-%x", sum[:6])
+	return fmt.Sprintf("%x", sum[:4])
 }

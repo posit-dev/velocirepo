@@ -298,24 +298,78 @@ func TestRSSMalformedFeed(t *testing.T) {
 }
 
 func TestFeedFilename(t *testing.T) {
-	cases := map[string]string{
-		"https://opensource.posit.co/blog/index.md.xml":      "blog.jsonl",
-		"https://opensource.posit.co/people/index.md.xml":    "people.jsonl",
-		"https://opensource.posit.co/resources/index.md.xml": "resources.jsonl",
-		"https://example.com/feed.xml":                       "example-com.jsonl",
-		"https://example.com/podcast.xml":                    "podcast.jsonl",
-		"https://example.com/":                               "example-com.jsonl",
+	// Filenames keep a human-readable slug prefix but always carry a short hash
+	// suffix derived from the full URL, so distinct feeds never collide.
+	prefixes := map[string]string{
+		"https://opensource.posit.co/blog/index.md.xml":      "blog-",
+		"https://opensource.posit.co/people/index.md.xml":    "people-",
+		"https://opensource.posit.co/resources/index.md.xml": "resources-",
+		"https://example.com/feed.xml":                       "example-com-",
+		"https://example.com/podcast.xml":                    "podcast-",
+		"https://example.com/":                               "example-com-",
 	}
-	for in, want := range cases {
-		if got := feedFilename(in); got != want {
-			t.Errorf("feedFilename(%q) = %q, want %q", in, got, want)
+	for in, wantPrefix := range prefixes {
+		got := feedFilename(in)
+		if !strings.HasPrefix(got, wantPrefix) || !strings.HasSuffix(got, ".jsonl") {
+			t.Errorf("feedFilename(%q) = %q, want prefix %q and .jsonl suffix", in, got, wantPrefix)
 		}
+	}
+}
+
+// TestFeedFilenameNoCollision guards that two distinct feeds whose paths slug
+// to the same readable name still produce different filenames, so their entries
+// are never merged (and deduped by id) into one file.
+func TestFeedFilenameNoCollision(t *testing.T) {
+	a := feedFilename("https://one.example.com/blog/index.xml")
+	b := feedFilename("https://two.example.com/blog/index.xml")
+	if a == b {
+		t.Errorf("distinct feeds collided on filename %q", a)
+	}
+	if !strings.HasPrefix(a, "blog-") || !strings.HasPrefix(b, "blog-") {
+		t.Errorf("expected readable blog- prefix, got %q and %q", a, b)
 	}
 }
 
 func TestRSSContentFilename(t *testing.T) {
 	r := &RSS{FeedURL: "https://opensource.posit.co/blog/index.md.xml"}
-	if got := r.ContentFilename(); got != "blog.jsonl" {
-		t.Errorf("ContentFilename() = %q, want blog.jsonl", got)
+	got := r.ContentFilename()
+	if !strings.HasPrefix(got, "blog-") || !strings.HasSuffix(got, ".jsonl") {
+		t.Errorf("ContentFilename() = %q, want blog-<hash>.jsonl", got)
+	}
+}
+
+// TestAtomExtensionSameLocalName guards that extension elements sharing a local
+// name with an Atom core element (e.g. <media:content>, <media:title>) flow
+// into metadata and do not overwrite the real Atom <content> body or title.
+func TestAtomExtensionSameLocalName(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+  <entry>
+    <id>https://example.com/1</id>
+    <title>Real Title</title>
+    <updated>2026-01-01T00:00:00Z</updated>
+    <content type="text/markdown">Real body.</content>
+    <media:content url="https://example.com/video.mp4" type="video/mp4"/>
+    <media:title>Media Title</media:title>
+  </entry>
+</feed>`
+
+	srv := serveFeed(t, feed)
+	r, _ := fetchOne(t, srv.URL)
+	e := r.ContentEntries()[0]
+
+	if e.Title != "Real Title" {
+		t.Errorf("title overwritten by media:title: %q", e.Title)
+	}
+	if e.Content != "Real body." {
+		t.Errorf("content overwritten by media:content: %q", e.Content)
+	}
+	// media:content is object-valued → array under "content"; the media:title
+	// scalar lands under "title".
+	if _, ok := e.Metadata["content"].([]any); !ok {
+		t.Errorf("media:content should be captured in metadata, got %#v", e.Metadata["content"])
+	}
+	if e.Metadata["title"] != "Media Title" {
+		t.Errorf("media:title metadata = %#v", e.Metadata["title"])
 	}
 }

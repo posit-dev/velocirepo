@@ -127,6 +127,59 @@ func TestValidateData_EmptyFields(t *testing.T) {
 	assertIssueTypes(t, result.Issues, IssueEmptyField, IssueEmptyField)
 }
 
+func TestValidateData_ContentUpdatedAtOnly(t *testing.T) {
+	dataDir := testDataDir(t)
+
+	// An RSS person entry with only updated_at (no published_at) is valid.
+	writeTestRaw(t, contentPath(dataDir, "rss", "myproj", "people"), []string{
+		`{"source":"rss","project_id":"myproj","target":"https://example.com/people.xml","id":"p1","title":"Jane","updated_at":"2026-05-21T18:03:11Z","type":"person"}`,
+	})
+
+	projects := map[string]bool{"myproj": true}
+	result, err := ValidateData(dataDir, projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Issues) != 0 {
+		t.Errorf("expected 0 issues for updated_at-only entry, got %d: %v", len(result.Issues), result.Issues)
+	}
+}
+
+func TestValidateData_ContentNoTimestamp(t *testing.T) {
+	dataDir := testDataDir(t)
+
+	// Neither published_at nor updated_at → empty-field issue.
+	writeTestRaw(t, contentPath(dataDir, "rss", "myproj", "people"), []string{
+		`{"source":"rss","project_id":"myproj","target":"https://example.com/people.xml","id":"p1","title":"Jane","type":"person"}`,
+	})
+
+	projects := map[string]bool{"myproj": true}
+	result, err := ValidateData(dataDir, projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertIssueTypes(t, result.Issues, IssueEmptyField)
+}
+
+func TestValidateData_ContentInvalidUpdatedAt(t *testing.T) {
+	dataDir := testDataDir(t)
+
+	// A malformed updated_at is still flagged even when published_at is absent.
+	writeTestRaw(t, contentPath(dataDir, "rss", "myproj", "people"), []string{
+		`{"source":"rss","project_id":"myproj","target":"https://example.com/people.xml","id":"p1","title":"Jane","updated_at":"not-a-date","type":"person"}`,
+	})
+
+	projects := map[string]bool{"myproj": true}
+	result, err := ValidateData(dataDir, projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertIssueTypes(t, result.Issues, IssueInvalidDatetime)
+}
+
 func TestValidateData_Duplicates(t *testing.T) {
 	dataDir := testDataDir(t)
 
