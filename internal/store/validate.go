@@ -1049,21 +1049,32 @@ func validateContentFile(path, sourceName, projectID string, result *ValidationR
 				Message: fmt.Sprintf("line %d: empty target field", lineNum),
 			})
 		}
-		if e.PublishedAt == "" {
+		// An entry must carry at least one timestamp. Some content (e.g. RSS
+		// person/software feeds) has only updated_at and no published_at.
+		if e.PublishedAt == "" && e.UpdatedAt == "" {
 			result.Issues = append(result.Issues, Issue{
 				Type:    IssueEmptyField,
 				Path:    path,
 				Line:    lineNum,
-				Message: fmt.Sprintf("line %d: empty published_at field", lineNum),
+				Message: fmt.Sprintf("line %d: no published_at or updated_at field", lineNum),
 			})
-		} else if _, err := time.Parse(time.RFC3339, e.PublishedAt); err != nil {
-			if _, err2 := time.Parse("2006-01-02T15:04:05Z", e.PublishedAt); err2 != nil {
-				result.Issues = append(result.Issues, Issue{
-					Type:    IssueInvalidDatetime,
-					Path:    path,
-					Line:    lineNum,
-					Message: fmt.Sprintf("line %d: invalid published_at %q", lineNum, e.PublishedAt),
-				})
+		}
+		for _, ts := range []struct{ field, value string }{
+			{"published_at", e.PublishedAt},
+			{"updated_at", e.UpdatedAt},
+		} {
+			if ts.value == "" {
+				continue
+			}
+			if _, err := time.Parse(time.RFC3339, ts.value); err != nil {
+				if _, err2 := time.Parse("2006-01-02T15:04:05Z", ts.value); err2 != nil {
+					result.Issues = append(result.Issues, Issue{
+						Type:    IssueInvalidDatetime,
+						Path:    path,
+						Line:    lineNum,
+						Message: fmt.Sprintf("line %d: invalid %s %q", lineNum, ts.field, ts.value),
+					})
+				}
 			}
 		}
 

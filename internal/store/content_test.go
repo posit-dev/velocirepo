@@ -123,6 +123,39 @@ func TestWriteContentRSSFields(t *testing.T) {
 	}
 }
 
+func TestContentViewEmptyTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+
+	// A person entry has updated_at but no published_at; the empty string must
+	// not break the view's timestamp cast.
+	entries := []source.ContentEntry{
+		{
+			Source:    "rss",
+			Target:    "https://opensource.posit.co/people/index.md.xml",
+			ID:        "https://opensource.posit.co/people/jane/",
+			Title:     "Jane",
+			UpdatedAt: "2026-05-21T18:03:11Z",
+			Type:      "person",
+		},
+	}
+	if err := WriteContent(dataDir, "rss", "osw", "people.jsonl", entries); err != nil {
+		t.Fatal(err)
+	}
+
+	results, _, err := QueryLive(dataDir, nil, nil,
+		"SELECT id, published_at FROM content WHERE type = 'person'")
+	if err != nil {
+		t.Fatalf("query with empty published_at: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(results))
+	}
+	if results[0]["published_at"] != nil {
+		t.Errorf("expected NULL published_at, got %v", results[0]["published_at"])
+	}
+}
+
 func TestContentDuckDBView(t *testing.T) {
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")
