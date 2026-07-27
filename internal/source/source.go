@@ -69,6 +69,7 @@ type Event struct {
 	ProjectID string            `json:"project_id"`
 	Target    string            `json:"target"`
 	Datetime  string            `json:"datetime"`
+	Ref       *int              `json:"ref,omitempty"`
 	Tags      map[string]string `json:"tags,omitempty"`
 }
 

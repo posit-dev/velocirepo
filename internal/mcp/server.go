@@ -63,15 +63,18 @@ func queryTool() mcp.Tool {
 
 Schema:
   metrics: project VARCHAR, source VARCHAR, target VARCHAR, metric VARCHAR, date DATE, value BIGINT, tags JSON
-  events: project VARCHAR, source VARCHAR, type VARCHAR, target VARCHAR, datetime TIMESTAMP, tags JSON
-  content: project VARCHAR, source VARCHAR, target VARCHAR, id VARCHAR, title VARCHAR, description VARCHAR, content VARCHAR, published_at TIMESTAMP, updated_at TIMESTAMP, url VARCHAR, duration BIGINT, tags JSON, type VARCHAR, extra JSON
+  events: project VARCHAR, source VARCHAR, type VARCHAR, target VARCHAR, datetime TIMESTAMP, ref INTEGER, tags JSON
+  content: project VARCHAR, source VARCHAR, target VARCHAR, id VARCHAR, ref INTEGER, title VARCHAR, description VARCHAR, content VARCHAR, published_at TIMESTAMP, updated_at TIMESTAMP, url VARCHAR, duration BIGINT, tags JSON, type VARCHAR, extra JSON
   projects: id VARCHAR, name VARCHAR, description VARCHAR, color VARCHAR, tags VARCHAR[], website VARCHAR, logo VARCHAR
 
 Notes:
 - metrics.source: github, github-traffic, pypi, cran, homebrew, plausible, openvsx, youtube, linkedin, rss
 - metrics.metric examples: daily_stars, daily_forks, daily_downloads, total_downloads, daily_pageviews
 - events.type: star, fork, issue_open, issue_close, pr_open, pr_merge
+- events.ref: issue/PR number (NULL for stars, forks); join to content for title/details
 - events.tags is a JSON object with source-specific fields (e.g. {"user": "..."} for GitHub events)
+- content.ref: issue/PR number for GitHub content (join: events.ref = content.ref AND events.target = content.target)
+- content.type: entity type (issue, pr, repo, video, post)
 - content stores entity data (video listings, blog posts) with upsert-by-id semantics`),
 		mcp.WithString("sql", mcp.Required(), mcp.Description("SQL query to execute")),
 		mcp.WithNumber("limit", mcp.Description("Maximum rows to return (default: 1000)")),

@@ -345,10 +345,11 @@ func createEventsView(db *sql.DB, absDir string) error {
 			type,
 			target,
 			CAST(datetime AS TIMESTAMP) AS datetime,
+			ref,
 			tags
 		FROM read_json('%s',
 			format='newline_delimited',
-			columns={source: 'VARCHAR', type: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', datetime: 'VARCHAR', tags: 'JSON'})`,
+			columns={source: 'VARCHAR', type: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', datetime: 'VARCHAR', ref: 'INTEGER', tags: 'JSON'})`,
 		escapeSQLString(glob))
 
 	if _, err := db.Exec(query); err != nil {
@@ -359,8 +360,8 @@ func createEventsView(db *sql.DB, absDir string) error {
 }
 
 func createEmptyEventsView(db *sql.DB) error {
-	_, err := db.Exec(`CREATE VIEW events (project, source, type, target, datetime, tags) AS
-		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::TIMESTAMP, NULL::JSON
+	_, err := db.Exec(`CREATE VIEW events (project, source, type, target, datetime, ref, tags) AS
+		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::TIMESTAMP, NULL::INTEGER, NULL::JSON
 		WHERE false`)
 	if err != nil {
 		return fmt.Errorf("create empty events view: %w", err)
@@ -382,6 +383,7 @@ func createContentView(db *sql.DB, absDir string) error {
 			source,
 			target,
 			id,
+			ref,
 			title,
 			description,
 			content,
@@ -394,7 +396,7 @@ func createContentView(db *sql.DB, absDir string) error {
 			extra
 		FROM read_json('%s',
 			format='newline_delimited',
-			columns={project_id: 'VARCHAR', source: 'VARCHAR', target: 'VARCHAR', id: 'VARCHAR', title: 'VARCHAR', description: 'VARCHAR', content: 'VARCHAR', published_at: 'VARCHAR', updated_at: 'VARCHAR', url: 'VARCHAR', duration: 'BIGINT', tags: 'JSON', type: 'VARCHAR', extra: 'JSON'})`,
+			columns={project_id: 'VARCHAR', source: 'VARCHAR', target: 'VARCHAR', id: 'VARCHAR', ref: 'INTEGER', title: 'VARCHAR', description: 'VARCHAR', content: 'VARCHAR', published_at: 'VARCHAR', updated_at: 'VARCHAR', url: 'VARCHAR', duration: 'BIGINT', tags: 'JSON', type: 'VARCHAR', extra: 'JSON'})`,
 		escapeSQLString(glob))
 
 	if _, err := db.Exec(query); err != nil {
@@ -405,8 +407,8 @@ func createContentView(db *sql.DB, absDir string) error {
 }
 
 func createEmptyContentView(db *sql.DB) error {
-	_, err := db.Exec(`CREATE VIEW content (project, source, target, id, title, description, content, published_at, updated_at, url, duration, tags, type, extra) AS
-		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::TIMESTAMP, NULL::TIMESTAMP, NULL::VARCHAR, NULL::BIGINT, NULL::JSON, NULL::VARCHAR, NULL::JSON
+	_, err := db.Exec(`CREATE VIEW content (project, source, target, id, ref, title, description, content, published_at, updated_at, url, duration, tags, type, extra) AS
+		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::INTEGER, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::TIMESTAMP, NULL::TIMESTAMP, NULL::VARCHAR, NULL::BIGINT, NULL::JSON, NULL::VARCHAR, NULL::JSON
 		WHERE false`)
 	if err != nil {
 		return fmt.Errorf("create empty content view: %w", err)

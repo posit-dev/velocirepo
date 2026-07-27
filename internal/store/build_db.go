@@ -68,10 +68,11 @@ func createEventsViewRelative(db *sql.DB, absDir string) error {
 			type,
 			target,
 			CAST(datetime AS TIMESTAMP) AS datetime,
+			ref,
 			tags
 		FROM read_json('%s',
 			format='newline_delimited',
-			columns={source: 'VARCHAR', type: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', datetime: 'VARCHAR', tags: 'JSON'})`,
+			columns={source: 'VARCHAR', type: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', datetime: 'VARCHAR', ref: 'INTEGER', tags: 'JSON'})`,
 		escapeSQLString(glob))
 
 	if _, err := db.Exec(query); err != nil {
@@ -109,6 +110,7 @@ func createContentViewRelative(db *sql.DB, absDir string) error {
 			source,
 			target,
 			id,
+			ref,
 			title,
 			description,
 			content,
@@ -121,7 +123,7 @@ func createContentViewRelative(db *sql.DB, absDir string) error {
 			extra
 		FROM read_json('%s',
 			format='newline_delimited',
-			columns={project_id: 'VARCHAR', source: 'VARCHAR', target: 'VARCHAR', id: 'VARCHAR', title: 'VARCHAR', description: 'VARCHAR', content: 'VARCHAR', published_at: 'VARCHAR', updated_at: 'VARCHAR', url: 'VARCHAR', duration: 'BIGINT', tags: 'JSON', type: 'VARCHAR', extra: 'JSON'})`,
+			columns={project_id: 'VARCHAR', source: 'VARCHAR', target: 'VARCHAR', id: 'VARCHAR', ref: 'INTEGER', title: 'VARCHAR', description: 'VARCHAR', content: 'VARCHAR', published_at: 'VARCHAR', updated_at: 'VARCHAR', url: 'VARCHAR', duration: 'BIGINT', tags: 'JSON', type: 'VARCHAR', extra: 'JSON'})`,
 		escapeSQLString(glob))
 
 	if _, err := db.Exec(query); err != nil {

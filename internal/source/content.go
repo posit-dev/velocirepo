@@ -5,6 +5,7 @@ type ContentEntry struct {
 	ProjectID   string         `json:"project_id"`
 	Target      string         `json:"target"`
 	ID          string         `json:"id"`
+	Ref         *int           `json:"ref,omitempty"`
 	Title       string         `json:"title"`
 	Description string         `json:"description,omitempty"`
 	Content     string         `json:"content,omitempty"`
@@ -20,4 +21,8 @@ type ContentEntry struct {
 type ContentProvider interface {
 	ContentEntries() []ContentEntry
 	ContentFilename() string
+}
+
+type MultiContentProvider interface {
+	ContentByFilename() map[string][]ContentEntry
 }

@@ -250,6 +250,8 @@ func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob
 func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.FetchOptions, started time.Time) []Result {
 	var results []Result
 	var events []source.Event
+	contentByFilename := make(map[string][]source.ContentEntry)
+
 	for _, eventSrc := range job.eventSources {
 		fetched, err := eventSrc.FetchEvents(ctx, opts)
 		if err != nil {
@@ -262,13 +264,18 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 			continue
 		}
 		events = append(events, fetched...)
+		if mcp, ok := eventSrc.(source.MultiContentProvider); ok {
+			for filename, entries := range mcp.ContentByFilename() {
+				contentByFilename[filename] = append(contentByFilename[filename], entries...)
+			}
+		}
 	}
 
 	if len(results) > 0 {
 		return results
 	}
 
-	if len(events) == 0 {
+	if len(events) == 0 && len(contentByFilename) == 0 {
 		return []Result{{
 			Source:    job.sourceName,
 			ProjectID: job.projectID,
@@ -277,13 +284,21 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 		}}
 	}
 
-	if err := store.WriteEvents(dataDir, job.sourceName, job.projectID, events); err != nil {
-		return append(results, Result{
-			Source:    job.sourceName,
-			ProjectID: job.projectID,
-			Duration:  time.Since(started),
-			Error:     fmt.Sprintf("write: %v", err),
-		})
+	if len(events) > 0 {
+		if err := store.WriteEvents(dataDir, job.sourceName, job.projectID, events); err != nil {
+			return append(results, Result{
+				Source:    job.sourceName,
+				ProjectID: job.projectID,
+				Duration:  time.Since(started),
+				Error:     fmt.Sprintf("write: %v", err),
+			})
+		}
+	}
+
+	for filename, entries := range contentByFilename {
+		if err := store.WriteContent(dataDir, job.sourceName, job.projectID, filename, entries); err != nil {
+			slog.Warn("write content failed", "source", job.sourceName, "project", job.projectID, "error", err)
+		}
 	}
 
 	return append(results, Result{

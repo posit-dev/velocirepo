@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const repoInfoResponse = `{"data":{"repository":{"name":"repo","description":"A test repo","url":"https://github.com/owner/repo","homepageUrl":null,"createdAt":"2020-01-01T00:00:00Z","pushedAt":"2025-06-10T12:00:00Z","primaryLanguage":{"name":"Go"},"licenseInfo":{"spdxId":"MIT"},"repositoryTopics":{"nodes":[]},"defaultBranchRef":{"name":"main"},"isArchived":false}}}`
+
 func graphqlHandler(responses map[string]string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -50,10 +52,11 @@ func TestGitHubEventsFetchStargazers(t *testing.T) {
 	],"pageInfo":{"hasNextPage":false,"endCursor":"c1"}}}}}`
 
 	srv := httptest.NewServer(graphqlHandler(map[string]string{
-		"stargazers":   resp,
-		"forks":        `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"issues":       `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"stargazers":     resp,
+		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues":         `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests":   `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
 	}))
 	defer srv.Close()
 
@@ -89,11 +92,12 @@ func TestGitHubEventsFetchAllTypes(t *testing.T) {
 			{"createdAt":"2025-06-10T11:00:00Z","owner":{"login":"bob"}}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"issues": `{"data":{"repository":{"issues":{"nodes":[
-			{"createdAt":"2025-06-10T12:00:00Z","closedAt":"2025-06-10T14:00:00Z","author":{"login":"carol"}}
+			{"number":42,"title":"Fix bug","createdAt":"2025-06-10T12:00:00Z","closedAt":"2025-06-10T14:00:00Z","author":{"login":"carol"},"labels":{"nodes":[]},"body":"","state":"CLOSED","url":"https://github.com/owner/repo/issues/42"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[
-			{"createdAt":"2025-06-10T13:00:00Z","closedAt":"2025-06-10T15:00:00Z","mergedAt":"2025-06-10T15:00:00Z","author":{"login":"dave"}}
+			{"number":99,"title":"Add feature","createdAt":"2025-06-10T13:00:00Z","closedAt":"2025-06-10T15:00:00Z","mergedAt":"2025-06-10T15:00:00Z","author":{"login":"dave"},"labels":{"nodes":[]},"body":"","state":"MERGED","url":"https://github.com/owner/repo/pull/99"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -114,13 +118,14 @@ func TestGitHubEventsFetchAllTypes(t *testing.T) {
 	expected := []struct {
 		eventType string
 		user      string
+		ref       *int
 	}{
-		{"star", "alice"},
-		{"fork", "bob"},
-		{"issue_open", "carol"},
-		{"issue_close", "carol"},
-		{"pr_open", "dave"},
-		{"pr_merge", "dave"},
+		{"star", "alice", nil},
+		{"fork", "bob", nil},
+		{"issue_open", "carol", intPtr(42)},
+		{"issue_close", "carol", intPtr(42)},
+		{"pr_open", "dave", intPtr(99)},
+		{"pr_merge", "dave", intPtr(99)},
 	}
 
 	if len(events) != len(expected) {
@@ -140,6 +145,15 @@ func TestGitHubEventsFetchAllTypes(t *testing.T) {
 		if events[i].Target != "owner/repo" {
 			t.Errorf("events[%d].GitHubRepo = %q, want %q", i, events[i].Target, "owner/repo")
 		}
+		if want.ref == nil {
+			if events[i].Ref != nil {
+				t.Errorf("events[%d].Ref = %v, want nil", i, *events[i].Ref)
+			}
+		} else {
+			if events[i].Ref == nil || *events[i].Ref != *want.ref {
+				t.Errorf("events[%d].Ref = %v, want %d", i, events[i].Ref, *want.ref)
+			}
+		}
 	}
 }
 
@@ -150,9 +164,10 @@ func TestGitHubEventsDateFiltering(t *testing.T) {
 			{"starredAt":"2025-06-10T10:00:00Z","node":{"login":"bob"}},
 			{"starredAt":"2025-06-08T10:00:00Z","node":{"login":"carol"}}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":        `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"issues":       `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues":         `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests":   `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -186,6 +201,11 @@ func TestGitHubEventsPagination(t *testing.T) {
 			Variables map[string]interface{} `json:"variables"`
 		}
 		_ = json.Unmarshal(body, &req)
+
+		if contains(req.Query, "repositoryTopics") {
+			_, _ = w.Write([]byte(repoInfoResponse))
+			return
+		}
 
 		if !contains(req.Query, "stargazers") {
 			if contains(req.Query, "forks") {
@@ -247,7 +267,20 @@ func TestGitHubEventsAuthHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called.Store(true)
 		assertBearerToken(t, r, "my-secret-token")
-		_, _ = w.Write([]byte(`{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}},"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}},"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}},"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		body, _ := io.ReadAll(r.Body)
+		var req struct{ Query string `json:"query"` }
+		_ = json.Unmarshal(body, &req)
+		if contains(req.Query, "repositoryTopics") {
+			_, _ = w.Write([]byte(repoInfoResponse))
+		} else if contains(req.Query, "stargazers") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else if contains(req.Query, "forks") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else if contains(req.Query, "issues") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		}
 	}))
 	defer srv.Close()
 
@@ -269,11 +302,12 @@ func TestGitHubEventsAuthHeader(t *testing.T) {
 
 func TestGitHubEventsPRNotMerged(t *testing.T) {
 	responses := map[string]string{
-		"stargazers": `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":      `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"issues":     `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues":         `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
 		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[
-			{"createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-10T12:00:00Z","mergedAt":null,"author":{"login":"alice"}}
+			{"number":7,"title":"Some PR","createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-10T12:00:00Z","mergedAt":null,"author":{"login":"alice"},"labels":{"nodes":[]},"body":"","state":"CLOSED","url":"https://github.com/owner/repo/pull/7"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 	}
 
@@ -301,12 +335,13 @@ func TestGitHubEventsPRNotMerged(t *testing.T) {
 
 func TestGitHubEventsIssueCloseOutOfRange(t *testing.T) {
 	responses := map[string]string{
-		"stargazers": `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":      `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
 		"issues": `{"data":{"repository":{"issues":{"nodes":[
-			{"createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-20T10:00:00Z","author":{"login":"alice"}}
+			{"number":5,"title":"Some issue","createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-20T10:00:00Z","author":{"login":"alice"},"labels":{"nodes":[]},"body":"","state":"CLOSED","url":"https://github.com/owner/repo/issues/5"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests":   `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -348,3 +383,86 @@ func TestGitHubEventsGraphQLError(t *testing.T) {
 		t.Fatal("expected error for GraphQL error response")
 	}
 }
+
+func TestGitHubEventsContent(t *testing.T) {
+	responses := map[string]string{
+		"stargazers": `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":      `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues": `{"data":{"repository":{"issues":{"nodes":[
+			{"number":10,"title":"Bug report","body":"Something is broken","state":"OPEN","createdAt":"2025-06-10T10:00:00Z","closedAt":null,"url":"https://github.com/owner/repo/issues/10","author":{"login":"alice"},"labels":{"nodes":[{"name":"bug"},{"name":"urgent"}]}}
+		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[
+			{"number":20,"title":"Fix bug","body":"This fixes #10","state":"MERGED","createdAt":"2025-06-10T11:00:00Z","closedAt":"2025-06-10T12:00:00Z","mergedAt":"2025-06-10T12:00:00Z","url":"https://github.com/owner/repo/pull/20","author":{"login":"bob"},"labels":{"nodes":[{"name":"fix"}]}}
+		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
+	}
+
+	srv := httptest.NewServer(graphqlHandler(responses))
+	defer srv.Close()
+
+	g := &GitHubEvents{
+		Client:  srv.Client(),
+		Repo:    "owner/repo",
+		BaseURL: srv.URL,
+	}
+
+	_, err := g.FetchEvents(context.Background(), juneFetchOptions("my-project", 10, 10))
+	if err != nil {
+		t.Fatalf("FetchEvents failed: %v", err)
+	}
+
+	content := g.ContentByFilename()
+	if len(content) != 3 {
+		t.Fatalf("got %d content files, want 3 (issues, prs, repos)", len(content))
+	}
+
+	issues := content["issues.jsonl"]
+	if len(issues) != 1 {
+		t.Fatalf("got %d issue entries, want 1", len(issues))
+	}
+	if issues[0].ID != "issue/10" {
+		t.Errorf("issue ID = %q, want issue/10", issues[0].ID)
+	}
+	if issues[0].Ref == nil || *issues[0].Ref != 10 {
+		t.Errorf("issue Ref = %v, want 10", issues[0].Ref)
+	}
+	if issues[0].Title != "Bug report" {
+		t.Errorf("issue Title = %q, want Bug report", issues[0].Title)
+	}
+	if len(issues[0].Tags) != 2 || issues[0].Tags[0] != "bug" {
+		t.Errorf("issue Tags = %v, want [bug urgent]", issues[0].Tags)
+	}
+	if issues[0].Type != "issue" {
+		t.Errorf("issue Type = %q, want issue", issues[0].Type)
+	}
+
+	prs := content["prs.jsonl"]
+	if len(prs) != 1 {
+		t.Fatalf("got %d PR entries, want 1", len(prs))
+	}
+	if prs[0].ID != "pr/20" {
+		t.Errorf("PR ID = %q, want pr/20", prs[0].ID)
+	}
+	if prs[0].Ref == nil || *prs[0].Ref != 20 {
+		t.Errorf("PR Ref = %v, want 20", prs[0].Ref)
+	}
+	if prs[0].Extra["merged_at"] != "2025-06-10T12:00:00Z" {
+		t.Errorf("PR merged_at = %v, want 2025-06-10T12:00:00Z", prs[0].Extra["merged_at"])
+	}
+
+	repos := content["repos.jsonl"]
+	if len(repos) != 1 {
+		t.Fatalf("got %d repo entries, want 1", len(repos))
+	}
+	if repos[0].ID != "owner/repo" {
+		t.Errorf("repo ID = %q, want owner/repo", repos[0].ID)
+	}
+	if repos[0].Type != "repo" {
+		t.Errorf("repo Type = %q, want repo", repos[0].Type)
+	}
+	if repos[0].Extra["language"] != "Go" {
+		t.Errorf("repo language = %v, want Go", repos[0].Extra["language"])
+	}
+}
+
+func intPtr(n int) *int { return &n }

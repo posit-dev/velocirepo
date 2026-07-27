@@ -188,7 +188,7 @@ func TestSchemaLive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eventsExpected := []string{"project", "source", "type", "target", "datetime", "tags"}
+	eventsExpected := []string{"project", "source", "type", "target", "datetime", "ref", "tags"}
 	metricsExpected := []string{"project", "source", "target", "metric", "date", "value", "tags"}
 	projectsExpected := []string{"id", "name", "description", "color", "tags", "website", "logo"}
 
@@ -204,8 +204,8 @@ func TestSchemaLive(t *testing.T) {
 		}
 	}
 
-	if len(eventsCols) != 6 {
-		t.Fatalf("expected 6 events columns, got %d", len(eventsCols))
+	if len(eventsCols) != 7 {
+		t.Fatalf("expected 7 events columns, got %d", len(eventsCols))
 	}
 	if len(metricsCols) != 7 {
 		t.Fatalf("expected 7 metrics columns, got %d", len(metricsCols))
