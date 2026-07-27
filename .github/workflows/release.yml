@@ -130,6 +130,7 @@ jobs:
             dist/velocirepo-darwin-${{ matrix.goarch }}
 
   build-windows:
+    if: false  # temporarily disabled
     needs: validate-tag
     runs-on: windows-latest
     defaults:
@@ -170,7 +171,7 @@ jobs:
             dist/velocirepo-windows-amd64.exe
 
   release:
-    needs: [validate-tag, build-linux, build-darwin, build-windows]
+    needs: [validate-tag, build-linux, build-darwin]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -183,7 +184,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum *.tar.gz *.zip velocirepo-* > SHA256SUMS
+          sha256sum *.tar.gz velocirepo-* > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create Release
@@ -191,7 +192,6 @@ jobs:
         with:
           files: |
             artifacts/*.tar.gz
-            artifacts/*.zip
             artifacts/SHA256SUMS
           generate_release_notes: true
 
@@ -205,6 +205,7 @@ jobs:
           git push origin "$MAJOR" "$MINOR" --force
 
   update-homebrew:
+    if: false  # temporarily disabled
     needs: [validate-tag, release]
     runs-on: ubuntu-latest
     env:
@@ -313,6 +314,7 @@ jobs:
           git push
 
   update-scoop:
+    if: false  # temporarily disabled
     needs: [validate-tag, release]
     runs-on: ubuntu-latest
     env:
@@ -388,7 +390,7 @@ jobs:
           git push
 
   publish-pypi:
-    needs: [validate-tag, build-linux, build-darwin, build-windows]
+    needs: [validate-tag, build-linux, build-darwin]
     runs-on: ubuntu-latest
     environment:
       name: release
@@ -433,11 +435,12 @@ jobs:
             --platform darwin_arm64 \
             --output ../wheels
 
-          uv run --with hatchling build_wheels.py \
-            --binary ../artifacts/velocirepo-windows-amd64.exe \
-            --version "$VERSION" \
-            --platform windows_amd64 \
-            --output ../wheels
+          # Windows wheel temporarily disabled
+          # uv run --with hatchling build_wheels.py \
+          #   --binary ../artifacts/velocirepo-windows-amd64.exe \
+          #   --version "$VERSION" \
+          #   --platform windows_amd64 \
+          #   --output ../wheels
 
       - name: List wheels
         run: ls -la wheels/
