@@ -189,11 +189,13 @@ func metricsViewSQL(absDir string) string {
 				WHEN 'issue_close' THEN 'daily_issues_closed'
 				WHEN 'pr_open' THEN 'daily_prs_opened'
 				WHEN 'pr_merge' THEN 'daily_prs_merged'
+				WHEN 'comment' THEN 'daily_comments'
+				WHEN 'reaction' THEN 'daily_reactions'
 				ELSE 'daily_' || type
 			END AS metric,
 			CAST(datetime AS DATE) AS date,
 			COUNT(*) AS value,
-			NULL::JSON AS tags
+			NULL::JSON AS extra
 		FROM events
 		GROUP BY project, source, target, type, CAST(datetime AS DATE)`
 
@@ -209,34 +211,34 @@ func metricsViewSQL(absDir string) string {
 			metric,
 			CAST(date AS DATE) AS date,
 			CAST(value AS BIGINT) AS value,
-			tags
+			extra
 		FROM read_json('%s',
 			format='newline_delimited',
-			columns={source: 'VARCHAR', metric: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', date: 'VARCHAR', value: 'BIGINT', tags: 'JSON'})
+			columns={source: 'VARCHAR', metric: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', date: 'VARCHAR', value: 'BIGINT', extra: 'JSON'})
 		UNION ALL
 		%s`, escapeSQLString(glob), eventsAgg)
 }
 
 func createMetricsFilledView(db *sql.DB) error {
 	query := `CREATE OR REPLACE VIEW metrics_filled AS
-SELECT project, source, target, metric, date, value, tags
+SELECT project, source, target, metric, date, value, extra
 FROM (
     SELECT
-        dates.project, dates.source, dates.target, dates.metric, dates.date, dates.tags,
+        dates.project, dates.source, dates.target, dates.metric, dates.date, dates.extra,
         LAST_VALUE(m.value IGNORE NULLS) OVER (
-            PARTITION BY dates.project, dates.source, dates.target, dates.metric, dates.tags
+            PARTITION BY dates.project, dates.source, dates.target, dates.metric, dates.extra
             ORDER BY dates.date
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         ) AS value
     FROM (
-        SELECT groups.project, groups.source, groups.target, groups.metric, groups.tags,
+        SELECT groups.project, groups.source, groups.target, groups.metric, groups.extra,
             UNNEST(generate_series(
                 groups.min_date,
                 groups.max_date,
                 INTERVAL '1 day'
             ))::DATE AS date
         FROM (
-            SELECT m.project, m.source, m.target, m.metric, m.tags,
+            SELECT m.project, m.source, m.target, m.metric, m.extra,
                 MIN(m.date) AS min_date,
                 GREATEST(
                     MAX(m.date),
@@ -253,7 +255,7 @@ FROM (
                 AND w.source = m.source
                 AND w.target = m.target
             WHERE m.metric LIKE 'total_%'
-            GROUP BY m.project, m.source, m.target, m.metric, m.tags
+            GROUP BY m.project, m.source, m.target, m.metric, m.extra
         ) groups
     ) dates
     LEFT JOIN metrics m
@@ -261,7 +263,7 @@ FROM (
         AND m.source = dates.source
         AND m.target = dates.target
         AND m.metric = dates.metric
-        AND m.tags IS NOT DISTINCT FROM dates.tags
+        AND m.extra IS NOT DISTINCT FROM dates.extra
         AND m.date = dates.date
 )
 WHERE value IS NOT NULL
@@ -311,7 +313,7 @@ func createEmptyMetricWatermarksView(db *sql.DB) error {
 }
 
 func createEmptyMetricsFilledView(db *sql.DB) error {
-	_, err := db.Exec(`CREATE VIEW metrics_filled (project, source, target, metric, date, value, tags) AS
+	_, err := db.Exec(`CREATE VIEW metrics_filled (project, source, target, metric, date, value, extra) AS
 		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::DATE, NULL::BIGINT, NULL::JSON
 		WHERE false`)
 	if err != nil {
@@ -321,7 +323,7 @@ func createEmptyMetricsFilledView(db *sql.DB) error {
 }
 
 func createEmptyMetricsView(db *sql.DB) error {
-	_, err := db.Exec(`CREATE VIEW metrics (project, source, target, metric, date, value, tags) AS
+	_, err := db.Exec(`CREATE VIEW metrics (project, source, target, metric, date, value, extra) AS
 		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::DATE, NULL::BIGINT, NULL::JSON
 		WHERE false`)
 	if err != nil {
@@ -346,10 +348,11 @@ func createEventsView(db *sql.DB, absDir string) error {
 			target,
 			CAST(datetime AS TIMESTAMP) AS datetime,
 			ref,
-			tags
+			"user",
+			extra
 		FROM read_json('%s',
 			format='newline_delimited',
-			columns={source: 'VARCHAR', type: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', datetime: 'VARCHAR', ref: 'INTEGER', tags: 'JSON'})`,
+			columns={source: 'VARCHAR', type: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', datetime: 'VARCHAR', ref: 'INTEGER', "user": 'VARCHAR', extra: 'JSON'})`,
 		escapeSQLString(glob))
 
 	if _, err := db.Exec(query); err != nil {
@@ -360,8 +363,8 @@ func createEventsView(db *sql.DB, absDir string) error {
 }
 
 func createEmptyEventsView(db *sql.DB) error {
-	_, err := db.Exec(`CREATE VIEW events (project, source, type, target, datetime, ref, tags) AS
-		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::TIMESTAMP, NULL::INTEGER, NULL::JSON
+	_, err := db.Exec(`CREATE VIEW events (project, source, type, target, datetime, ref, "user", extra) AS
+		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::TIMESTAMP, NULL::INTEGER, NULL::VARCHAR, NULL::JSON
 		WHERE false`)
 	if err != nil {
 		return fmt.Errorf("create empty events view: %w", err)
@@ -471,14 +474,14 @@ var DefaultIndicators = []IndicatorDef{
 		Query: `SELECT project, source, target, metric,
 	'{{indicator_name}}' AS indicator, date,
 	(sum_28d - sum_prior_28d) / NULLIF(sum_prior_28d, 0.0) AS value,
-	tags
+	extra
 FROM (
 	SELECT *, SUM(value) OVER w AS sum_28d,
 		SUM(value) OVER w_prior AS sum_prior_28d
 	FROM metrics WHERE metric LIKE 'daily_%'
 	WINDOW
-		w AS (PARTITION BY project, source, target, metric, tags ORDER BY date ROWS BETWEEN 27 PRECEDING AND CURRENT ROW),
-		w_prior AS (PARTITION BY project, source, target, metric, tags ORDER BY date ROWS BETWEEN 55 PRECEDING AND 28 PRECEDING)
+		w AS (PARTITION BY project, source, target, metric, extra ORDER BY date ROWS BETWEEN 27 PRECEDING AND CURRENT ROW),
+		w_prior AS (PARTITION BY project, source, target, metric, extra ORDER BY date ROWS BETWEEN 55 PRECEDING AND 28 PRECEDING)
 ) WHERE sum_prior_28d IS NOT NULL`,
 	},
 	{
@@ -487,9 +490,9 @@ FROM (
 		Query: `SELECT project, source, target, metric,
 	'{{indicator_name}}' AS indicator, date,
 	REGR_SLOPE(value, EXTRACT(EPOCH FROM CAST(date AS TIMESTAMP)) / 86400) OVER w AS value,
-	tags
+	extra
 FROM metrics WHERE metric LIKE 'daily_%'
-WINDOW w AS (PARTITION BY project, source, target, metric, tags ORDER BY date ROWS BETWEEN 27 PRECEDING AND CURRENT ROW)`,
+WINDOW w AS (PARTITION BY project, source, target, metric, extra ORDER BY date ROWS BETWEEN 27 PRECEDING AND CURRENT ROW)`,
 	},
 }
 
@@ -514,7 +517,7 @@ func createIndicatorsView(db *sql.DB, indicators []IndicatorDef) error {
 }
 
 func createEmptyIndicatorsView(db *sql.DB) error {
-	_, err := db.Exec(`CREATE VIEW indicators (project, source, target, metric, indicator, date, value, tags) AS
+	_, err := db.Exec(`CREATE VIEW indicators (project, source, target, metric, indicator, date, value, extra) AS
 		SELECT NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::DATE, NULL::DOUBLE, NULL::JSON
 		WHERE false`)
 	if err != nil {

@@ -15,7 +15,7 @@ type Record struct {
 	Target    string            `json:"target"`
 	Date      string            `json:"date"`
 	Value     int64             `json:"value"`
-	Tags      map[string]string `json:"tags,omitempty"`
+	Extra     map[string]string `json:"extra,omitempty"`
 }
 
 func (r *Record) UnmarshalJSON(data []byte) error {
@@ -70,7 +70,8 @@ type Event struct {
 	Target    string            `json:"target"`
 	Datetime  string            `json:"datetime"`
 	Ref       *int              `json:"ref,omitempty"`
-	Tags      map[string]string `json:"tags,omitempty"`
+	User      string            `json:"user,omitempty"`
+	Extra     map[string]string `json:"extra,omitempty"`
 }
 
 type EventSource interface {

@@ -15,6 +15,11 @@ const repoInfoResponse = `{"data":{"repository":{"name":"repo","description":"A 
 
 func graphqlHandler(responses map[string]string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+
 		body, _ := io.ReadAll(r.Body)
 		var req struct {
 			Query     string                 `json:"query"`
@@ -75,10 +80,10 @@ func TestGitHubEventsFetchStargazers(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2", len(events))
 	}
-	if events[0].Type != "star" || events[0].Tags["user"] != "alice" {
+	if events[0].Type != "star" || events[0].User != "alice" {
 		t.Errorf("events[0] = %+v, want star/alice", events[0])
 	}
-	if events[1].Type != "star" || events[1].Tags["user"] != "bob" {
+	if events[1].Type != "star" || events[1].User != "bob" {
 		t.Errorf("events[1] = %+v, want star/bob", events[1])
 	}
 }
@@ -136,8 +141,8 @@ func TestGitHubEventsFetchAllTypes(t *testing.T) {
 		if events[i].Type != want.eventType {
 			t.Errorf("events[%d].Type = %q, want %q", i, events[i].Type, want.eventType)
 		}
-		if events[i].Tags["user"] != want.user {
-			t.Errorf("events[%d].User = %q, want %q", i, events[i].Tags["user"], want.user)
+		if events[i].User != want.user {
+			t.Errorf("events[%d].User = %q, want %q", i, events[i].User, want.user)
 		}
 		if events[i].ProjectID != "my-project" {
 			t.Errorf("events[%d].ProjectID = %q, want %q", i, events[i].ProjectID, "my-project")
@@ -195,6 +200,11 @@ func TestGitHubEventsDateFiltering(t *testing.T) {
 func TestGitHubEventsPagination(t *testing.T) {
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+
 		body, _ := io.ReadAll(r.Body)
 		var req struct {
 			Query     string                 `json:"query"`
@@ -245,8 +255,8 @@ func TestGitHubEventsPagination(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2", len(events))
 	}
-	if events[0].Tags["user"] != "alice" || events[1].Tags["user"] != "bob" {
-		t.Errorf("unexpected users: %s, %s", events[0].Tags["user"], events[1].Tags["user"])
+	if events[0].User != "alice" || events[1].User != "bob" {
+		t.Errorf("unexpected users: %s, %s", events[0].User, events[1].User)
 	}
 }
 
@@ -267,6 +277,10 @@ func TestGitHubEventsAuthHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called.Store(true)
 		assertBearerToken(t, r, "my-secret-token")
+		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		var req struct{ Query string `json:"query"` }
 		_ = json.Unmarshal(body, &req)
@@ -462,6 +476,175 @@ func TestGitHubEventsContent(t *testing.T) {
 	}
 	if repos[0].Extra["language"] != "Go" {
 		t.Errorf("repo language = %v, want Go", repos[0].Extra["language"])
+	}
+}
+
+func TestGitHubEventsComments(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
+			_, _ = w.Write([]byte(`[
+				{"created_at":"2025-06-10T09:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/42","user":{"login":"alice"}},
+				{"created_at":"2025-06-10T10:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/7","user":{"login":"bob"}},
+				{"created_at":"2025-06-10T11:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/99","user":null}
+			]`))
+			return
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var req struct{ Query string `json:"query"` }
+		_ = json.Unmarshal(body, &req)
+		if contains(req.Query, "repositoryTopics") {
+			_, _ = w.Write([]byte(repoInfoResponse))
+		} else if contains(req.Query, "stargazers") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else if contains(req.Query, "forks") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else if contains(req.Query, "issues") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		}
+	}))
+	defer srv.Close()
+
+	g := &GitHubEvents{
+		Client:  srv.Client(),
+		Repo:    "owner/repo",
+		BaseURL: srv.URL,
+	}
+
+	events, err := g.FetchEvents(context.Background(), juneFetchOptions("test", 10, 10))
+	if err != nil {
+		t.Fatalf("FetchEvents failed: %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3 comments", len(events))
+	}
+	for _, e := range events {
+		if e.Type != "comment" {
+			t.Errorf("Type = %q, want comment", e.Type)
+		}
+	}
+	if events[0].Ref == nil || *events[0].Ref != 42 {
+		t.Errorf("events[0].Ref = %v, want 42", events[0].Ref)
+	}
+	if events[0].User != "alice" {
+		t.Errorf("events[0].user = %q, want alice", events[0].User)
+	}
+	if events[1].Ref == nil || *events[1].Ref != 7 {
+		t.Errorf("events[1].Ref = %v, want 7", events[1].Ref)
+	}
+	if events[2].Ref == nil || *events[2].Ref != 99 {
+		t.Errorf("events[2].Ref = %v, want 99", events[2].Ref)
+	}
+	if events[2].User != "" {
+		t.Errorf("events[2].User = %q, want empty (no user)", events[2].User)
+	}
+}
+
+func TestGitHubEventsReactions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &req)
+
+		if contains(req.Query, "repositoryTopics") {
+			_, _ = w.Write([]byte(repoInfoResponse))
+			return
+		}
+
+		if contains(req.Query, "issueOrPullRequest") {
+			num := int(req.Variables["number"].(float64))
+			afterRaw := req.Variables["after"]
+			if num == 10 && afterRaw == nil {
+				_, _ = w.Write([]byte(`{"data":{"repository":{"issueOrPullRequest":{"reactions":{"nodes":[
+					{"createdAt":"2025-06-10T10:00:00Z","content":"THUMBS_UP","user":{"login":"alice"}},
+					{"createdAt":"2025-06-10T10:01:00Z","content":"HEART","user":{"login":"bob"}}
+				],"pageInfo":{"hasNextPage":true,"endCursor":"rc1"}}}}}}`))
+			} else if num == 10 {
+				_, _ = w.Write([]byte(`{"data":{"repository":{"issueOrPullRequest":{"reactions":{"nodes":[
+					{"createdAt":"2025-06-10T10:02:00Z","content":"ROCKET","user":null}
+				],"pageInfo":{"hasNextPage":false,"endCursor":"rc2"}}}}}}`))
+			} else if num == 20 {
+				_, _ = w.Write([]byte(`{"data":{"repository":{"issueOrPullRequest":{"reactions":{"nodes":[
+					{"createdAt":"2025-06-10T11:00:00Z","content":"EYES","user":{"login":"carol"}}
+				],"pageInfo":{"hasNextPage":false,"endCursor":"rc3"}}}}}}`))
+			} else {
+				_, _ = w.Write([]byte(`{"data":{"repository":{"issueOrPullRequest":{"reactions":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`))
+			}
+			return
+		}
+
+		if contains(req.Query, "stargazers") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else if contains(req.Query, "forks") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else if contains(req.Query, "issues") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"issues":{"nodes":[
+				{"number":10,"title":"Bug","body":"","state":"OPEN","createdAt":"2025-06-10T09:00:00Z","closedAt":null,"url":"https://github.com/owner/repo/issues/10","author":{"login":"alice"},"labels":{"nodes":[]}}
+			],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		} else if contains(req.Query, "pullRequests") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequests":{"nodes":[
+				{"number":20,"title":"Fix","body":"","state":"MERGED","createdAt":"2025-06-10T09:30:00Z","closedAt":"2025-06-10T10:00:00Z","mergedAt":"2025-06-10T10:00:00Z","url":"https://github.com/owner/repo/pull/20","author":{"login":"bob"},"labels":{"nodes":[]}}
+			],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
+		}
+	}))
+	defer srv.Close()
+
+	g := &GitHubEvents{
+		Client:  srv.Client(),
+		Repo:    "owner/repo",
+		BaseURL: srv.URL,
+	}
+
+	events, err := g.FetchEvents(context.Background(), juneFetchOptions("test", 10, 10))
+	if err != nil {
+		t.Fatalf("FetchEvents failed: %v", err)
+	}
+
+	var reactions []Event
+	for _, e := range events {
+		if e.Type == "reaction" {
+			reactions = append(reactions, e)
+		}
+	}
+
+	if len(reactions) != 4 {
+		t.Fatalf("got %d reaction events, want 4", len(reactions))
+	}
+
+	if reactions[0].Extra["value"] != "thumbs_up" || reactions[0].User != "alice" {
+		t.Errorf("reactions[0] = user=%q extra=%v, want thumbs_up/alice", reactions[0].User, reactions[0].Extra)
+	}
+	if reactions[0].Ref == nil || *reactions[0].Ref != 10 {
+		t.Errorf("reactions[0].Ref = %v, want 10", reactions[0].Ref)
+	}
+
+	if reactions[1].Extra["value"] != "heart" || reactions[1].User != "bob" {
+		t.Errorf("reactions[1] = user=%q extra=%v, want heart/bob", reactions[1].User, reactions[1].Extra)
+	}
+
+	if reactions[2].Extra["value"] != "rocket" {
+		t.Errorf("reactions[2].value = %q, want rocket", reactions[2].Extra["value"])
+	}
+	if reactions[2].User != "" {
+		t.Errorf("reactions[2] should not have user (null user)")
+	}
+
+	if reactions[3].Extra["value"] != "eyes" || reactions[3].User != "carol" {
+		t.Errorf("reactions[3] = user=%q extra=%v, want eyes/carol", reactions[3].User, reactions[3].Extra)
+	}
+	if reactions[3].Ref == nil || *reactions[3].Ref != 20 {
+		t.Errorf("reactions[3].Ref = %v, want 20", reactions[3].Ref)
 	}
 }
 

@@ -71,6 +71,29 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 		g.contentEntries["prs.jsonl"] = prContent
 	}
 
+	comments, err := g.fetchComments(ctx, owner, repo, opts)
+	if err != nil {
+		return nil, fmt.Errorf("comments: %w", err)
+	}
+	events = append(events, comments...)
+
+	var issueNumbers []int
+	for _, e := range issueContent {
+		if e.Ref != nil {
+			issueNumbers = append(issueNumbers, *e.Ref)
+		}
+	}
+	for _, e := range prContent {
+		if e.Ref != nil {
+			issueNumbers = append(issueNumbers, *e.Ref)
+		}
+	}
+	reactions, err := g.fetchReactions(ctx, owner, repo, opts, issueNumbers)
+	if err != nil {
+		return nil, fmt.Errorf("reactions: %w", err)
+	}
+	events = append(events, reactions...)
+
 	repoContent, err := g.fetchRepoInfo(ctx, owner, repo, opts)
 	if err != nil {
 		return nil, fmt.Errorf("repo info: %w", err)
@@ -154,7 +177,7 @@ func (g *GitHubEvents) fetchStargazers(ctx context.Context, owner, repo string, 
 			if !include {
 				continue
 			}
-			events = append(events, githubEvent(opts, g.Repo, "star", edge.StarredAt, nil, userTags(edge.Node.Login)))
+			events = append(events, githubEvent(opts, g.Repo, "star", edge.StarredAt, nil, edge.Node.Login, nil))
 		}
 
 		return events, result.Data.Repository.Stargazers.PageInfo, done, nil
@@ -205,7 +228,7 @@ func (g *GitHubEvents) fetchForks(ctx context.Context, owner, repo string, opts 
 			if !include {
 				continue
 			}
-			events = append(events, githubEvent(opts, g.Repo, "fork", node.CreatedAt, nil, userTags(node.Owner.Login)))
+			events = append(events, githubEvent(opts, g.Repo, "fork", node.CreatedAt, nil, node.Owner.Login, nil))
 		}
 
 		return events, result.Data.Repository.Forks.PageInfo, done, nil
@@ -312,14 +335,13 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 			}
 			content = append(content, entry)
 
-			tags := userTags(login)
 			if !include {
 				continue
 			}
-			events = append(events, githubEvent(opts, g.Repo, "issue_open", node.CreatedAt, &ref, tags))
+			events = append(events, githubEvent(opts, g.Repo, "issue_open", node.CreatedAt, &ref, login, nil))
 
 			if node.ClosedAt != nil {
-				events = appendOptionalGitHubEvent(events, opts, g.Repo, "issue_close", *node.ClosedAt, &ref, tags)
+				events = appendOptionalGitHubEvent(events, opts, g.Repo, "issue_close", *node.ClosedAt, &ref, login)
 			}
 		}
 
@@ -437,14 +459,13 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 			}
 			content = append(content, entry)
 
-			tags := userTags(login)
 			if !include {
 				continue
 			}
-			events = append(events, githubEvent(opts, g.Repo, "pr_open", node.CreatedAt, &ref, tags))
+			events = append(events, githubEvent(opts, g.Repo, "pr_open", node.CreatedAt, &ref, login, nil))
 
 			if node.MergedAt != nil {
-				events = appendOptionalGitHubEvent(events, opts, g.Repo, "pr_merge", *node.MergedAt, &ref, tags)
+				events = appendOptionalGitHubEvent(events, opts, g.Repo, "pr_merge", *node.MergedAt, &ref, login)
 			}
 		}
 
@@ -452,6 +473,205 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 	})
 
 	return events, content, err
+}
+
+func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, error) {
+	var events []Event
+	page := 1
+
+	for {
+		url := fmt.Sprintf("%s/repos/%s/%s/issues/comments?since=%s&sort=created&direction=desc&per_page=100&page=%d",
+			g.restBaseURL(), owner, repo, opts.StartDate.Format("2006-01-02T15:04:05Z"), page)
+
+		var comments []struct {
+			CreatedAt string `json:"created_at"`
+			IssueURL  string `json:"issue_url"`
+			User      *struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+		if err := g.getREST(ctx, url, &comments); err != nil {
+			return nil, err
+		}
+
+		if len(comments) == 0 {
+			break
+		}
+
+		for _, c := range comments {
+			t, err := time.Parse(time.RFC3339, c.CreatedAt)
+			if err != nil {
+				continue
+			}
+			if t.Before(opts.StartDate) {
+				continue
+			}
+			if !inDateRange(t, opts.StartDate, opts.EndDate) {
+				continue
+			}
+
+			ref := extractIssueNumber(c.IssueURL)
+			var user string
+			if c.User != nil {
+				user = c.User.Login
+			}
+			events = append(events, githubEvent(opts, g.Repo, "comment", c.CreatedAt, ref, user, nil))
+		}
+
+		if len(comments) < 100 {
+			break
+		}
+		page++
+	}
+
+	return events, nil
+}
+
+var reactionContentMap = map[string]string{
+	"THUMBS_UP":   "thumbs_up",
+	"THUMBS_DOWN": "thumbs_down",
+	"LAUGH":       "laugh",
+	"HOORAY":      "hooray",
+	"CONFUSED":    "confused",
+	"HEART":       "heart",
+	"ROCKET":      "rocket",
+	"EYES":        "eyes",
+}
+
+func (g *GitHubEvents) fetchReactions(ctx context.Context, owner, repo string, opts FetchOptions, numbers []int) ([]Event, error) {
+	var events []Event
+
+	query := `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+		repository(owner: $owner, name: $name) {
+			issueOrPullRequest(number: $number) {
+				... on Issue {
+					reactions(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+						nodes {
+							createdAt
+							content
+							user { login }
+						}
+						pageInfo { hasNextPage endCursor }
+					}
+				}
+				... on PullRequest {
+					reactions(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+						nodes {
+							createdAt
+							content
+							user { login }
+						}
+						pageInfo { hasNextPage endCursor }
+					}
+				}
+			}
+		}
+	}`
+
+	for _, number := range numbers {
+		var cursor *string
+		ref := number
+		done := false
+
+		for !done {
+			vars := map[string]interface{}{"owner": owner, "name": repo, "number": number, "after": cursor}
+			resp, err := g.doGraphQL(ctx, query, vars)
+			if err != nil {
+				return nil, fmt.Errorf("reactions for #%d: %w", number, err)
+			}
+
+			var result struct {
+				Data struct {
+					Repository struct {
+						IssueOrPullRequest struct {
+							Reactions struct {
+								Nodes []struct {
+									CreatedAt string `json:"createdAt"`
+									Content   string `json:"content"`
+									User      *struct {
+										Login string `json:"login"`
+									} `json:"user"`
+								} `json:"nodes"`
+								PageInfo pageInfo `json:"pageInfo"`
+							} `json:"reactions"`
+						} `json:"issueOrPullRequest"`
+					} `json:"repository"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(resp, &result); err != nil {
+				return nil, fmt.Errorf("unmarshal reactions for #%d: %w", number, err)
+			}
+
+			reactions := result.Data.Repository.IssueOrPullRequest.Reactions
+			for _, node := range reactions.Nodes {
+				include, stop := includeGitHubEventTime(node.CreatedAt, opts)
+				if stop {
+					done = true
+					break
+				}
+				if !include {
+					continue
+				}
+				value := reactionContentMap[node.Content]
+				if value == "" {
+					value = node.Content
+				}
+				var user string
+				if node.User != nil {
+					user = node.User.Login
+				}
+				extra := map[string]string{"value": value}
+				events = append(events, githubEvent(opts, g.Repo, "reaction", node.CreatedAt, &ref, user, extra))
+			}
+
+			if done || !reactions.PageInfo.HasNextPage {
+				break
+			}
+			cursor = &reactions.PageInfo.EndCursor
+		}
+	}
+
+	return events, nil
+}
+
+func (g *GitHubEvents) restBaseURL() string {
+	if g.BaseURL != "" {
+		return g.BaseURL
+	}
+	return "https://api.github.com"
+}
+
+func (g *GitHubEvents) getREST(ctx context.Context, url string, out any) error {
+	headers := map[string]string{"Accept": "application/vnd.github+json"}
+	if g.Token != "" {
+		headers["Authorization"] = "Bearer " + g.Token
+	}
+	return doJSONInto(ctx, g.Client, httpJSONRequest{
+		URL:          url,
+		Headers:      headers,
+		RequestError: "github REST request",
+		StatusError:  "github REST API returned",
+	}, out)
+}
+
+func extractIssueNumber(issueURL string) *int {
+	for i := len(issueURL) - 1; i >= 0; i-- {
+		if issueURL[i] == '/' {
+			numStr := issueURL[i+1:]
+			n := 0
+			for _, c := range numStr {
+				if c < '0' || c > '9' {
+					return nil
+				}
+				n = n*10 + int(c-'0')
+			}
+			if n > 0 {
+				return &n
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, opts FetchOptions) ([]ContentEntry, error) {
@@ -567,30 +787,24 @@ func includeGitHubEventTime(timestamp string, opts FetchOptions) (include bool, 
 	return inDateRange(t, opts.StartDate, opts.EndDate), false
 }
 
-func appendOptionalGitHubEvent(events []Event, opts FetchOptions, repo, eventType, timestamp string, ref *int, tags map[string]string) []Event {
+func appendOptionalGitHubEvent(events []Event, opts FetchOptions, repo, eventType, timestamp string, ref *int, user string) []Event {
 	t, err := time.Parse(time.RFC3339, timestamp)
 	if err != nil || !inDateRange(t, opts.StartDate, opts.EndDate) {
 		return events
 	}
-	return append(events, githubEvent(opts, repo, eventType, timestamp, ref, tags))
+	return append(events, githubEvent(opts, repo, eventType, timestamp, ref, user, nil))
 }
 
-func githubEvent(opts FetchOptions, repo, eventType, timestamp string, ref *int, tags map[string]string) Event {
+func githubEvent(opts FetchOptions, repo, eventType, timestamp string, ref *int, user string, extra map[string]string) Event {
 	return Event{
 		Type:      eventType,
 		ProjectID: opts.ProjectID,
 		Target:    repo,
 		Datetime:  timestamp,
 		Ref:       ref,
-		Tags:      tags,
+		User:      user,
+		Extra:     extra,
 	}
-}
-
-func userTags(login string) map[string]string {
-	if login == "" {
-		return nil
-	}
-	return map[string]string{"user": login}
 }
 
 type pageInfo struct {

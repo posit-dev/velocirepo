@@ -33,21 +33,22 @@ func fetchOpts() fetch.Options {
 		StartDate:     fetchStartDate,
 		EndDate:       fetchEndDate,
 		NoConcatenate: noConcatenate,
+		OnResult:      renderResult,
+	}
+}
+
+func renderResult(r fetch.Result) {
+	switch {
+	case r.Error != "":
+		ui.FetchError(r.Source, r.ProjectID, fmt.Errorf("%s", r.Error))
+	case r.Skipped != "":
+		ui.FetchSkip(r.Source, r.ProjectID, r.Skipped)
+	default:
+		ui.FetchDone(r.Source, r.ProjectID, r.Records, r.Duration)
 	}
 }
 
 func renderFetchResults(results []fetch.Result) {
-	for _, r := range results {
-		switch {
-		case r.Error != "":
-			ui.FetchError(r.Source, r.ProjectID, fmt.Errorf("%s", r.Error))
-		case r.Skipped != "":
-			ui.FetchSkip(r.Source, r.ProjectID, r.Skipped)
-		default:
-			ui.FetchDone(r.Source, r.ProjectID, r.Records, r.Duration)
-		}
-	}
-
 	var failures []fetch.Result
 	for _, r := range results {
 		if r.Error != "" {

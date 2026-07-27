@@ -49,15 +49,15 @@ func TestFilterUnchangedTotals_ChangedValue(t *testing.T) {
 func TestFilterUnchangedTotals_WithTags(t *testing.T) {
 	last := map[string]int64{"total_views|@chan|video_id=abc": 500}
 	records := []source.Record{
-		{Metric: "total_views", Target: "@chan", Value: 500, Tags: map[string]string{"video_id": "abc"}},
-		{Metric: "total_views", Target: "@chan", Value: 200, Tags: map[string]string{"video_id": "xyz"}},
+		{Metric: "total_views", Target: "@chan", Value: 500, Extra: map[string]string{"video_id": "abc"}},
+		{Metric: "total_views", Target: "@chan", Value: 200, Extra: map[string]string{"video_id": "xyz"}},
 	}
 	got := filterUnchangedTotals(records, last)
 	if len(got) != 1 {
 		t.Fatalf("got %d records, want 1", len(got))
 	}
-	if got[0].Tags["video_id"] != "xyz" {
-		t.Errorf("expected video xyz, got %s", got[0].Tags["video_id"])
+	if got[0].Extra["video_id"] != "xyz" {
+		t.Errorf("expected video xyz, got %s", got[0].Extra["video_id"])
 	}
 }
 
@@ -280,7 +280,7 @@ func TestWriteRecords_MixedDailyAndTotal(t *testing.T) {
 	dir := t.TempDir()
 
 	records1 := []source.Record{
-		{Metric: "total_views", ProjectID: "proj", Target: "@ch", Date: "2025-06-01", Value: 1000, Tags: map[string]string{"video_id": "v1"}},
+		{Metric: "total_views", ProjectID: "proj", Target: "@ch", Date: "2025-06-01", Value: 1000, Extra: map[string]string{"video_id": "v1"}},
 	}
 	if err := WriteRecords(dir, "youtube", "proj", records1); err != nil {
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func TestWriteRecords_MixedDailyAndTotal(t *testing.T) {
 
 	// Day 2: total unchanged but there's also a daily metric
 	records2 := []source.Record{
-		{Metric: "total_views", ProjectID: "proj", Target: "@ch", Date: "2025-06-02", Value: 1000, Tags: map[string]string{"video_id": "v1"}},
+		{Metric: "total_views", ProjectID: "proj", Target: "@ch", Date: "2025-06-02", Value: 1000, Extra: map[string]string{"video_id": "v1"}},
 		{Metric: "total_subscribers", ProjectID: "proj", Target: "@ch", Date: "2025-06-02", Value: 50},
 	}
 	if err := WriteRecords(dir, "youtube", "proj", records2); err != nil {

@@ -241,9 +241,9 @@ func dedupKey(r source.Record) string {
 	b.WriteByte('|')
 	b.WriteString(r.Date)
 
-	if len(r.Tags) > 0 {
-		keys := make([]string, 0, len(r.Tags))
-		for k := range r.Tags {
+	if len(r.Extra) > 0 {
+		keys := make([]string, 0, len(r.Extra))
+		for k := range r.Extra {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
@@ -251,7 +251,7 @@ func dedupKey(r source.Record) string {
 			b.WriteByte('|')
 			b.WriteString(k)
 			b.WriteByte('=')
-			b.WriteString(r.Tags[k])
+			b.WriteString(r.Extra[k])
 		}
 	}
 
@@ -272,9 +272,14 @@ func dedupEventKey(e source.Event) string {
 	b.WriteByte('|')
 	b.WriteString(e.Datetime)
 
-	if len(e.Tags) > 0 {
-		keys := make([]string, 0, len(e.Tags))
-		for k := range e.Tags {
+	if e.User != "" {
+		b.WriteByte('|')
+		b.WriteString(e.User)
+	}
+
+	if len(e.Extra) > 0 {
+		keys := make([]string, 0, len(e.Extra))
+		for k := range e.Extra {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
@@ -282,7 +287,7 @@ func dedupEventKey(e source.Event) string {
 			b.WriteByte('|')
 			b.WriteString(k)
 			b.WriteByte('=')
-			b.WriteString(e.Tags[k])
+			b.WriteString(e.Extra[k])
 		}
 	}
 

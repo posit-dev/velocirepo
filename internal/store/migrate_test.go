@@ -90,8 +90,8 @@ func TestMigrate0to1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if applied != 6 {
-		t.Errorf("expected 6 migrations applied, got %d", applied)
+	if applied != 7 {
+		t.Errorf("expected 7 migrations applied, got %d", applied)
 	}
 
 	v, _ := SchemaVersion(dir)
@@ -132,13 +132,13 @@ func TestMigrate4to5YouTubeIndex(t *testing.T) {
 		`{"video_id":"ghi789","title":"Livestream","published_at":"2025-08-01T10:00:00Z","channel":"@TestChan","duration":0}`,
 	})
 
-	// Seeded at v4, so Migrate runs 4→5 (this migration) and the no-op 5→6.
+	// Seeded at v4, so Migrate runs 4→5, 5→6, and 6→7.
 	applied, err := Migrate(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if applied != 2 {
-		t.Errorf("expected 2 migrations applied, got %d", applied)
+	if applied != 3 {
+		t.Errorf("expected 3 migrations applied, got %d", applied)
 	}
 
 	// Old file should be removed
@@ -200,8 +200,8 @@ func TestMigrate5to6CollapsesWatermarks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if applied != 1 {
-		t.Errorf("expected 1 migration applied, got %d", applied)
+	if applied != 2 {
+		t.Errorf("expected 2 migrations applied, got %d", applied)
 	}
 
 	// Old tree is removed entirely.
@@ -246,8 +246,8 @@ func TestMigrate5to6NoWatermarksTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if applied != 1 {
-		t.Errorf("expected 1 migration applied, got %d", applied)
+	if applied != 2 {
+		t.Errorf("expected 2 migrations applied, got %d", applied)
 	}
 	v, _ := SchemaVersion(dir)
 	if v != LatestSchemaVersion {

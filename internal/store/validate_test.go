@@ -221,8 +221,8 @@ func TestValidateData_GitHubEvents(t *testing.T) {
 	dataDir := testDataDir(t)
 
 	writeTestEvents(t, eventsPath(dataDir, "github", "myproj", "2025-06-01"),
-		source.Event{Source: "github", Type: "star", ProjectID: "myproj", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", Tags: map[string]string{"user": "alice"}},
-		source.Event{Source: "github", Type: "star", ProjectID: "myproj", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", Tags: map[string]string{"user": "alice"}},
+		source.Event{Source: "github", Type: "star", ProjectID: "myproj", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
+		source.Event{Source: "github", Type: "star", ProjectID: "myproj", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
 	)
 
 	projects := map[string]bool{"myproj": true}
@@ -238,7 +238,7 @@ func TestValidateData_GitHubEvents_InvalidDatetime(t *testing.T) {
 	dataDir := testDataDir(t)
 
 	writeTestEvents(t, eventsPath(dataDir, "github", "myproj", "2025-06-01"),
-		source.Event{Source: "github", Type: "star", ProjectID: "myproj", Target: "owner/repo", Datetime: "bad", Tags: map[string]string{"user": "alice"}},
+		source.Event{Source: "github", Type: "star", ProjectID: "myproj", Target: "owner/repo", Datetime: "bad", User: "alice"},
 	)
 
 	projects := map[string]bool{"myproj": true}

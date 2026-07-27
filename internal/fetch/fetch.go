@@ -22,6 +22,7 @@ type Options struct {
 	StartDate     string
 	EndDate       string
 	NoConcatenate bool
+	OnResult      ResultCallback
 }
 
 type Result struct {
@@ -154,7 +155,13 @@ func selectedProjects(cfg *config.Config, opts Options) (map[string]config.Proje
 	return projects, nil
 }
 
+type ResultCallback func(Result)
+
 func runJobs(ctx context.Context, cfg *config.Config, opts Options, jobs []fetchJob, concurrency int) ([]Result, error) {
+	return runJobsWithCallback(ctx, cfg, opts, jobs, concurrency, opts.OnResult)
+}
+
+func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, jobs []fetchJob, concurrency int, onResult ResultCallback) ([]Result, error) {
 	endDate, err := resolveEndDate(cfg, opts.EndDate)
 	if err != nil {
 		return nil, fmt.Errorf("parse end date: %w", err)
@@ -167,11 +174,11 @@ func runJobs(ctx context.Context, cfg *config.Config, opts Options, jobs []fetch
 		jobs[i].startErr = err
 	}
 
-	resultsCh := make(chan []Result, len(jobs))
-
 	if concurrency <= 0 {
 		concurrency = 1
 	}
+
+	resultsCh := make(chan []Result, len(jobs))
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
@@ -184,15 +191,23 @@ func runJobs(ctx context.Context, cfg *config.Config, opts Options, jobs []fetch
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-	close(resultsCh)
+	var results []Result
+	done := make(chan struct{})
+	go func() {
+		for jobResults := range resultsCh {
+			results = append(results, jobResults...)
+			if onResult != nil {
+				for _, r := range jobResults {
+					onResult(r)
+				}
+			}
+		}
+		close(done)
+	}()
 
-	results := make([]Result, 0, len(jobs))
-	for jobResults := range resultsCh {
-		results = append(results, jobResults...)
-	}
+	_ = g.Wait()
+	close(resultsCh)
+	<-done
 
 	if !opts.NoConcatenate {
 		if err := store.Aggregate(dataDir, time.Now().UTC()); err != nil {

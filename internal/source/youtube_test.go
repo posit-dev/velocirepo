@@ -88,7 +88,7 @@ func TestYouTubeFetchChannel(t *testing.T) {
 	// Check channel-level records have no tags
 	channelRecords := 0
 	for _, r := range records {
-		if len(r.Tags) == 0 {
+		if len(r.Extra) == 0 {
 			channelRecords++
 		}
 	}
@@ -169,8 +169,8 @@ func TestYouTubeFetchSingleVideo(t *testing.T) {
 	if records[0].Metric != "total_views" || records[0].Value != 1784285014 {
 		t.Errorf("unexpected views record: %+v", records[0])
 	}
-	if records[0].Tags["video_id"] != "dQw4w9WgXcQ" {
-		t.Errorf("expected video_id tag, got %v", records[0].Tags)
+	if records[0].Extra["video_id"] != "dQw4w9WgXcQ" {
+		t.Errorf("expected video_id tag, got %v", records[0].Extra)
 	}
 
 	entries := yt.ContentEntries()

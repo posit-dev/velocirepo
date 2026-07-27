@@ -38,10 +38,9 @@ func (r *RSS) Fetch(ctx context.Context, opts FetchOptions) ([]Record, error) {
 	r.contentEntries = nil
 
 	body, err := doRequest(ctx, r.Client, httpJSONRequest{
-		URL:              r.FeedURL,
-		RequestError:     "request",
-		StatusError:      "rss feed returned",
-		IncludeErrorBody: true,
+		URL:          r.FeedURL,
+		RequestError: "request",
+		StatusError:  "rss feed returned",
 	})
 	if err != nil {
 		return nil, err

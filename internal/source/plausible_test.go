@@ -72,7 +72,7 @@ func TestPlausibleFetch(t *testing.T) {
 	}
 
 	for _, r := range pagePageviews {
-		if r.Tags["page"] == "" {
+		if r.Extra["page"] == "" {
 			t.Errorf("expected page tag, got empty")
 		}
 	}

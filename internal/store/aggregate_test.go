@@ -162,9 +162,9 @@ func TestAggregateDedupWithTags(t *testing.T) {
 	dir := t.TempDir()
 
 	records := []source.Record{
-		{Metric: "views", ProjectID: "proj", Date: "2025-01-01", Value: 100, Tags: map[string]string{"video_id": "a"}},
-		{Metric: "views", ProjectID: "proj", Date: "2025-01-01", Value: 200, Tags: map[string]string{"video_id": "b"}},
-		{Metric: "views", ProjectID: "proj", Date: "2025-01-01", Value: 100, Tags: map[string]string{"video_id": "a"}},
+		{Metric: "views", ProjectID: "proj", Date: "2025-01-01", Value: 100, Extra: map[string]string{"video_id": "a"}},
+		{Metric: "views", ProjectID: "proj", Date: "2025-01-01", Value: 200, Extra: map[string]string{"video_id": "b"}},
+		{Metric: "views", ProjectID: "proj", Date: "2025-01-01", Value: 100, Extra: map[string]string{"video_id": "a"}},
 	}
 
 	writeTestRecords(t, metricsPath(dir, "youtube", "proj", "2025-01-01"), records...)

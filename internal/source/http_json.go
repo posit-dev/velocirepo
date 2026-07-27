@@ -9,14 +9,13 @@ import (
 )
 
 type httpJSONRequest struct {
-	Method           string
-	URL              string
-	Headers          map[string]string
-	Body             io.Reader
-	ExpectedStatus   int
-	RequestError     string
-	StatusError      string
-	IncludeErrorBody bool
+	Method         string
+	URL            string
+	Headers        map[string]string
+	Body           io.Reader
+	ExpectedStatus int
+	RequestError   string
+	StatusError    string
 }
 
 func doJSON[T any](ctx context.Context, client *http.Client, req httpJSONRequest) (T, error) {
@@ -66,12 +65,15 @@ func doRequest(ctx context.Context, client *http.Client, spec httpJSONRequest) (
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != expectedStatus {
-		if spec.IncludeErrorBody {
-			body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
+		if len(body) > 0 && spec.StatusError != "" {
 			return nil, fmt.Errorf("%s %d: %s", spec.StatusError, resp.StatusCode, string(body))
 		}
 		if spec.StatusError != "" {
 			return nil, fmt.Errorf("%s %d", spec.StatusError, resp.StatusCode)
+		}
+		if len(body) > 0 {
+			return nil, fmt.Errorf("%s returned %d: %s", req.URL.Path, resp.StatusCode, string(body))
 		}
 		return nil, fmt.Errorf("%s returned %d", req.URL.Path, resp.StatusCode)
 	}

@@ -70,9 +70,9 @@ func (p *Plausible) fetchMetrics(ctx context.Context, opts FetchOptions, dimensi
 				continue
 			}
 			date := row.Dimensions[0]
-			var tags map[string]string
+			var extra map[string]string
 			if hasPageDim && len(row.Dimensions) >= 2 {
-				tags = map[string]string{"page": row.Dimensions[1]}
+				extra = map[string]string{"page": row.Dimensions[1]}
 			}
 			for i, name := range metricNames {
 				records = append(records, Record{
@@ -81,7 +81,7 @@ func (p *Plausible) fetchMetrics(ctx context.Context, opts FetchOptions, dimensi
 					Target:    p.SiteID,
 					Date:      date,
 					Value:     row.Metrics[i],
-					Tags:      tags,
+					Extra:     extra,
 				})
 			}
 		}

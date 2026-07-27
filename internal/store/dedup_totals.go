@@ -18,9 +18,9 @@ func totalKey(r source.Record) string {
 	b.WriteString(r.Metric)
 	b.WriteByte('|')
 	b.WriteString(r.Target)
-	if len(r.Tags) > 0 {
-		keys := make([]string, 0, len(r.Tags))
-		for k := range r.Tags {
+	if len(r.Extra) > 0 {
+		keys := make([]string, 0, len(r.Extra))
+		for k := range r.Extra {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
@@ -28,7 +28,7 @@ func totalKey(r source.Record) string {
 			b.WriteByte('|')
 			b.WriteString(k)
 			b.WriteByte('=')
-			b.WriteString(r.Tags[k])
+			b.WriteString(r.Extra[k])
 		}
 	}
 	return b.String()

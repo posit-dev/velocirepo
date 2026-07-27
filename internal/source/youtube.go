@@ -257,7 +257,7 @@ func youtubeVideoRecords(projectID, target, date string, item videoItem) []Recor
 			Target:    target,
 			Date:      date,
 			Value:     value,
-			Tags:      copyTags(tags),
+			Extra:     copyTags(tags),
 		})
 	}
 	return records
@@ -297,10 +297,9 @@ func (y *YouTube) baseURL() string {
 
 func (y *YouTube) get(ctx context.Context, url string, result interface{}) error {
 	return doJSONInto(ctx, y.Client, httpJSONRequest{
-		URL:              url,
-		RequestError:     "request",
-		StatusError:      "youtube API returned",
-		IncludeErrorBody: true,
+		URL:          url,
+		RequestError: "request",
+		StatusError:  "youtube API returned",
 	}, result)
 }
 

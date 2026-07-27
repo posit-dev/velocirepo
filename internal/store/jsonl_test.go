@@ -51,7 +51,7 @@ func TestWriteAndReadRecords(t *testing.T) {
 func TestWriteRecordsWithTags(t *testing.T) {
 	dir := t.TempDir()
 	records := []source.Record{
-		{Metric: "views", ProjectID: "mylib", Date: "2025-06-01", Value: 500, Tags: map[string]string{"video_id": "abc123"}},
+		{Metric: "views", ProjectID: "mylib", Date: "2025-06-01", Value: 500, Extra: map[string]string{"video_id": "abc123"}},
 	}
 
 	if err := WriteRecords(dir, "youtube", "mylib", records); err != nil {
@@ -66,8 +66,8 @@ func TestWriteRecordsWithTags(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d records, want 1", len(got))
 	}
-	if got[0].Tags["video_id"] != "abc123" {
-		t.Errorf("Tags[video_id] = %q, want %q", got[0].Tags["video_id"], "abc123")
+	if got[0].Extra["video_id"] != "abc123" {
+		t.Errorf("Tags[video_id] = %q, want %q", got[0].Extra["video_id"], "abc123")
 	}
 }
 

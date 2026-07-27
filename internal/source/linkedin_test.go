@@ -89,8 +89,8 @@ func TestLinkedInFetchOrganization(t *testing.T) {
 	if records[0].Value != 4521 {
 		t.Errorf("expected 4521, got %d", records[0].Value)
 	}
-	if records[0].Tags["post_id"] != "urn:li:share:7123456789012345678" {
-		t.Errorf("unexpected post_id tag: %v", records[0].Tags)
+	if records[0].Extra["post_id"] != "urn:li:share:7123456789012345678" {
+		t.Errorf("unexpected post_id tag: %v", records[0].Extra)
 	}
 
 	// Verify follower count (last record)

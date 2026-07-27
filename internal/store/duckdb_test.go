@@ -23,7 +23,7 @@ func TestQueryLive(t *testing.T) {
 	}
 
 	pypiRecords := []source.Record{
-		{Metric: "downloads", ProjectID: "my-proj", Date: "2025-06-01", Value: 500, Tags: map[string]string{"version": "1.0.0"}},
+		{Metric: "downloads", ProjectID: "my-proj", Date: "2025-06-01", Value: 500, Extra: map[string]string{"version": "1.0.0"}},
 	}
 	if err := WriteRecords(dataDir, "pypi", "my-proj", pypiRecords); err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestSchemaLive(t *testing.T) {
 	}
 
 	events := []source.Event{
-		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-01-01T10:00:00Z", Tags: map[string]string{"user": "alice"}},
+		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-01-01T10:00:00Z", User: "alice"},
 	}
 	if err := WriteEvents(dataDir, "github", "test", events); err != nil {
 		t.Fatal(err)
@@ -188,8 +188,8 @@ func TestSchemaLive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eventsExpected := []string{"project", "source", "type", "target", "datetime", "ref", "tags"}
-	metricsExpected := []string{"project", "source", "target", "metric", "date", "value", "tags"}
+	eventsExpected := []string{"project", "source", "type", "target", "datetime", "ref", "user", "extra"}
+	metricsExpected := []string{"project", "source", "target", "metric", "date", "value", "extra"}
 	projectsExpected := []string{"id", "name", "description", "color", "tags", "website", "logo"}
 
 	var eventsCols, metricsCols, projectsCols []SchemaColumn
@@ -204,8 +204,8 @@ func TestSchemaLive(t *testing.T) {
 		}
 	}
 
-	if len(eventsCols) != 7 {
-		t.Fatalf("expected 7 events columns, got %d", len(eventsCols))
+	if len(eventsCols) != 8 {
+		t.Fatalf("expected 8 events columns, got %d", len(eventsCols))
 	}
 	if len(metricsCols) != 7 {
 		t.Fatalf("expected 7 metrics columns, got %d", len(metricsCols))
@@ -238,9 +238,9 @@ func TestQueryLiveGitHubEvents(t *testing.T) {
 	dataDir := filepath.Join(dir, "data")
 
 	events := []source.Event{
-		{Type: "star", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", Tags: map[string]string{"user": "alice"}},
-		{Type: "fork", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T11:00:00Z", Tags: map[string]string{"user": "bob"}},
-		{Type: "issue_open", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-02T09:00:00Z", Tags: map[string]string{"user": "carol"}},
+		{Type: "star", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
+		{Type: "fork", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T11:00:00Z", User: "bob"},
+		{Type: "issue_open", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-02T09:00:00Z", User: "carol"},
 	}
 	if err := WriteEvents(dataDir, "github", "my-proj", events); err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func TestQueryLiveGitHubEvents(t *testing.T) {
 		t.Fatalf("expected 3 events, got %d", cnt)
 	}
 
-	results, _, err = QueryLive(dataDir, nil, nil, "SELECT type, tags->>'user' AS user FROM events WHERE type = 'star'")
+	results, _, err = QueryLive(dataDir, nil, nil, "SELECT type, \"user\" FROM events WHERE type = 'star'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestMetricsViewIncludesGitHubAggregated(t *testing.T) {
 	}
 
 	events := []source.Event{
-		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", Tags: map[string]string{"user": "alice"}},
+		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
 	}
 	if err := WriteEvents(dataDir, "github", "test", events); err != nil {
 		t.Fatal(err)
@@ -300,9 +300,9 @@ func TestQueryLiveGitHubView(t *testing.T) {
 	dataDir := filepath.Join(dir, "data")
 
 	events := []source.Event{
-		{Type: "star", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", Tags: map[string]string{"user": "alice"}},
-		{Type: "star", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T12:00:00Z", Tags: map[string]string{"user": "bob"}},
-		{Type: "fork", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T11:00:00Z", Tags: map[string]string{"user": "carol"}},
+		{Type: "star", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
+		{Type: "star", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T12:00:00Z", User: "bob"},
+		{Type: "fork", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T11:00:00Z", User: "carol"},
 	}
 	if err := WriteEvents(dataDir, "github", "my-proj", events); err != nil {
 		t.Fatal(err)
@@ -477,22 +477,22 @@ func TestMetricsFilledFillsRemovedSeriesToTargetHorizon(t *testing.T) {
 	dataDir := filepath.Join(dir, "data")
 
 	records1 := []source.Record{
-		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-01", Value: 100, Tags: map[string]string{"video_id": "current"}},
-		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-01", Value: 200, Tags: map[string]string{"video_id": "removed"}},
+		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-01", Value: 100, Extra: map[string]string{"video_id": "current"}},
+		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-01", Value: 200, Extra: map[string]string{"video_id": "removed"}},
 	}
 	if err := WriteRecords(dataDir, "youtube", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
 	records2 := []source.Record{
-		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-02", Value: 100, Tags: map[string]string{"video_id": "current"}},
+		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-02", Value: 100, Extra: map[string]string{"video_id": "current"}},
 	}
 	if err := WriteRecords(dataDir, "youtube", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 
 	results, _, err := QueryLive(dataDir, nil, nil,
-		"SELECT tags->>'video_id' AS video_id, date, value FROM metrics_filled WHERE metric = 'total_views' ORDER BY video_id, date")
+		"SELECT extra->>'video_id' AS video_id, date, value FROM metrics_filled WHERE metric = 'total_views' ORDER BY video_id, date")
 	if err != nil {
 		t.Fatal(err)
 	}

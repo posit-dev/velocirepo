@@ -49,7 +49,7 @@ func TestExportCSV(t *testing.T) {
 	dataDir := filepath.Join(dir, "data")
 
 	records := []source.Record{
-		{Metric: "downloads", ProjectID: "pkg", Date: "2025-06-01", Value: 500, Tags: map[string]string{"version": "1.0"}},
+		{Metric: "downloads", ProjectID: "pkg", Date: "2025-06-01", Value: 500, Extra: map[string]string{"version": "1.0"}},
 		{Metric: "downloads", ProjectID: "pkg", Date: "2025-06-02", Value: 600},
 	}
 	if err := WriteRecords(dataDir, "pypi", "pkg", records); err != nil {
@@ -91,7 +91,7 @@ func TestExportWithSourceFilter(t *testing.T) {
 	}
 
 	events := []source.Event{
-		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", Tags: map[string]string{"user": "alice"}},
+		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
 	}
 	if err := WriteEvents(dataDir, "github", "test", events); err != nil {
 		t.Fatal(err)

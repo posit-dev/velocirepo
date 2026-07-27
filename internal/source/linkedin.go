@@ -142,7 +142,7 @@ func linkedinShareStatRecords(projectID, target, date string, stat statsElement)
 			Target:    target,
 			Date:      date,
 			Value:     metric.value(stat.Stats),
-			Tags:      copyTags(tags),
+			Extra:     copyTags(tags),
 		})
 	}
 	return records
@@ -170,9 +170,8 @@ func (l *LinkedIn) get(ctx context.Context, u string, result interface{}) error 
 			"LinkedIn-Version":          "202406",
 			"X-Restli-Protocol-Version": "2.0.0",
 		},
-		RequestError:     "request",
-		StatusError:      "linkedin API returned",
-		IncludeErrorBody: true,
+		RequestError: "request",
+		StatusError:  "linkedin API returned",
 	}, result)
 }
 

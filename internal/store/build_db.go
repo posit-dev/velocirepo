@@ -69,10 +69,11 @@ func createEventsViewRelative(db *sql.DB, absDir string) error {
 			target,
 			CAST(datetime AS TIMESTAMP) AS datetime,
 			ref,
-			tags
+			"user",
+			extra
 		FROM read_json('%s',
 			format='newline_delimited',
-			columns={source: 'VARCHAR', type: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', datetime: 'VARCHAR', ref: 'INTEGER', tags: 'JSON'})`,
+			columns={source: 'VARCHAR', type: 'VARCHAR', project_id: 'VARCHAR', target: 'VARCHAR', datetime: 'VARCHAR', ref: 'INTEGER', "user": 'VARCHAR', extra: 'JSON'})`,
 		escapeSQLString(glob))
 
 	if _, err := db.Exec(query); err != nil {

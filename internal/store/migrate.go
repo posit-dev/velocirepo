@@ -13,7 +13,7 @@ import (
 	"github.com/posit-dev/velocirepo/internal/sourceinfo"
 )
 
-const LatestSchemaVersion = 6
+const LatestSchemaVersion = 7
 
 const schemaVersionFile = ".schema-version"
 
@@ -91,6 +91,10 @@ var migrations = []migration{
 	{
 		description: "collapse data/watermarks/ tree into per-project _watermark.json",
 		run:         migrate5to6,
+	},
+	{
+		description: "rename tags→extra in events/metrics, promote user to top-level in events",
+		run:         migrate6to7,
 	},
 }
 
@@ -529,6 +533,147 @@ type contentEntry5 struct {
 	Duration    *int64   `json:"duration,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Type        string   `json:"type,omitempty"`
+}
+
+func migrate6to7(dataDir string) error {
+	eventsDir := filepath.Join(dataDir, EventsDir)
+	if _, err := os.Stat(eventsDir); err == nil {
+		if err := filepath.Walk(eventsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(info.Name(), ".jsonl") || info.Name() == WatermarkFileName {
+				return nil
+			}
+			return migrateEventTagsToExtra(path)
+		}); err != nil {
+			return fmt.Errorf("events: %w", err)
+		}
+	}
+
+	metricsDir := filepath.Join(dataDir, MetricsDir)
+	if _, err := os.Stat(metricsDir); err == nil {
+		if err := filepath.Walk(metricsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(info.Name(), ".jsonl") || info.Name() == WatermarkFileName {
+				return nil
+			}
+			return renameFieldInFile(path, "tags", "extra")
+		}); err != nil {
+			return fmt.Errorf("metrics: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func migrateEventTagsToExtra(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	var lines [][]byte
+	modified := false
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var record map[string]interface{}
+		if err := json.Unmarshal(line, &record); err != nil {
+			lines = append(lines, append([]byte(nil), line...))
+			continue
+		}
+
+		changed := false
+
+		if tags, ok := record["tags"].(map[string]interface{}); ok {
+			if user, ok := tags["user"].(string); ok && user != "" {
+				record["user"] = user
+				delete(tags, "user")
+				changed = true
+			}
+			if len(tags) > 0 {
+				record["extra"] = tags
+			}
+			delete(record, "tags")
+			changed = true
+		} else if _, hasTags := record["tags"]; hasTags {
+			delete(record, "tags")
+			changed = true
+		}
+
+		if !changed {
+			lines = append(lines, append([]byte(nil), line...))
+			continue
+		}
+
+		newLine, err := json.Marshal(record)
+		if err != nil {
+			lines = append(lines, append([]byte(nil), line...))
+			continue
+		}
+		lines = append(lines, newLine)
+		modified = true
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	_ = f.Close()
+
+	if !modified {
+		return nil
+	}
+
+	return writeJSONLLinesAtomic(path, lines)
+}
+
+func renameFieldInFile(path, oldName, newName string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	var lines [][]byte
+	modified := false
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var record map[string]interface{}
+		if err := json.Unmarshal(line, &record); err != nil {
+			lines = append(lines, append([]byte(nil), line...))
+			continue
+		}
+
+		if v, ok := record[oldName]; ok {
+			record[newName] = v
+			delete(record, oldName)
+			newLine, err := json.Marshal(record)
+			if err != nil {
+				lines = append(lines, append([]byte(nil), line...))
+				continue
+			}
+			lines = append(lines, newLine)
+			modified = true
+			continue
+		}
+		lines = append(lines, append([]byte(nil), line...))
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	_ = f.Close()
+
+	if !modified {
+		return nil
+	}
+
+	return writeJSONLLinesAtomic(path, lines)
 }
 
 func renameMetricsInFile(path string, renames map[string]string) error {
