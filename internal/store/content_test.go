@@ -80,6 +80,56 @@ func TestWriteContentMerge(t *testing.T) {
 	}
 }
 
+func TestWriteContentDistinctTargetsSameID(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+
+	// Two different feeds slug to the same file (feed.jsonl) and happen to share
+	// an item id. Merging by (target, id) must keep both as distinct rows rather
+	// than letting one overwrite the other.
+	first := []source.ContentEntry{
+		{Source: "rss", Target: "https://a.example.com/feed.xml", ID: "1", Title: "From A"},
+	}
+	second := []source.ContentEntry{
+		{Source: "rss", Target: "https://b.example.com/feed.xml", ID: "1", Title: "From B"},
+	}
+	if err := WriteContent(dataDir, "rss", "proj", "feed.jsonl", first); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteContent(dataDir, "rss", "proj", "feed.jsonl", second); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(dataDir, "content", "rss", "proj", "feed.jsonl")
+	read, err := ReadContent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read) != 2 {
+		t.Fatalf("expected 2 distinct rows for distinct targets, got %d: %+v", len(read), read)
+	}
+
+	// Re-writing the first feed's entry updates it in place, leaving 2 rows.
+	updated := []source.ContentEntry{
+		{Source: "rss", Target: "https://a.example.com/feed.xml", ID: "1", Title: "From A v2"},
+	}
+	if err := WriteContent(dataDir, "rss", "proj", "feed.jsonl", updated); err != nil {
+		t.Fatal(err)
+	}
+	read, err = ReadContent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read) != 2 {
+		t.Fatalf("expected 2 rows after in-place update, got %d", len(read))
+	}
+	for _, e := range read {
+		if e.Target == "https://a.example.com/feed.xml" && e.Title != "From A v2" {
+			t.Errorf("feed A entry not updated: %+v", e)
+		}
+	}
+}
+
 func TestWriteContentRSSFields(t *testing.T) {
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")

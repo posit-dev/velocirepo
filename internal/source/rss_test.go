@@ -33,14 +33,38 @@ const atomFixture = `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
     <category term="Reproducibility"/>
     <category term="CLI"/>
     <vr:type>post</vr:type>
-    <vr:software term="pak" href="https://opensource.posit.co/software/pak/"/>
-    <vr:software term="renv" href="https://opensource.posit.co/software/renv/"/>
-    <vr:language term="R" href="https://opensource.posit.co/languages/r/"/>
+    <vr:software>software/pak</vr:software>
+    <vr:software>software/renv</vr:software>
+    <vr:language>R</vr:language>
+    <vr:language>Python</vr:language>
+    <vr:people>people/tomasz-kalinowski</vr:people>
+    <vr:people>people/charlie-gao</vr:people>
+    <vr:topic>Best Practices</vr:topic>
+    <vr:topic>Publishing</vr:topic>
     <vr:source>tidyverse</vr:source>
-    <vr:image href="https://opensource.posit.co/blog/2026-07-23_ir-0-1-0/terrarium.png" alt="A terrarium."/>
+    <vr:image>blog/2026-07-23_ir-0-1-0/terrarium.png</vr:image>
     <content type="text/markdown"><![CDATA[## Introduction
 
 ir lets you run portable R scripts.]]></content>
+  </entry>
+  <entry>
+    <id>https://opensource.posit.co/blog/2026-07-10_positron/</id>
+    <title>Positron 2026.07</title>
+    <link rel="alternate" href="https://opensource.posit.co/blog/2026-07-10_positron/"/>
+    <published>2026-07-10T00:00:00Z</published>
+    <updated>2026-07-10T12:00:00Z</updated>
+    <summary>What is new in Positron.</summary>
+    <author>
+      <name>Davis Vaughan</name>
+      <uri>https://opensource.posit.co/people/davis-vaughan/</uri>
+    </author>
+    <vr:type>post</vr:type>
+    <vr:software>software/positron</vr:software>
+    <vr:language>R</vr:language>
+    <vr:people>people/davis-vaughan</vr:people>
+    <vr:topic>IDE</vr:topic>
+    <vr:source>positron</vr:source>
+    <vr:image>blog/2026-07-10_positron/hero.png</vr:image>
   </entry>
 </feed>`
 
@@ -98,7 +122,7 @@ func TestRSSAtomMapping(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 metric record, got %d", len(records))
 	}
-	if records[0].Metric != "total_items" || records[0].Value != 1 {
+	if records[0].Metric != "total_items" || records[0].Value != 2 {
 		t.Errorf("unexpected metric record: %+v", records[0])
 	}
 	if records[0].Target != srv.URL || records[0].Date != "2026-07-24" {
@@ -106,8 +130,8 @@ func TestRSSAtomMapping(t *testing.T) {
 	}
 
 	entries := r.ContentEntries()
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 content entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 content entries, got %d", len(entries))
 	}
 	e := entries[0]
 
@@ -152,43 +176,78 @@ func TestRSSAtomMapping(t *testing.T) {
 		t.Errorf("author[0] = %#v", first)
 	}
 
-	// Repeated attr-only vr:software → array of objects.
+	// Repeated chardata vr:software → string array.
 	software, ok := e.Metadata["software"].([]any)
 	if !ok || len(software) != 2 {
 		t.Fatalf("software metadata = %#v", e.Metadata["software"])
 	}
-	sw0 := software[0].(map[string]any)
-	if sw0["term"] != "pak" || sw0["href"] != "https://opensource.posit.co/software/pak/" {
-		t.Errorf("software[0] = %#v", sw0)
+	if software[0] != "software/pak" || software[1] != "software/renv" {
+		t.Errorf("software = %#v", software)
 	}
 
-	// A single object-valued vr:language is still an array, so the type stays
-	// consistent whether an entry has one or many.
+	// vr:language — repeats across the feed, so always array.
 	lang, ok := e.Metadata["language"].([]any)
-	if !ok || len(lang) != 1 {
-		t.Fatalf("language metadata = %#v (want single-element array)", e.Metadata["language"])
+	if !ok || len(lang) != 2 {
+		t.Fatalf("language metadata = %#v (want 2-element array)", e.Metadata["language"])
 	}
-	if lang[0].(map[string]any)["term"] != "R" {
-		t.Errorf("language[0] = %#v", lang[0])
+	if lang[0] != "R" || lang[1] != "Python" {
+		t.Errorf("language = %#v", lang)
 	}
 
-	// Chardata-only vr:source → string.
+	// vr:people — plural string array.
+	people, ok := e.Metadata["people"].([]any)
+	if !ok || len(people) != 2 {
+		t.Fatalf("people metadata = %#v (want 2-element string array)", e.Metadata["people"])
+	}
+	if people[0] != "people/tomasz-kalinowski" || people[1] != "people/charlie-gao" {
+		t.Errorf("people = %#v", people)
+	}
+
+	// vr:topic — plural string array.
+	topics, ok := e.Metadata["topic"].([]any)
+	if !ok || len(topics) != 2 {
+		t.Fatalf("topic metadata = %#v (want 2-element array)", e.Metadata["topic"])
+	}
+	if topics[0] != "Best Practices" || topics[1] != "Publishing" {
+		t.Errorf("topic = %#v", topics)
+	}
+
+	// Chardata-only vr:source → scalar string (not a plural relation).
 	if src, ok := e.Metadata["source"].(string); !ok || src != "tidyverse" {
 		t.Errorf("source metadata = %#v", e.Metadata["source"])
 	}
 
-	// Single object-valued vr:image → single-element array.
-	imgArr, ok := e.Metadata["image"].([]any)
-	if !ok || len(imgArr) != 1 {
-		t.Fatalf("image metadata = %#v (want single-element array)", e.Metadata["image"])
-	}
-	if imgArr[0].(map[string]any)["alt"] != "A terrarium." {
-		t.Errorf("image[0] = %#v", imgArr[0])
+	// vr:image — chardata scalar string (not a plural relation).
+	if img, ok := e.Metadata["image"].(string); !ok || img != "blog/2026-07-23_ir-0-1-0/terrarium.png" {
+		t.Errorf("image metadata = %#v (want scalar string)", e.Metadata["image"])
 	}
 
 	// vr:type must NOT appear in metadata.
 	if _, present := e.Metadata["type"]; present {
 		t.Errorf("vr:type should be promoted, not in metadata: %#v", e.Metadata["type"])
+	}
+
+	// Second entry has single occurrences of each plural field — they must
+	// still be arrays because the feed-level pre-scan saw repetitions in entry 1.
+	e2 := entries[1]
+	if sw, ok := e2.Metadata["software"].([]any); !ok || len(sw) != 1 || sw[0] != "software/positron" {
+		t.Errorf("entry2 software = %#v (want single-element array)", e2.Metadata["software"])
+	}
+	if lang, ok := e2.Metadata["language"].([]any); !ok || len(lang) != 1 || lang[0] != "R" {
+		t.Errorf("entry2 language = %#v (want single-element array)", e2.Metadata["language"])
+	}
+	if ppl, ok := e2.Metadata["people"].([]any); !ok || len(ppl) != 1 || ppl[0] != "people/davis-vaughan" {
+		t.Errorf("entry2 people = %#v (want single-element array)", e2.Metadata["people"])
+	}
+	if topics, ok := e2.Metadata["topic"].([]any); !ok || len(topics) != 1 || topics[0] != "IDE" {
+		t.Errorf("entry2 topic = %#v (want single-element array)", e2.Metadata["topic"])
+	}
+	// vr:source and vr:image never repeat in any entry → scalar.
+	if _, ok := e2.Metadata["source"].(string); !ok {
+		t.Errorf("entry2 source = %#v (want scalar string)", e2.Metadata["source"])
+	}
+	if _, ok := e2.Metadata["image"].(string); !ok {
+		t.Errorf("entry2 image = %#v (want scalar string)", e2.Metadata["image"])
 	}
 }
 
@@ -248,32 +307,65 @@ func TestRSS20Mapping(t *testing.T) {
 	}
 }
 
-// TestRSSObjectExtensionAlwaysArray guards the invariant that object-valued
-// extension elements keep the same JSON type regardless of how many times they
-// appear in an entry: an entry with a single <vr:software> must produce an
-// array, matching entries that carry several.
-func TestRSSObjectExtensionAlwaysArray(t *testing.T) {
-	const single = `<?xml version="1.0" encoding="utf-8"?>
+// TestRSSPluralExtensionCardinality guards feed-level pre-scan cardinality:
+// if any entry has 2+ occurrences of an element name, that name is an array in
+// ALL entries — even those with only one occurrence.
+func TestRSSPluralExtensionCardinality(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:vr="https://opensource.posit.co/ns/content">
   <entry>
     <id>https://example.com/one</id>
     <title>One</title>
     <updated>2026-01-01T00:00:00Z</updated>
     <vr:type>post</vr:type>
-    <vr:software term="ggsql" href="https://opensource.posit.co/software/ggsql/"/>
+    <vr:software>software/ggsql</vr:software>
+    <vr:software>software/dplyr</vr:software>
+    <vr:language>R</vr:language>
+    <vr:language>Python</vr:language>
+    <vr:people>people/jeroen-janssens</vr:people>
+    <vr:people>people/hadley-wickham</vr:people>
+    <vr:topic>Data Science</vr:topic>
+    <vr:topic>Visualization</vr:topic>
+    <vr:image>blog/one/logo.png</vr:image>
+  </entry>
+  <entry>
+    <id>https://example.com/two</id>
+    <title>Two</title>
+    <updated>2026-01-02T00:00:00Z</updated>
+    <vr:type>post</vr:type>
+    <vr:software>software/positron</vr:software>
+    <vr:language>R</vr:language>
+    <vr:people>people/davis-vaughan</vr:people>
+    <vr:topic>IDE</vr:topic>
+    <vr:image>blog/two/logo.png</vr:image>
   </entry>
 </feed>`
 
-	srv := serveFeed(t, single)
+	srv := serveFeed(t, feed)
 	r, _ := fetchOne(t, srv.URL)
-	e := r.ContentEntries()[0]
+	entries := r.ContentEntries()
 
-	software, ok := e.Metadata["software"].([]any)
-	if !ok {
-		t.Fatalf("single vr:software should be an array, got %T: %#v", e.Metadata["software"], e.Metadata["software"])
+	// Entry 2 has one of each plural element — still must be arrays because
+	// the feed-level scan saw repetitions in entry 1.
+	e := entries[1]
+	for _, tc := range []struct{ key, want string }{
+		{"software", "software/positron"},
+		{"language", "R"},
+		{"people", "people/davis-vaughan"},
+		{"topic", "IDE"},
+	} {
+		arr, ok := e.Metadata[tc.key].([]any)
+		if !ok || len(arr) != 1 {
+			t.Fatalf("%s: want single-element array, got %T: %#v", tc.key, e.Metadata[tc.key], e.Metadata[tc.key])
+		}
+		if arr[0] != tc.want {
+			t.Errorf("%s[0] = %#v, want %q", tc.key, arr[0], tc.want)
+		}
 	}
-	if len(software) != 1 || software[0].(map[string]any)["term"] != "ggsql" {
-		t.Errorf("software = %#v", software)
+
+	// Non-plural element stays scalar (image never repeats in any entry).
+	if img, ok := e.Metadata["image"].(string); !ok || img != "blog/two/logo.png" {
+		t.Fatalf("image: want scalar string, got %T: %#v", e.Metadata["image"], e.Metadata["image"])
 	}
 }
 
@@ -346,10 +438,10 @@ func TestAtomExtensionSameLocalName(t *testing.T) {
 	if e.Content != "Real body." {
 		t.Errorf("content overwritten by media:content: %q", e.Content)
 	}
-	// media:content is object-valued → array under "content"; the media:title
-	// scalar lands under "title".
-	if _, ok := e.Metadata["content"].([]any); !ok {
-		t.Errorf("media:content should be captured in metadata, got %#v", e.Metadata["content"])
+	// media:content is not a plural relation → single object under "content";
+	// the media:title scalar lands under "title".
+	if _, ok := e.Metadata["content"].(map[string]any); !ok {
+		t.Errorf("media:content should be captured in metadata as an object, got %#v", e.Metadata["content"])
 	}
 	if e.Metadata["title"] != "Media Title" {
 		t.Errorf("media:title metadata = %#v", e.Metadata["title"])

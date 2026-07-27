@@ -80,10 +80,10 @@ Notes:
     "software": [
       {"term": "pak", "href": "https://opensource.posit.co/software/pak/"}
     ],
-    "languages": [
+    "language": [
       {"term": "R", "href": "https://opensource.posit.co/languages/r/"}
     ],
-    "topics": [
+    "topic": [
       {"term": "Best Practices", "href": "https://opensource.posit.co/topics/best-practices/"}
     ],
     "image": {"href": "https://…/thumbnail.png", "alt": "…"}
@@ -186,13 +186,14 @@ type xmlAny struct {
 namespace** (via `XMLName.Space`) and attributes. We then walk `Extra` and
 build metadata values:
 
-- Object-valued elements (attributes and/or children, e.g.
-  `<vr:software term="pak" href="…"/>`) are **always** a JSON array of objects
-  — even a single occurrence — so the type stays consistent whether an entry
-  has one `vr:software` or several. Each object is the element's attributes:
-  `{"term":"pak","href":"…"}`.
-- Elements with only chardata (e.g. `<vr:source>tidyverse</vr:source>`) → the
-  string value; repeated occurrences promote to an array.
+- Cardinality is chosen by element **name**, not structure. A small
+  known-plural set (`software`, `language`, `topic`) models repeatable
+  taxonomy-like relations and is **always** a JSON array — even a single
+  occurrence — so the type stays consistent whether an entry has one or several.
+  Each object is the element's attributes: `{"term":"pak","href":"…"}`.
+- Every other element (e.g. `<vr:image .../>`, `<vr:source>tidyverse</vr:source>`,
+  `<itunes:duration>`) is scalar (its object or string value) and only promotes
+  to an array if that same element actually repeats within the entry.
 - Elements with children → nested object/array recursively.
 - **Key** = local name (`software`). On collision across namespaces, fall back
   to `prefix:local` using a small known-namespace prefix map

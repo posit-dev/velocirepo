@@ -115,9 +115,14 @@ func parseFeed(body []byte) ([]feedItem, error) {
 		if err := xml.Unmarshal(body, &f); err != nil {
 			return nil, err
 		}
+		allExtras := make([][]xmlAny, len(f.Entries))
+		for i, e := range f.Entries {
+			allExtras[i] = e.Extra
+		}
+		plurals := scanPlurals(allExtras)
 		items := make([]feedItem, 0, len(f.Entries))
 		for _, e := range f.Entries {
-			items = append(items, e.toFeedItem())
+			items = append(items, e.toFeedItem(plurals))
 		}
 		return items, nil
 	case "rss", "rdf":
@@ -125,9 +130,14 @@ func parseFeed(body []byte) ([]feedItem, error) {
 		if err := xml.Unmarshal(body, &f); err != nil {
 			return nil, err
 		}
+		allExtras := make([][]xmlAny, len(f.Channel.Items))
+		for i, item := range f.Channel.Items {
+			allExtras[i] = item.Extra
+		}
+		plurals := scanPlurals(allExtras)
 		items := make([]feedItem, 0, len(f.Channel.Items))
 		for _, i := range f.Channel.Items {
-			items = append(items, i.toFeedItem())
+			items = append(items, i.toFeedItem(plurals))
 		}
 		return items, nil
 	default:
@@ -190,7 +200,7 @@ type atomAuthor struct {
 	URI  string `xml:"http://www.w3.org/2005/Atom uri"`
 }
 
-func (e atomEntry) toFeedItem() feedItem {
+func (e atomEntry) toFeedItem(plurals map[string]bool) feedItem {
 	it := feedItem{
 		ID:          strings.TrimSpace(e.ID),
 		Title:       strings.TrimSpace(e.Title),
@@ -223,7 +233,7 @@ func (e atomEntry) toFeedItem() feedItem {
 		}
 		extras = append(extras, x)
 	}
-	collectExtensions(metadata, extras)
+	collectExtensions(metadata, extras, plurals)
 
 	if len(metadata) > 0 {
 		it.Metadata = metadata
@@ -283,7 +293,7 @@ type rssItem struct {
 	Extra       []xmlAny `xml:",any"`
 }
 
-func (i rssItem) toFeedItem() feedItem {
+func (i rssItem) toFeedItem(plurals map[string]bool) feedItem {
 	it := feedItem{
 		ID:          strings.TrimSpace(firstNonEmpty(i.GUID, i.Link)),
 		Title:       strings.TrimSpace(i.Title),
@@ -326,7 +336,7 @@ func (i rssItem) toFeedItem() feedItem {
 			extras = append(extras, x)
 		}
 	}
-	collectExtensions(metadata, extras)
+	collectExtensions(metadata, extras, plurals)
 
 	if len(metadata) > 0 {
 		it.Metadata = metadata
@@ -361,20 +371,34 @@ var knownPrefixes = map[string]string{
 	atomNamespace:    "atom",
 }
 
+// scanPlurals examines all entries' extension elements and returns the set of
+// local names that appear more than once in at least one entry. These are
+// always stored as arrays so the JSON type stays consistent across entries —
+// even entries that happen to carry only one occurrence.
+func scanPlurals(extras [][]xmlAny) map[string]bool {
+	plurals := map[string]bool{}
+	for _, entryExtras := range extras {
+		counts := map[string]int{}
+		for _, x := range entryExtras {
+			counts[x.XMLName.Local]++
+		}
+		for name, n := range counts {
+			if n > 1 {
+				plurals[name] = true
+			}
+		}
+	}
+	return plurals
+}
+
 // collectExtensions walks extension elements and folds them into metadata. The
 // key is the bare local name, falling back to a namespace-prefixed key only
 // when two namespaces collide on the same local name within this entry.
 //
-// To keep metadata types consistent across entries (a feed may carry one
-// <vr:software> in one post and several in another), the JSON type is chosen
-// from the element's *structure*, not its count:
-//
-//   - Object-valued elements (attributes and/or children, e.g. vr:software,
-//     vr:topic, vr:image) are collection/record-like and are ALWAYS arrays,
-//     even when a single occurrence appears.
-//   - Plain chardata scalars (e.g. vr:source, itunes:duration) stay scalars,
-//     and only become an array if the same element repeats within the entry.
-func collectExtensions(metadata map[string]any, extras []xmlAny) {
+// Cardinality is driven by the feed-level pre-scan: names that repeat in any
+// entry are always arrays across all entries, so the JSON type stays consistent.
+// Everything else is scalar unless it happens to repeat within this entry.
+func collectExtensions(metadata map[string]any, extras []xmlAny, plurals map[string]bool) {
 	if len(extras) == 0 {
 		return
 	}
@@ -390,12 +414,10 @@ func collectExtensions(metadata map[string]any, extras []xmlAny) {
 
 	for _, x := range extras {
 		key := x.XMLName.Local
-		if len(spacesByLocal[key]) > 1 {
+		if len(spacesByLocal[x.XMLName.Local]) > 1 {
 			key = prefixedKey(x.XMLName)
 		}
-		val := xmlAnyValue(x)
-		_, isObject := val.(map[string]any)
-		appendMetadata(metadata, key, val, isObject)
+		appendMetadata(metadata, key, xmlAnyValue(x), plurals[x.XMLName.Local])
 	}
 }
 
@@ -450,14 +472,16 @@ func xmlAnyValue(x xmlAny) any {
 			}
 			childCollisions[c.XMLName.Local][c.XMLName.Space] = true
 		}
+		childCounts := map[string]int{}
+		for _, c := range x.Children {
+			childCounts[c.XMLName.Local]++
+		}
 		for _, c := range x.Children {
 			key := c.XMLName.Local
-			if len(childCollisions[key]) > 1 {
+			if len(childCollisions[c.XMLName.Local]) > 1 {
 				key = prefixedKey(c.XMLName)
 			}
-			cVal := xmlAnyValue(c)
-			_, isObject := cVal.(map[string]any)
-			appendMetadata(obj, key, cVal, isObject)
+			appendMetadata(obj, key, xmlAnyValue(c), childCounts[c.XMLName.Local] > 1)
 		}
 		return obj
 	}
@@ -578,9 +602,10 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// shortHash returns a short hex digest of s, used to disambiguate feed
-// filenames that would otherwise slug to the same name.
+// shortHash returns a short hex digest of s, used to name feed files that have
+// no usable path slug. Eight bytes (64 bits) keeps accidental collisions
+// between distinct feed URLs negligible.
 func shortHash(s string) string {
 	sum := sha1.Sum([]byte(s))
-	return fmt.Sprintf("%x", sum[:4])
+	return fmt.Sprintf("%x", sum[:8])
 }

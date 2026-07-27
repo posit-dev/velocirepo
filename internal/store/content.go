@@ -47,25 +47,43 @@ func ReadContent(path string) ([]source.ContentEntry, error) {
 	return readJSONL[source.ContentEntry](path, readJSONLOptions{skipInvalid: true})
 }
 
+// contentKey identifies a content entry for upsert. It includes Target (the
+// feed URL / channel) alongside ID so that two distinct feeds sharing one
+// content file — e.g. different RSS feeds whose URLs slug to the same
+// filename — never overwrite each other's entries when their item IDs happen
+// to collide.
+type contentKey struct {
+	target string
+	id     string
+}
+
 func mergeContentEntries(existing, incoming []source.ContentEntry) []source.ContentEntry {
-	byID := make(map[string]source.ContentEntry, len(existing))
-	var order []string
+	byKey := make(map[contentKey]source.ContentEntry, len(existing))
+	var order []contentKey
+
+	key := func(e source.ContentEntry) contentKey {
+		return contentKey{target: e.Target, id: e.ID}
+	}
 
 	for _, e := range existing {
-		byID[e.ID] = e
-		order = append(order, e.ID)
+		k := key(e)
+		if _, exists := byKey[k]; !exists {
+			order = append(order, k)
+		}
+		byKey[k] = e
 	}
 
 	for _, e := range incoming {
-		if _, exists := byID[e.ID]; !exists {
-			order = append(order, e.ID)
+		k := key(e)
+		if _, exists := byKey[k]; !exists {
+			order = append(order, k)
 		}
-		byID[e.ID] = e
+		byKey[k] = e
 	}
 
 	result := make([]source.ContentEntry, 0, len(order))
-	for _, id := range order {
-		result = append(result, byID[id])
+	for _, k := range order {
+		result = append(result, byKey[k])
 	}
 	return result
 }
