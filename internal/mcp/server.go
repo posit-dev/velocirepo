@@ -64,7 +64,7 @@ func queryTool() mcp.Tool {
 Schema:
   metrics: project VARCHAR, source VARCHAR, target VARCHAR, metric VARCHAR, date DATE, value BIGINT, tags JSON
   events: project VARCHAR, source VARCHAR, type VARCHAR, target VARCHAR, datetime TIMESTAMP, tags JSON
-  content: project VARCHAR, source VARCHAR, target VARCHAR, id VARCHAR, title VARCHAR, description VARCHAR, content VARCHAR, published_at TIMESTAMP, updated_at TIMESTAMP, url VARCHAR, duration BIGINT, tags JSON, type VARCHAR, metadata JSON
+  content: project VARCHAR, source VARCHAR, target VARCHAR, id VARCHAR, title VARCHAR, description VARCHAR, content VARCHAR, published_at TIMESTAMP, updated_at TIMESTAMP, url VARCHAR, duration BIGINT, tags JSON, type VARCHAR, extra JSON
   projects: id VARCHAR, name VARCHAR, description VARCHAR, color VARCHAR, tags VARCHAR[], website VARCHAR, logo VARCHAR
 
 Notes:

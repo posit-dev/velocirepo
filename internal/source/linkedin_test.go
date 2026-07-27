@@ -121,8 +121,8 @@ func TestLinkedInFetchOrganization(t *testing.T) {
 	if entries[1].Type != "article" {
 		t.Errorf("expected type=article, got %s", entries[1].Type)
 	}
-	if entries[1].Metadata["article_url"] != "https://example.com/blog" {
-		t.Errorf("unexpected metadata: %v", entries[1].Metadata)
+	if entries[1].Extra["article_url"] != "https://example.com/blog" {
+		t.Errorf("unexpected metadata: %v", entries[1].Extra)
 	}
 }
 

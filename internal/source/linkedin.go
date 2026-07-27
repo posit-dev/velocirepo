@@ -221,7 +221,7 @@ func postToContentEntry(p linkedinPost, target string) ContentEntry {
 		URL:         "https://www.linkedin.com/feed/update/" + p.ID,
 		Tags:        tags,
 		Type:        postType,
-		Metadata:    metadata,
+		Extra:       metadata,
 	}
 }
 

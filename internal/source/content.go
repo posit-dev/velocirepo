@@ -14,7 +14,7 @@ type ContentEntry struct {
 	Duration    *int64         `json:"duration,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Type        string         `json:"type,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	Extra       map[string]any `json:"extra,omitempty"`
 }
 
 type ContentProvider interface {

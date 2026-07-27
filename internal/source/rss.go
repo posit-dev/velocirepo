@@ -77,14 +77,14 @@ type feedItem struct {
 	Updated     string // normalized RFC3339
 	URL         string
 	Tags        []string
-	Type        string
-	Metadata    map[string]any
+	Type  string
+	Extra map[string]any
 }
 
 func (it feedItem) toContentEntry(feedURL string) ContentEntry {
-	var metadata map[string]any
-	if len(it.Metadata) > 0 {
-		metadata = it.Metadata
+	var extra map[string]any
+	if len(it.Extra) > 0 {
+		extra = it.Extra
 	}
 	return ContentEntry{
 		Source:      "rss",
@@ -98,7 +98,7 @@ func (it feedItem) toContentEntry(feedURL string) ContentEntry {
 		URL:         it.URL,
 		Tags:        it.Tags,
 		Type:        it.Type,
-		Metadata:    metadata,
+		Extra:       extra,
 	}
 }
 
@@ -236,7 +236,7 @@ func (e atomEntry) toFeedItem(plurals map[string]bool) feedItem {
 	collectExtensions(metadata, extras, plurals)
 
 	if len(metadata) > 0 {
-		it.Metadata = metadata
+		it.Extra = metadata
 	}
 	return it
 }
@@ -339,7 +339,7 @@ func (i rssItem) toFeedItem(plurals map[string]bool) feedItem {
 	collectExtensions(metadata, extras, plurals)
 
 	if len(metadata) > 0 {
-		it.Metadata = metadata
+		it.Extra = metadata
 	}
 	return it
 }

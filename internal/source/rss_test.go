@@ -167,9 +167,9 @@ func TestRSSAtomMapping(t *testing.T) {
 	}
 
 	// Authors promoted from <author>.
-	authors, ok := e.Metadata["authors"].([]any)
+	authors, ok := e.Extra["authors"].([]any)
 	if !ok || len(authors) != 2 {
-		t.Fatalf("authors metadata = %#v", e.Metadata["authors"])
+		t.Fatalf("authors metadata = %#v", e.Extra["authors"])
 	}
 	first := authors[0].(map[string]any)
 	if first["name"] != "Tomasz Kalinowski" || first["uri"] != "https://opensource.posit.co/people/tomasz-kalinowski/" {
@@ -177,77 +177,77 @@ func TestRSSAtomMapping(t *testing.T) {
 	}
 
 	// Repeated chardata vr:software → string array.
-	software, ok := e.Metadata["software"].([]any)
+	software, ok := e.Extra["software"].([]any)
 	if !ok || len(software) != 2 {
-		t.Fatalf("software metadata = %#v", e.Metadata["software"])
+		t.Fatalf("software metadata = %#v", e.Extra["software"])
 	}
 	if software[0] != "software/pak" || software[1] != "software/renv" {
 		t.Errorf("software = %#v", software)
 	}
 
 	// vr:language — repeats across the feed, so always array.
-	lang, ok := e.Metadata["language"].([]any)
+	lang, ok := e.Extra["language"].([]any)
 	if !ok || len(lang) != 2 {
-		t.Fatalf("language metadata = %#v (want 2-element array)", e.Metadata["language"])
+		t.Fatalf("language metadata = %#v (want 2-element array)", e.Extra["language"])
 	}
 	if lang[0] != "R" || lang[1] != "Python" {
 		t.Errorf("language = %#v", lang)
 	}
 
 	// vr:people — plural string array.
-	people, ok := e.Metadata["people"].([]any)
+	people, ok := e.Extra["people"].([]any)
 	if !ok || len(people) != 2 {
-		t.Fatalf("people metadata = %#v (want 2-element string array)", e.Metadata["people"])
+		t.Fatalf("people metadata = %#v (want 2-element string array)", e.Extra["people"])
 	}
 	if people[0] != "people/tomasz-kalinowski" || people[1] != "people/charlie-gao" {
 		t.Errorf("people = %#v", people)
 	}
 
 	// vr:topic — plural string array.
-	topics, ok := e.Metadata["topic"].([]any)
+	topics, ok := e.Extra["topic"].([]any)
 	if !ok || len(topics) != 2 {
-		t.Fatalf("topic metadata = %#v (want 2-element array)", e.Metadata["topic"])
+		t.Fatalf("topic metadata = %#v (want 2-element array)", e.Extra["topic"])
 	}
 	if topics[0] != "Best Practices" || topics[1] != "Publishing" {
 		t.Errorf("topic = %#v", topics)
 	}
 
 	// Chardata-only vr:source → scalar string (not a plural relation).
-	if src, ok := e.Metadata["source"].(string); !ok || src != "tidyverse" {
-		t.Errorf("source metadata = %#v", e.Metadata["source"])
+	if src, ok := e.Extra["source"].(string); !ok || src != "tidyverse" {
+		t.Errorf("source metadata = %#v", e.Extra["source"])
 	}
 
 	// vr:image — chardata scalar string (not a plural relation).
-	if img, ok := e.Metadata["image"].(string); !ok || img != "blog/2026-07-23_ir-0-1-0/terrarium.png" {
-		t.Errorf("image metadata = %#v (want scalar string)", e.Metadata["image"])
+	if img, ok := e.Extra["image"].(string); !ok || img != "blog/2026-07-23_ir-0-1-0/terrarium.png" {
+		t.Errorf("image metadata = %#v (want scalar string)", e.Extra["image"])
 	}
 
 	// vr:type must NOT appear in metadata.
-	if _, present := e.Metadata["type"]; present {
-		t.Errorf("vr:type should be promoted, not in metadata: %#v", e.Metadata["type"])
+	if _, present := e.Extra["type"]; present {
+		t.Errorf("vr:type should be promoted, not in metadata: %#v", e.Extra["type"])
 	}
 
 	// Second entry has single occurrences of each plural field — they must
 	// still be arrays because the feed-level pre-scan saw repetitions in entry 1.
 	e2 := entries[1]
-	if sw, ok := e2.Metadata["software"].([]any); !ok || len(sw) != 1 || sw[0] != "software/positron" {
-		t.Errorf("entry2 software = %#v (want single-element array)", e2.Metadata["software"])
+	if sw, ok := e2.Extra["software"].([]any); !ok || len(sw) != 1 || sw[0] != "software/positron" {
+		t.Errorf("entry2 software = %#v (want single-element array)", e2.Extra["software"])
 	}
-	if lang, ok := e2.Metadata["language"].([]any); !ok || len(lang) != 1 || lang[0] != "R" {
-		t.Errorf("entry2 language = %#v (want single-element array)", e2.Metadata["language"])
+	if lang, ok := e2.Extra["language"].([]any); !ok || len(lang) != 1 || lang[0] != "R" {
+		t.Errorf("entry2 language = %#v (want single-element array)", e2.Extra["language"])
 	}
-	if ppl, ok := e2.Metadata["people"].([]any); !ok || len(ppl) != 1 || ppl[0] != "people/davis-vaughan" {
-		t.Errorf("entry2 people = %#v (want single-element array)", e2.Metadata["people"])
+	if ppl, ok := e2.Extra["people"].([]any); !ok || len(ppl) != 1 || ppl[0] != "people/davis-vaughan" {
+		t.Errorf("entry2 people = %#v (want single-element array)", e2.Extra["people"])
 	}
-	if topics, ok := e2.Metadata["topic"].([]any); !ok || len(topics) != 1 || topics[0] != "IDE" {
-		t.Errorf("entry2 topic = %#v (want single-element array)", e2.Metadata["topic"])
+	if topics, ok := e2.Extra["topic"].([]any); !ok || len(topics) != 1 || topics[0] != "IDE" {
+		t.Errorf("entry2 topic = %#v (want single-element array)", e2.Extra["topic"])
 	}
 	// vr:source and vr:image never repeat in any entry → scalar.
-	if _, ok := e2.Metadata["source"].(string); !ok {
-		t.Errorf("entry2 source = %#v (want scalar string)", e2.Metadata["source"])
+	if _, ok := e2.Extra["source"].(string); !ok {
+		t.Errorf("entry2 source = %#v (want scalar string)", e2.Extra["source"])
 	}
-	if _, ok := e2.Metadata["image"].(string); !ok {
-		t.Errorf("entry2 image = %#v (want scalar string)", e2.Metadata["image"])
+	if _, ok := e2.Extra["image"].(string); !ok {
+		t.Errorf("entry2 image = %#v (want scalar string)", e2.Extra["image"])
 	}
 }
 
@@ -290,20 +290,20 @@ func TestRSS20Mapping(t *testing.T) {
 	}
 
 	// dc:creator promoted to authors.
-	authors, ok := e.Metadata["authors"].([]any)
+	authors, ok := e.Extra["authors"].([]any)
 	if !ok || len(authors) != 1 {
-		t.Fatalf("authors = %#v", e.Metadata["authors"])
+		t.Fatalf("authors = %#v", e.Extra["authors"])
 	}
 	if authors[0].(map[string]any)["name"] != "Jane Doe" {
 		t.Errorf("author = %#v", authors[0])
 	}
 
 	// itunes:* extensions passthrough as scalars under bare local names.
-	if e.Metadata["duration"] != "3600" {
-		t.Errorf("duration = %#v", e.Metadata["duration"])
+	if e.Extra["duration"] != "3600" {
+		t.Errorf("duration = %#v", e.Extra["duration"])
 	}
-	if e.Metadata["episode"] != "42" {
-		t.Errorf("episode = %#v", e.Metadata["episode"])
+	if e.Extra["episode"] != "42" {
+		t.Errorf("episode = %#v", e.Extra["episode"])
 	}
 }
 
@@ -354,9 +354,9 @@ func TestRSSPluralExtensionCardinality(t *testing.T) {
 		{"people", "people/davis-vaughan"},
 		{"topic", "IDE"},
 	} {
-		arr, ok := e.Metadata[tc.key].([]any)
+		arr, ok := e.Extra[tc.key].([]any)
 		if !ok || len(arr) != 1 {
-			t.Fatalf("%s: want single-element array, got %T: %#v", tc.key, e.Metadata[tc.key], e.Metadata[tc.key])
+			t.Fatalf("%s: want single-element array, got %T: %#v", tc.key, e.Extra[tc.key], e.Extra[tc.key])
 		}
 		if arr[0] != tc.want {
 			t.Errorf("%s[0] = %#v, want %q", tc.key, arr[0], tc.want)
@@ -364,8 +364,8 @@ func TestRSSPluralExtensionCardinality(t *testing.T) {
 	}
 
 	// Non-plural element stays scalar (image never repeats in any entry).
-	if img, ok := e.Metadata["image"].(string); !ok || img != "blog/two/logo.png" {
-		t.Fatalf("image: want scalar string, got %T: %#v", e.Metadata["image"], e.Metadata["image"])
+	if img, ok := e.Extra["image"].(string); !ok || img != "blog/two/logo.png" {
+		t.Fatalf("image: want scalar string, got %T: %#v", e.Extra["image"], e.Extra["image"])
 	}
 }
 
@@ -440,10 +440,10 @@ func TestAtomExtensionSameLocalName(t *testing.T) {
 	}
 	// media:content is not a plural relation → single object under "content";
 	// the media:title scalar lands under "title".
-	if _, ok := e.Metadata["content"].(map[string]any); !ok {
-		t.Errorf("media:content should be captured in metadata as an object, got %#v", e.Metadata["content"])
+	if _, ok := e.Extra["content"].(map[string]any); !ok {
+		t.Errorf("media:content should be captured in metadata as an object, got %#v", e.Extra["content"])
 	}
-	if e.Metadata["title"] != "Media Title" {
-		t.Errorf("media:title metadata = %#v", e.Metadata["title"])
+	if e.Extra["title"] != "Media Title" {
+		t.Errorf("media:title metadata = %#v", e.Extra["title"])
 	}
 }
