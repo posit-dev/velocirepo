@@ -190,7 +190,6 @@ func metricsViewSQL(absDir string) string {
 				WHEN 'pr_open' THEN 'daily_prs_opened'
 				WHEN 'pr_merge' THEN 'daily_prs_merged'
 				WHEN 'comment' THEN 'daily_comments'
-				WHEN 'reaction' THEN 'daily_reactions'
 				ELSE 'daily_' || type
 			END AS metric,
 			CAST(datetime AS DATE) AS date,

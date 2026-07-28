@@ -56,6 +56,7 @@ type FetchOptions struct {
 	ProjectID string
 	StartDate time.Time
 	EndDate   time.Time
+	DataDir   string
 }
 
 type Source interface {
@@ -77,4 +78,8 @@ type Event struct {
 type EventSource interface {
 	Name() string
 	FetchEvents(ctx context.Context, opts FetchOptions) ([]Event, error)
+}
+
+type RecordProvider interface {
+	Records() []Record
 }

@@ -1,11 +1,16 @@
 package source
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,12 +21,17 @@ type GitHubEvents struct {
 	BaseURL string
 
 	contentEntries map[string][]ContentEntry
+	records        []Record
 }
 
 func (g *GitHubEvents) Name() string { return "github" }
 
 func (g *GitHubEvents) ContentByFilename() map[string][]ContentEntry {
 	return g.contentEntries
+}
+
+func (g *GitHubEvents) Records() []Record {
+	return g.records
 }
 
 func (g *GitHubEvents) graphqlURL() string {
@@ -77,22 +87,12 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 	}
 	events = append(events, comments...)
 
-	var issueNumbers []int
-	for _, e := range issueContent {
-		if e.Ref != nil {
-			issueNumbers = append(issueNumbers, *e.Ref)
-		}
-	}
-	for _, e := range prContent {
-		if e.Ref != nil {
-			issueNumbers = append(issueNumbers, *e.Ref)
-		}
-	}
-	reactions, err := g.fetchReactions(ctx, owner, repo, opts, issueNumbers)
+	allContent := append(issueContent, prContent...)
+	reactionRecords, err := g.fetchReactionCounts(ctx, owner, repo, opts, allContent)
 	if err != nil {
-		return nil, fmt.Errorf("reactions: %w", err)
+		return nil, fmt.Errorf("reaction counts: %w", err)
 	}
-	events = append(events, reactions...)
+	g.records = reactionRecords
 
 	repoContent, err := g.fetchRepoInfo(ctx, owner, repo, opts)
 	if err != nil {
@@ -527,40 +527,196 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 	return events, nil
 }
 
-var reactionContentMap = map[string]string{
-	"THUMBS_UP":   "thumbs_up",
-	"THUMBS_DOWN": "thumbs_down",
-	"LAUGH":       "laugh",
-	"HOORAY":      "hooray",
-	"CONFUSED":    "confused",
-	"HEART":       "heart",
-	"ROCKET":      "rocket",
-	"EYES":        "eyes",
+const reactionCountBatchSize = 10
+
+func (g *GitHubEvents) fetchReactionCounts(ctx context.Context, owner, repo string, opts FetchOptions, content []ContentEntry) ([]Record, error) {
+	knownRefs := g.readKnownReactionRefs(opts)
+
+	var numbers []int
+	for _, entry := range content {
+		if entry.Ref == nil {
+			continue
+		}
+		ref := *entry.Ref
+		state, _ := entry.Extra["state"].(string)
+		isOpen := state == "OPEN"
+		if isOpen || !knownRefs[ref] {
+			numbers = append(numbers, ref)
+		}
+	}
+
+	if len(numbers) == 0 {
+		return nil, nil
+	}
+
+	date := opts.EndDate.Format("2006-01-02")
+	var records []Record
+
+	for i := 0; i < len(numbers); i += reactionCountBatchSize {
+		end := i + reactionCountBatchSize
+		if end > len(numbers) {
+			end = len(numbers)
+		}
+		batch := numbers[i:end]
+
+		counts, err := g.fetchReactionCountBatch(ctx, owner, repo, batch)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, rc := range counts {
+			records = append(records, Record{
+				Metric:    "total_reactions",
+				ProjectID: opts.ProjectID,
+				Target:    g.Repo,
+				Date:      date,
+				Value:     rc.count,
+				Extra:     map[string]string{"ref": strconv.Itoa(rc.number)},
+			})
+		}
+	}
+
+	return records, nil
 }
 
-func (g *GitHubEvents) fetchReactions(ctx context.Context, owner, repo string, opts FetchOptions, numbers []int) ([]Event, error) {
-	var events []Event
+type reactionCount struct {
+	number int
+	count  int64
+}
+
+func (g *GitHubEvents) fetchReactionCountBatch(ctx context.Context, owner, repo string, numbers []int) ([]reactionCount, error) {
+	query := buildReactionCountQuery(numbers)
+	vars := map[string]interface{}{"owner": owner, "name": repo}
+	resp, err := g.doGraphQL(ctx, query, vars)
+	if err != nil {
+		return nil, fmt.Errorf("reaction counts batch: %w", err)
+	}
+
+	var raw struct {
+		Data struct {
+			Repository map[string]json.RawMessage `json:"repository"`
+		} `json:"data"`
+	}
+
+	// Unmarshal with repository as raw JSON to handle dynamic aliases
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(resp, &envelope); err != nil {
+		return nil, fmt.Errorf("unmarshal reaction count response: %w", err)
+	}
+	dataRaw, ok := envelope["data"]
+	if !ok {
+		return nil, fmt.Errorf("no data in reaction count response")
+	}
+	var dataObj map[string]json.RawMessage
+	if err := json.Unmarshal(dataRaw, &dataObj); err != nil {
+		return nil, fmt.Errorf("unmarshal data: %w", err)
+	}
+	repoRaw, ok := dataObj["repository"]
+	if !ok {
+		return nil, fmt.Errorf("no repository in reaction count response")
+	}
+	var repoObj map[string]json.RawMessage
+	if err := json.Unmarshal(repoRaw, &repoObj); err != nil {
+		return nil, fmt.Errorf("unmarshal repository: %w", err)
+	}
+	_ = raw
+
+	var results []reactionCount
+	var overflow []int
+
+	for idx, number := range numbers {
+		alias := fmt.Sprintf("r%d", idx)
+		itemRaw, ok := repoObj[alias]
+		if !ok || string(itemRaw) == "null" {
+			results = append(results, reactionCount{number: number, count: 0})
+			continue
+		}
+
+		var item struct {
+			Reactions struct {
+				TotalCount int64 `json:"totalCount"`
+			} `json:"reactions"`
+			Comments struct {
+				Nodes []struct {
+					Reactions struct {
+						TotalCount int64 `json:"totalCount"`
+					} `json:"reactions"`
+				} `json:"nodes"`
+				PageInfo pageInfo `json:"pageInfo"`
+			} `json:"comments"`
+		}
+		if err := json.Unmarshal(itemRaw, &item); err != nil {
+			return nil, fmt.Errorf("unmarshal item r%d (#%d): %w", idx, number, err)
+		}
+
+		total := item.Reactions.TotalCount
+		for _, c := range item.Comments.Nodes {
+			total += c.Reactions.TotalCount
+		}
+
+		if item.Comments.PageInfo.HasNextPage {
+			overflow = append(overflow, number)
+		}
+
+		results = append(results, reactionCount{number: number, count: total})
+	}
+
+	// Handle overflow: items with >100 comments need pagination
+	if len(overflow) > 0 {
+		overflowCounts, err := g.fetchOverflowCommentReactions(ctx, owner, repo, overflow)
+		if err != nil {
+			return nil, err
+		}
+		for i, rc := range results {
+			if extra, ok := overflowCounts[rc.number]; ok {
+				results[i].count += extra
+			}
+		}
+	}
+
+	return results, nil
+}
+
+func buildReactionCountQuery(numbers []int) string {
+	var b strings.Builder
+	b.WriteString("query($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n")
+	for i, n := range numbers {
+		fmt.Fprintf(&b, "    r%d: issueOrPullRequest(number: %d) {\n", i, n)
+		b.WriteString("      ... on Issue {\n")
+		b.WriteString("        reactions { totalCount }\n")
+		b.WriteString("        comments(first: 100) {\n")
+		b.WriteString("          nodes { reactions { totalCount } }\n")
+		b.WriteString("          pageInfo { hasNextPage endCursor }\n")
+		b.WriteString("        }\n")
+		b.WriteString("      }\n")
+		b.WriteString("      ... on PullRequest {\n")
+		b.WriteString("        reactions { totalCount }\n")
+		b.WriteString("        comments(first: 100) {\n")
+		b.WriteString("          nodes { reactions { totalCount } }\n")
+		b.WriteString("          pageInfo { hasNextPage endCursor }\n")
+		b.WriteString("        }\n")
+		b.WriteString("      }\n")
+		b.WriteString("    }\n")
+	}
+	b.WriteString("  }\n}")
+	return b.String()
+}
+
+func (g *GitHubEvents) fetchOverflowCommentReactions(ctx context.Context, owner, repo string, numbers []int) (map[int]int64, error) {
+	result := make(map[int]int64)
 
 	query := `query($owner: String!, $name: String!, $number: Int!, $after: String) {
 		repository(owner: $owner, name: $name) {
 			issueOrPullRequest(number: $number) {
 				... on Issue {
-					reactions(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
-						nodes {
-							createdAt
-							content
-							user { login }
-						}
+					comments(first: 100, after: $after) {
+						nodes { reactions { totalCount } }
 						pageInfo { hasNextPage endCursor }
 					}
 				}
 				... on PullRequest {
-					reactions(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
-						nodes {
-							createdAt
-							content
-							user { login }
-						}
+					comments(first: 100, after: $after) {
+						nodes { reactions { totalCount } }
 						pageInfo { hasNextPage endCursor }
 					}
 				}
@@ -569,69 +725,139 @@ func (g *GitHubEvents) fetchReactions(ctx context.Context, owner, repo string, o
 	}`
 
 	for _, number := range numbers {
+		// We already counted the first 100 comments in the batch query,
+		// so start from the second page.
+		var extra int64
 		var cursor *string
-		ref := number
-		done := false
+		firstPage := true
 
-		for !done {
+		for {
+			if firstPage {
+				// Skip the first page — already counted in the batch
+				// We need to get the cursor for page 2 by re-fetching page 1
+				vars := map[string]interface{}{"owner": owner, "name": repo, "number": number, "after": nil}
+				resp, err := g.doGraphQL(ctx, query, vars)
+				if err != nil {
+					return nil, fmt.Errorf("overflow reactions for #%d: %w", number, err)
+				}
+				pi, err := parseCommentPageInfo(resp)
+				if err != nil {
+					return nil, err
+				}
+				if !pi.HasNextPage {
+					break
+				}
+				cursor = &pi.EndCursor
+				firstPage = false
+				continue
+			}
+
 			vars := map[string]interface{}{"owner": owner, "name": repo, "number": number, "after": cursor}
 			resp, err := g.doGraphQL(ctx, query, vars)
 			if err != nil {
-				return nil, fmt.Errorf("reactions for #%d: %w", number, err)
+				return nil, fmt.Errorf("overflow reactions for #%d: %w", number, err)
 			}
 
-			var result struct {
-				Data struct {
-					Repository struct {
-						IssueOrPullRequest struct {
-							Reactions struct {
-								Nodes []struct {
-									CreatedAt string `json:"createdAt"`
-									Content   string `json:"content"`
-									User      *struct {
-										Login string `json:"login"`
-									} `json:"user"`
-								} `json:"nodes"`
-								PageInfo pageInfo `json:"pageInfo"`
-							} `json:"reactions"`
-						} `json:"issueOrPullRequest"`
-					} `json:"repository"`
-				} `json:"data"`
+			count, pi, err := parseCommentReactionCounts(resp)
+			if err != nil {
+				return nil, err
 			}
-			if err := json.Unmarshal(resp, &result); err != nil {
-				return nil, fmt.Errorf("unmarshal reactions for #%d: %w", number, err)
-			}
+			extra += count
 
-			reactions := result.Data.Repository.IssueOrPullRequest.Reactions
-			for _, node := range reactions.Nodes {
-				include, stop := includeGitHubEventTime(node.CreatedAt, opts)
-				if stop {
-					done = true
-					break
-				}
-				if !include {
-					continue
-				}
-				value := reactionContentMap[node.Content]
-				if value == "" {
-					value = node.Content
-				}
-				var user string
-				if node.User != nil {
-					user = node.User.Login
-				}
-				extra := map[string]string{"value": value}
-				events = append(events, githubEvent(opts, g.Repo, "reaction", node.CreatedAt, &ref, user, extra))
-			}
-
-			if done || !reactions.PageInfo.HasNextPage {
+			if !pi.HasNextPage {
 				break
 			}
-			cursor = &reactions.PageInfo.EndCursor
+			cursor = &pi.EndCursor
 		}
+
+		result[number] = extra
 	}
 
-	return events, nil
+	return result, nil
+}
+
+func parseCommentPageInfo(resp []byte) (pageInfo, error) {
+	var result struct {
+		Data struct {
+			Repository struct {
+				IssueOrPullRequest struct {
+					Comments struct {
+						PageInfo pageInfo `json:"pageInfo"`
+					} `json:"comments"`
+				} `json:"issueOrPullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return pageInfo{}, err
+	}
+	return result.Data.Repository.IssueOrPullRequest.Comments.PageInfo, nil
+}
+
+func parseCommentReactionCounts(resp []byte) (int64, pageInfo, error) {
+	var result struct {
+		Data struct {
+			Repository struct {
+				IssueOrPullRequest struct {
+					Comments struct {
+						Nodes []struct {
+							Reactions struct {
+								TotalCount int64 `json:"totalCount"`
+							} `json:"reactions"`
+						} `json:"nodes"`
+						PageInfo pageInfo `json:"pageInfo"`
+					} `json:"comments"`
+				} `json:"issueOrPullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return 0, pageInfo{}, err
+	}
+	var total int64
+	for _, n := range result.Data.Repository.IssueOrPullRequest.Comments.Nodes {
+		total += n.Reactions.TotalCount
+	}
+	return total, result.Data.Repository.IssueOrPullRequest.Comments.PageInfo, nil
+}
+
+func (g *GitHubEvents) readKnownReactionRefs(opts FetchOptions) map[int]bool {
+	known := make(map[int]bool)
+	if opts.DataDir == "" {
+		return known
+	}
+
+	dir := filepath.Join(opts.DataDir, "metrics", "github", opts.ProjectID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return known
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		f, err := os.Open(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			var rec struct {
+				Metric string            `json:"metric"`
+				Extra  map[string]string `json:"extra"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &rec) == nil && rec.Metric == "total_reactions" {
+				if ref, err := strconv.Atoi(rec.Extra["ref"]); err == nil {
+					known[ref] = true
+				}
+			}
+		}
+		f.Close()
+	}
+
+	return known
 }
 
 func (g *GitHubEvents) restBaseURL() string {

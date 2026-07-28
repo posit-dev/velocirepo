@@ -243,6 +243,7 @@ func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob
 			ProjectID: job.projectID,
 			StartDate: job.startDate,
 			EndDate:   endDate,
+			DataDir:   dataDir,
 		}, started)
 	}
 
@@ -259,6 +260,7 @@ func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob
 		ProjectID: job.projectID,
 		StartDate: job.startDate,
 		EndDate:   endDate,
+		DataDir:   dataDir,
 	}, started)
 }
 
@@ -267,6 +269,7 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 	var events []source.Event
 	contentByFilename := make(map[string][]source.ContentEntry)
 
+	var records []source.Record
 	for _, eventSrc := range job.eventSources {
 		fetched, err := eventSrc.FetchEvents(ctx, opts)
 		if err != nil {
@@ -284,13 +287,16 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 				contentByFilename[filename] = append(contentByFilename[filename], entries...)
 			}
 		}
+		if rp, ok := eventSrc.(source.RecordProvider); ok {
+			records = append(records, rp.Records()...)
+		}
 	}
 
 	if len(results) > 0 {
 		return results
 	}
 
-	if len(events) == 0 && len(contentByFilename) == 0 {
+	if len(events) == 0 && len(contentByFilename) == 0 && len(records) == 0 {
 		return []Result{{
 			Source:    job.sourceName,
 			ProjectID: job.projectID,
@@ -316,10 +322,16 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 		}
 	}
 
+	if len(records) > 0 {
+		if err := store.WriteRecords(dataDir, job.sourceName, job.projectID, records); err != nil {
+			slog.Warn("write records failed", "source", job.sourceName, "project", job.projectID, "error", err)
+		}
+	}
+
 	return append(results, Result{
 		Source:    job.sourceName,
 		ProjectID: job.projectID,
-		Records:   len(events),
+		Records:   len(events) + len(records),
 		StartDate: dateutil.FormatDate(opts.StartDate),
 		EndDate:   dateutil.FormatDate(opts.EndDate),
 		Duration:  time.Since(started),

@@ -6,12 +6,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 const repoInfoResponse = `{"data":{"repository":{"name":"repo","description":"A test repo","url":"https://github.com/owner/repo","homepageUrl":null,"createdAt":"2020-01-01T00:00:00Z","pushedAt":"2025-06-10T12:00:00Z","primaryLanguage":{"name":"Go"},"licenseInfo":{"spdxId":"MIT"},"repositoryTopics":{"nodes":[]},"defaultBranchRef":{"name":"main"},"isArchived":false}}}`
+
+const emptyReactionCountResponse = `{"data":{"repository":{}}}`
 
 func graphqlHandler(responses map[string]string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,6 +29,16 @@ func graphqlHandler(responses map[string]string) http.Handler {
 			Variables map[string]interface{} `json:"variables"`
 		}
 		_ = json.Unmarshal(body, &req)
+
+		// Handle batched reaction count queries (contain "r0:" alias pattern)
+		if contains(req.Query, "r0:") {
+			if resp, ok := responses["reactionCounts"]; ok {
+				_, _ = w.Write([]byte(resp))
+			} else {
+				_, _ = w.Write([]byte(emptyReactionCountResponse))
+			}
+			return
+		}
 
 		for key, resp := range responses {
 			if contains(req.Query, key) {
@@ -103,6 +116,7 @@ func TestGitHubEventsFetchAllTypes(t *testing.T) {
 			{"number":99,"title":"Add feature","createdAt":"2025-06-10T13:00:00Z","closedAt":"2025-06-10T15:00:00Z","mergedAt":"2025-06-10T15:00:00Z","author":{"login":"dave"},"labels":{"nodes":[]},"body":"","state":"MERGED","url":"https://github.com/owner/repo/pull/99"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
+		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":2},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}},"r1":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -320,6 +334,7 @@ func TestGitHubEventsPRNotMerged(t *testing.T) {
 		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"issues":         `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
+		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[
 			{"number":7,"title":"Some PR","createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-10T12:00:00Z","mergedAt":null,"author":{"login":"alice"},"labels":{"nodes":[]},"body":"","state":"CLOSED","url":"https://github.com/owner/repo/pull/7"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
@@ -352,6 +367,7 @@ func TestGitHubEventsIssueCloseOutOfRange(t *testing.T) {
 		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
+		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 		"issues": `{"data":{"repository":{"issues":{"nodes":[
 			{"number":5,"title":"Some issue","createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-20T10:00:00Z","author":{"login":"alice"},"labels":{"nodes":[]},"body":"","state":"CLOSED","url":"https://github.com/owner/repo/issues/5"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
@@ -409,6 +425,7 @@ func TestGitHubEventsContent(t *testing.T) {
 			{"number":20,"title":"Fix bug","body":"This fixes #10","state":"MERGED","createdAt":"2025-06-10T11:00:00Z","closedAt":"2025-06-10T12:00:00Z","mergedAt":"2025-06-10T12:00:00Z","url":"https://github.com/owner/repo/pull/20","author":{"login":"bob"},"labels":{"nodes":[{"name":"fix"}]}}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
+		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":5},"comments":{"nodes":[{"reactions":{"totalCount":2}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}},"r1":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -543,61 +560,21 @@ func TestGitHubEventsComments(t *testing.T) {
 	}
 }
 
-func TestGitHubEventsReactions(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
-			_, _ = w.Write([]byte(`[]`))
-			return
-		}
+func TestGitHubEventsReactionCounts(t *testing.T) {
+	responses := map[string]string{
+		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
+		"issues": `{"data":{"repository":{"issues":{"nodes":[
+			{"number":10,"title":"Bug","body":"","state":"OPEN","createdAt":"2025-06-10T09:00:00Z","closedAt":null,"url":"https://github.com/owner/repo/issues/10","author":{"login":"alice"},"labels":{"nodes":[]}}
+		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[
+			{"number":20,"title":"Fix","body":"","state":"MERGED","createdAt":"2025-06-10T09:30:00Z","closedAt":"2025-06-10T10:00:00Z","mergedAt":"2025-06-10T10:00:00Z","url":"https://github.com/owner/repo/pull/20","author":{"login":"bob"},"labels":{"nodes":[]}}
+		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":3},"comments":{"nodes":[{"reactions":{"totalCount":2}},{"reactions":{"totalCount":1}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}},"r1":{"reactions":{"totalCount":1},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
+	}
 
-		body, _ := io.ReadAll(r.Body)
-		var req struct {
-			Query     string                 `json:"query"`
-			Variables map[string]interface{} `json:"variables"`
-		}
-		_ = json.Unmarshal(body, &req)
-
-		if contains(req.Query, "repositoryTopics") {
-			_, _ = w.Write([]byte(repoInfoResponse))
-			return
-		}
-
-		if contains(req.Query, "issueOrPullRequest") {
-			num := int(req.Variables["number"].(float64))
-			afterRaw := req.Variables["after"]
-			if num == 10 && afterRaw == nil {
-				_, _ = w.Write([]byte(`{"data":{"repository":{"issueOrPullRequest":{"reactions":{"nodes":[
-					{"createdAt":"2025-06-10T10:00:00Z","content":"THUMBS_UP","user":{"login":"alice"}},
-					{"createdAt":"2025-06-10T10:01:00Z","content":"HEART","user":{"login":"bob"}}
-				],"pageInfo":{"hasNextPage":true,"endCursor":"rc1"}}}}}}`))
-			} else if num == 10 {
-				_, _ = w.Write([]byte(`{"data":{"repository":{"issueOrPullRequest":{"reactions":{"nodes":[
-					{"createdAt":"2025-06-10T10:02:00Z","content":"ROCKET","user":null}
-				],"pageInfo":{"hasNextPage":false,"endCursor":"rc2"}}}}}}`))
-			} else if num == 20 {
-				_, _ = w.Write([]byte(`{"data":{"repository":{"issueOrPullRequest":{"reactions":{"nodes":[
-					{"createdAt":"2025-06-10T11:00:00Z","content":"EYES","user":{"login":"carol"}}
-				],"pageInfo":{"hasNextPage":false,"endCursor":"rc3"}}}}}}`))
-			} else {
-				_, _ = w.Write([]byte(`{"data":{"repository":{"issueOrPullRequest":{"reactions":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`))
-			}
-			return
-		}
-
-		if contains(req.Query, "stargazers") {
-			_, _ = w.Write([]byte(`{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
-		} else if contains(req.Query, "forks") {
-			_, _ = w.Write([]byte(`{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
-		} else if contains(req.Query, "issues") {
-			_, _ = w.Write([]byte(`{"data":{"repository":{"issues":{"nodes":[
-				{"number":10,"title":"Bug","body":"","state":"OPEN","createdAt":"2025-06-10T09:00:00Z","closedAt":null,"url":"https://github.com/owner/repo/issues/10","author":{"login":"alice"},"labels":{"nodes":[]}}
-			],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
-		} else if contains(req.Query, "pullRequests") {
-			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequests":{"nodes":[
-				{"number":20,"title":"Fix","body":"","state":"MERGED","createdAt":"2025-06-10T09:30:00Z","closedAt":"2025-06-10T10:00:00Z","mergedAt":"2025-06-10T10:00:00Z","url":"https://github.com/owner/repo/pull/20","author":{"login":"bob"},"labels":{"nodes":[]}}
-			],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
-		}
-	}))
+	srv := httptest.NewServer(graphqlHandler(responses))
 	defer srv.Close()
 
 	g := &GitHubEvents{
@@ -606,45 +583,75 @@ func TestGitHubEventsReactions(t *testing.T) {
 		BaseURL: srv.URL,
 	}
 
-	events, err := g.FetchEvents(context.Background(), juneFetchOptions("test", 10, 10))
+	_, err := g.FetchEvents(context.Background(), juneFetchOptions("test", 10, 10))
 	if err != nil {
 		t.Fatalf("FetchEvents failed: %v", err)
 	}
 
-	var reactions []Event
-	for _, e := range events {
-		if e.Type == "reaction" {
-			reactions = append(reactions, e)
-		}
+	records := g.Records()
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
 	}
 
-	if len(reactions) != 4 {
-		t.Fatalf("got %d reaction events, want 4", len(reactions))
+	// Issue #10: 3 body + 2 + 1 comment reactions = 6
+	if records[0].Metric != "total_reactions" {
+		t.Errorf("records[0].Metric = %q, want total_reactions", records[0].Metric)
+	}
+	if records[0].Value != 6 {
+		t.Errorf("records[0].Value = %d, want 6 (3 body + 2 + 1 comment)", records[0].Value)
+	}
+	if records[0].Extra["ref"] != "10" {
+		t.Errorf("records[0].Extra[ref] = %q, want 10", records[0].Extra["ref"])
 	}
 
-	if reactions[0].Extra["value"] != "thumbs_up" || reactions[0].User != "alice" {
-		t.Errorf("reactions[0] = user=%q extra=%v, want thumbs_up/alice", reactions[0].User, reactions[0].Extra)
+	// PR #20: 1 body + 0 comment reactions = 1
+	if records[1].Value != 1 {
+		t.Errorf("records[1].Value = %d, want 1", records[1].Value)
 	}
-	if reactions[0].Ref == nil || *reactions[0].Ref != 10 {
-		t.Errorf("reactions[0].Ref = %v, want 10", reactions[0].Ref)
+	if records[1].Extra["ref"] != "20" {
+		t.Errorf("records[1].Extra[ref] = %q, want 20", records[1].Extra["ref"])
+	}
+}
+
+func TestGitHubEventsReactionCountsSkipsKnownClosed(t *testing.T) {
+	// Set up a data dir with an existing total_reactions record for closed issue #5
+	dir := t.TempDir()
+	metricsDir := dir + "/metrics/github/test"
+	_ = os.MkdirAll(metricsDir, 0755)
+	_ = os.WriteFile(metricsDir+"/2025-06-09.jsonl", []byte(
+		`{"source":"github","metric":"total_reactions","project_id":"test","target":"owner/repo","date":"2025-06-09","value":3,"extra":{"ref":"5"}}`+"\n",
+	), 0644)
+
+	responses := map[string]string{
+		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
+		"issues": `{"data":{"repository":{"issues":{"nodes":[
+			{"number":5,"title":"Old issue","body":"","state":"CLOSED","createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-10T12:00:00Z","url":"https://github.com/owner/repo/issues/5","author":{"login":"alice"},"labels":{"nodes":[]}}
+		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 	}
 
-	if reactions[1].Extra["value"] != "heart" || reactions[1].User != "bob" {
-		t.Errorf("reactions[1] = user=%q extra=%v, want heart/bob", reactions[1].User, reactions[1].Extra)
+	srv := httptest.NewServer(graphqlHandler(responses))
+	defer srv.Close()
+
+	g := &GitHubEvents{
+		Client:  srv.Client(),
+		Repo:    "owner/repo",
+		BaseURL: srv.URL,
 	}
 
-	if reactions[2].Extra["value"] != "rocket" {
-		t.Errorf("reactions[2].value = %q, want rocket", reactions[2].Extra["value"])
-	}
-	if reactions[2].User != "" {
-		t.Errorf("reactions[2] should not have user (null user)")
+	opts := juneFetchOptions("test", 10, 10)
+	opts.DataDir = dir
+	_, err := g.FetchEvents(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("FetchEvents failed: %v", err)
 	}
 
-	if reactions[3].Extra["value"] != "eyes" || reactions[3].User != "carol" {
-		t.Errorf("reactions[3] = user=%q extra=%v, want eyes/carol", reactions[3].User, reactions[3].Extra)
-	}
-	if reactions[3].Ref == nil || *reactions[3].Ref != 20 {
-		t.Errorf("reactions[3].Ref = %v, want 20", reactions[3].Ref)
+	// Closed issue #5 already has a record, so no new records should be produced
+	records := g.Records()
+	if len(records) != 0 {
+		t.Fatalf("got %d records, want 0 (closed issue already has record)", len(records))
 	}
 }
 
