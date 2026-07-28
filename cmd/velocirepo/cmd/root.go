@@ -9,6 +9,7 @@ import (
 
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/store"
+	"github.com/posit-dev/velocirepo/internal/ui"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,7 @@ import (
 var (
 	cfgFile string
 	verbose bool
+	quiet   bool
 	cfg     *config.Config
 )
 
@@ -32,6 +34,7 @@ func newRootCmd() *cobra.Command {
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			setupLogging()
+			ui.SetQuiet(quiet)
 
 			if !commandRequiresConfig(cmd) {
 				return nil
@@ -57,6 +60,7 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: walk up for velocirepo.toml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging")
+	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress progress output")
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "fetch", Title: "Fetching:"},

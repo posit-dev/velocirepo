@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"sync/atomic"
+	"time"
 
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/fetch"
@@ -28,24 +30,39 @@ func addFetchFlags(cmd *cobra.Command) {
 }
 
 func fetchOpts() fetch.Options {
+	stats := fetch.NewStats(0)
+	var completed atomic.Int32
 	return fetch.Options{
 		Project:       fetchProject,
 		StartDate:     fetchStartDate,
 		EndDate:       fetchEndDate,
 		NoConcatenate: noConcatenate,
-		OnResult:      renderResult,
+		Quiet:         quiet,
+		Stats:         stats,
+		OnResult: func(r fetch.Result) {
+			n := int(completed.Add(1))
+			renderResultWithProgress(r, n, stats.TotalJobs)
+		},
 	}
 }
 
-func renderResult(r fetch.Result) {
+func renderResultWithProgress(r fetch.Result, completed, total int) {
 	switch {
 	case r.Error != "":
-		ui.FetchError(r.Source, r.ProjectID, fmt.Errorf("%s", r.Error))
+		ui.FetchProgress(completed, total, "✗", r.Source, r.ProjectID, r.Error, "\033[31m")
 	case r.Skipped != "":
-		ui.FetchSkip(r.Source, r.ProjectID, r.Skipped)
+		ui.FetchProgress(completed, total, "·", r.Source, r.ProjectID, r.Skipped, "\033[2m")
 	default:
-		ui.FetchDone(r.Source, r.ProjectID, r.Records, r.Duration)
+		detail := fmt.Sprintf("%d records  %s", r.Records, fmtDuration(r.Duration))
+		ui.FetchProgress(completed, total, "✓", r.Source, r.ProjectID, detail, "\033[32m")
 	}
+}
+
+func fmtDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 func renderFetchResults(results []fetch.Result) {
@@ -97,11 +114,32 @@ func makeFetchCmd(def fetchSourceDef) *cobra.Command {
 		Use:   def.use,
 		Short: def.short,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			results, err := def.fn(cmd.Context(), cfg, fetch.TokensFromEnv(), fetchOpts())
+			opts := fetchOpts()
+
+			projects := len(cfg.Projects)
+			if fetchProject != "" {
+				projects = 1
+			}
+			ui.FetchPlan(1, projects, projects)
+
+			results, err := def.fn(cmd.Context(), cfg, fetch.TokensFromEnv(), opts)
 			if err != nil {
 				return err
 			}
 			renderFetchResults(results)
+
+			if opts.Stats != nil {
+				ui.FetchSummary(ui.FetchStats{
+					Elapsed:      opts.Stats.Elapsed(),
+					Records:      opts.Stats.Records,
+					FilesWritten: opts.Stats.FilesWritten,
+					APICalls:     opts.Stats.APICalls,
+					Succeeded:    opts.Stats.Succeeded,
+					Skipped:      opts.Stats.Skipped,
+					Failed:       opts.Stats.Failed,
+				})
+			}
+
 			rebuildDB()
 			return nil
 		},

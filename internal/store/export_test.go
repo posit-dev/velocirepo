@@ -16,7 +16,7 @@ func TestExportParquet(t *testing.T) {
 		{Metric: "stars", ProjectID: "my-proj", Date: "2025-06-01", Value: 10},
 		{Metric: "forks", ProjectID: "my-proj", Date: "2025-06-01", Value: 3},
 	}
-	if err := WriteRecords(dataDir, "pypi", "my-proj", records); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "my-proj", records); err != nil {
 		t.Fatal(err)
 	}
 
@@ -52,7 +52,7 @@ func TestExportCSV(t *testing.T) {
 		{Metric: "downloads", ProjectID: "pkg", Date: "2025-06-01", Value: 500, Extra: map[string]string{"version": "1.0"}},
 		{Metric: "downloads", ProjectID: "pkg", Date: "2025-06-02", Value: 600},
 	}
-	if err := WriteRecords(dataDir, "pypi", "pkg", records); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "pkg", records); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,14 +86,14 @@ func TestExportWithSourceFilter(t *testing.T) {
 	records := []source.Record{
 		{Metric: "stars", ProjectID: "test", Date: "2025-06-01", Value: 10},
 	}
-	if err := WriteRecords(dataDir, "pypi", "test", records); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "test", records); err != nil {
 		t.Fatal(err)
 	}
 
 	events := []source.Event{
 		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
 	}
-	if err := WriteEvents(dataDir, "github", "test", events); err != nil {
+	if _, err := WriteEvents(dataDir, "github", "test", events); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,10 +124,10 @@ func TestExportWithProjectFilter(t *testing.T) {
 		{Metric: "stars", ProjectID: "proj-a", Date: "2025-06-01", Value: 10},
 		{Metric: "stars", ProjectID: "proj-b", Date: "2025-06-01", Value: 20},
 	}
-	if err := WriteRecords(dataDir, "pypi", "proj-a", records[:1]); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "proj-a", records[:1]); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteRecords(dataDir, "pypi", "proj-b", records[1:]); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "proj-b", records[1:]); err != nil {
 		t.Fatal(err)
 	}
 

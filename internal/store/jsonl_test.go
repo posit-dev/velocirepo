@@ -15,7 +15,7 @@ func TestWriteAndReadRecords(t *testing.T) {
 		{Metric: "downloads", ProjectID: "mylib", Date: "2025-06-02", Value: 150},
 	}
 
-	if err := WriteRecords(dir, "pypi", "mylib", records); err != nil {
+	if _, err := WriteRecords(dir, "pypi", "mylib", records); err != nil {
 		t.Fatalf("WriteRecords failed: %v", err)
 	}
 
@@ -54,7 +54,7 @@ func TestWriteRecordsWithTags(t *testing.T) {
 		{Metric: "views", ProjectID: "mylib", Date: "2025-06-01", Value: 500, Extra: map[string]string{"video_id": "abc123"}},
 	}
 
-	if err := WriteRecords(dir, "youtube", "mylib", records); err != nil {
+	if _, err := WriteRecords(dir, "youtube", "mylib", records); err != nil {
 		t.Fatalf("WriteRecords failed: %v", err)
 	}
 

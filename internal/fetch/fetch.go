@@ -22,13 +22,16 @@ type Options struct {
 	StartDate     string
 	EndDate       string
 	NoConcatenate bool
+	Quiet         bool
 	OnResult      ResultCallback
+	Stats         *Stats
 }
 
 type Result struct {
 	Source    string        `json:"source"`
 	ProjectID string        `json:"project_id"`
 	Records   int           `json:"records"`
+	Files     int           `json:"files,omitempty"`
 	StartDate string        `json:"start_date"`
 	EndDate   string        `json:"end_date"`
 	Duration  time.Duration `json:"duration,omitempty"`
@@ -196,8 +199,11 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	go func() {
 		for jobResults := range resultsCh {
 			results = append(results, jobResults...)
-			if onResult != nil {
-				for _, r := range jobResults {
+			for _, r := range jobResults {
+				if opts.Stats != nil {
+					opts.Stats.AddResult(r)
+				}
+				if onResult != nil {
 					onResult(r)
 				}
 			}
@@ -305,8 +311,11 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 		}}
 	}
 
+	var filesWritten int
+
 	if len(events) > 0 {
-		if err := store.WriteEvents(dataDir, job.sourceName, job.projectID, events); err != nil {
+		n, err := store.WriteEvents(dataDir, job.sourceName, job.projectID, events)
+		if err != nil {
 			return append(results, Result{
 				Source:    job.sourceName,
 				ProjectID: job.projectID,
@@ -314,24 +323,30 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 				Error:     fmt.Sprintf("write: %v", err),
 			})
 		}
+		filesWritten += n
 	}
 
 	for filename, entries := range contentByFilename {
 		if err := store.WriteContent(dataDir, job.sourceName, job.projectID, filename, entries); err != nil {
 			slog.Warn("write content failed", "source", job.sourceName, "project", job.projectID, "error", err)
+		} else {
+			filesWritten++
 		}
 	}
 
 	if len(records) > 0 {
-		if err := store.WriteRecords(dataDir, job.sourceName, job.projectID, records); err != nil {
+		n, err := store.WriteRecords(dataDir, job.sourceName, job.projectID, records)
+		if err != nil {
 			slog.Warn("write records failed", "source", job.sourceName, "project", job.projectID, "error", err)
 		}
+		filesWritten += n
 	}
 
 	return append(results, Result{
 		Source:    job.sourceName,
 		ProjectID: job.projectID,
 		Records:   len(events) + len(records),
+		Files:     filesWritten,
 		StartDate: dateutil.FormatDate(opts.StartDate),
 		EndDate:   dateutil.FormatDate(opts.EndDate),
 		Duration:  time.Since(started),
@@ -378,7 +393,8 @@ func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source
 		}}
 	}
 
-	if err := store.WriteRecords(dataDir, job.sourceName, job.projectID, records); err != nil {
+	filesWritten, err := store.WriteRecords(dataDir, job.sourceName, job.projectID, records)
+	if err != nil {
 		return append(results, Result{
 			Source:    job.sourceName,
 			ProjectID: job.projectID,
@@ -390,6 +406,8 @@ func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source
 	for filename, entries := range contentByFilename {
 		if err := store.WriteContent(dataDir, job.sourceName, job.projectID, filename, entries); err != nil {
 			slog.Warn("write content failed", "source", job.sourceName, "project", job.projectID, "error", err)
+		} else {
+			filesWritten++
 		}
 	}
 
@@ -397,6 +415,7 @@ func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source
 		Source:    job.sourceName,
 		ProjectID: job.projectID,
 		Records:   len(records),
+		Files:     filesWritten,
 		StartDate: dateutil.FormatDate(opts.StartDate),
 		EndDate:   dateutil.FormatDate(opts.EndDate),
 		Duration:  time.Since(started),
@@ -487,15 +506,23 @@ func missingToken(token, reason string) string {
 	return ""
 }
 
+func clientForOpts(opts *Options) *http.Client {
+	if opts.Stats != nil {
+		return CountingClient(opts.Stats)
+	}
+	return &http.Client{Timeout: 30 * time.Second}
+}
+
 func All(ctx context.Context, cfg *config.Config, tokens Tokens, opts Options) ([]Result, error) {
 	projects, err := selectedProjects(cfg, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
 	jobsByKey := make(map[jobKey]*fetchJob)
 	var jobOrder []jobKey
+
+	client := clientForOpts(&opts)
 
 	for _, desc := range fetchSourceDescriptors {
 		if desc.skipReason(tokens) != "" {
@@ -507,7 +534,12 @@ func All(ctx context.Context, cfg *config.Config, tokens Tokens, opts Options) (
 		}
 	}
 
-	return runJobs(ctx, cfg, opts, orderedJobs(jobsByKey, jobOrder), 4)
+	jobs := orderedJobs(jobsByKey, jobOrder)
+	if opts.Stats != nil {
+		opts.Stats.TotalJobs = len(jobs)
+	}
+
+	return runJobs(ctx, cfg, opts, jobs, 4)
 }
 
 func (d fetchSourceDescriptor) skipReason(tokens Tokens) string {
@@ -557,14 +589,19 @@ func runDescriptor(ctx context.Context, cfg *config.Config, tokens Tokens, opts 
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := clientForOpts(&opts)
 	jobsByKey := make(map[jobKey]*fetchJob)
 	var jobOrder []jobKey
 	for id, proj := range projects {
 		desc.addJobs(jobsByKey, &jobOrder, client, tokens, id, proj)
 	}
 
-	return runJobs(ctx, cfg, opts, orderedJobs(jobsByKey, jobOrder), 1)
+	jobs := orderedJobs(jobsByKey, jobOrder)
+	if opts.Stats != nil {
+		opts.Stats.TotalJobs = len(jobs)
+	}
+
+	return runJobs(ctx, cfg, opts, jobs, 1)
 }
 
 func SourceByName(ctx context.Context, cfg *config.Config, tokens Tokens, sourceName string, opts Options) ([]Result, error) {

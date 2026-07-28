@@ -140,7 +140,7 @@ func TestWriteRecords_SuppressesUnchangedTotals(t *testing.T) {
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-01", Value: 100},
 		{Metric: "total_reviews", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-01", Value: 5},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records1); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -149,7 +149,7 @@ func TestWriteRecords_SuppressesUnchangedTotals(t *testing.T) {
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-02", Value: 100},
 		{Metric: "total_reviews", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-02", Value: 5},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records2); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -174,14 +174,14 @@ func TestWriteRecords_WritesChangedTotals(t *testing.T) {
 	records1 := []source.Record{
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-01", Value: 100},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records1); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
 	records2 := []source.Record{
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-02", Value: 105},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records2); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,7 +201,7 @@ func TestWriteRecords_MultiDateBatch(t *testing.T) {
 	records1 := []source.Record{
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-01", Value: 100},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records1); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,7 +211,7 @@ func TestWriteRecords_MultiDateBatch(t *testing.T) {
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-03", Value: 110},
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-04", Value: 110},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records2); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -242,7 +242,7 @@ func TestWriteRecords_SuppressesSparseTotalsAcrossFiles(t *testing.T) {
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-01", Value: 100},
 		{Metric: "total_reviews", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-01", Value: 5},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records1); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -250,7 +250,7 @@ func TestWriteRecords_SuppressesSparseTotalsAcrossFiles(t *testing.T) {
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-02", Value: 150},
 		{Metric: "total_reviews", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-02", Value: 5},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records2); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,7 +266,7 @@ func TestWriteRecords_SuppressesSparseTotalsAcrossFiles(t *testing.T) {
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-03", Value: 150},
 		{Metric: "total_reviews", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-03", Value: 5},
 	}
-	if err := WriteRecords(dir, "openvsx", "proj", records3); err != nil {
+	if _, err := WriteRecords(dir, "openvsx", "proj", records3); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,7 +282,7 @@ func TestWriteRecords_MixedDailyAndTotal(t *testing.T) {
 	records1 := []source.Record{
 		{Metric: "total_views", ProjectID: "proj", Target: "@ch", Date: "2025-06-01", Value: 1000, Extra: map[string]string{"video_id": "v1"}},
 	}
-	if err := WriteRecords(dir, "youtube", "proj", records1); err != nil {
+	if _, err := WriteRecords(dir, "youtube", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -291,7 +291,7 @@ func TestWriteRecords_MixedDailyAndTotal(t *testing.T) {
 		{Metric: "total_views", ProjectID: "proj", Target: "@ch", Date: "2025-06-02", Value: 1000, Extra: map[string]string{"video_id": "v1"}},
 		{Metric: "total_subscribers", ProjectID: "proj", Target: "@ch", Date: "2025-06-02", Value: 50},
 	}
-	if err := WriteRecords(dir, "youtube", "proj", records2); err != nil {
+	if _, err := WriteRecords(dir, "youtube", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 

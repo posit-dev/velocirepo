@@ -18,14 +18,14 @@ func TestQueryLive(t *testing.T) {
 		{Metric: "forks", ProjectID: "my-proj", Date: "2025-06-01", Value: 3},
 		{Metric: "stars", ProjectID: "my-proj", Date: "2025-06-02", Value: 15},
 	}
-	if err := WriteRecords(dataDir, "cran", "my-proj", records); err != nil {
+	if _, err := WriteRecords(dataDir, "cran", "my-proj", records); err != nil {
 		t.Fatal(err)
 	}
 
 	pypiRecords := []source.Record{
 		{Metric: "downloads", ProjectID: "my-proj", Date: "2025-06-01", Value: 500, Extra: map[string]string{"version": "1.0.0"}},
 	}
-	if err := WriteRecords(dataDir, "pypi", "my-proj", pypiRecords); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "my-proj", pypiRecords); err != nil {
 		t.Fatal(err)
 	}
 
@@ -77,7 +77,7 @@ func TestQueryLiveRestricted(t *testing.T) {
 	records := []source.Record{
 		{Metric: "downloads", ProjectID: "my-proj", Date: "2025-06-01", Value: 500},
 	}
-	if err := WriteRecords(dataDir, "pypi", "my-proj", records); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "my-proj", records); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,10 +120,10 @@ func TestQueryLiveAggregation(t *testing.T) {
 		{Metric: "forks", ProjectID: "proj-a", Date: "2025-01-01", Value: 20},
 		{Metric: "stars", ProjectID: "proj-b", Date: "2025-01-01", Value: 50},
 	}
-	if err := WriteRecords(dataDir, "pypi", "proj-a", records[:3]); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "proj-a", records[:3]); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteRecords(dataDir, "pypi", "proj-b", records[3:]); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "proj-b", records[3:]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -172,14 +172,14 @@ func TestSchemaLive(t *testing.T) {
 	records := []source.Record{
 		{Metric: "stars", ProjectID: "test", Date: "2025-01-01", Value: 1},
 	}
-	if err := WriteRecords(dataDir, "pypi", "test", records); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "test", records); err != nil {
 		t.Fatal(err)
 	}
 
 	events := []source.Event{
 		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-01-01T10:00:00Z", User: "alice"},
 	}
-	if err := WriteEvents(dataDir, "github", "test", events); err != nil {
+	if _, err := WriteEvents(dataDir, "github", "test", events); err != nil {
 		t.Fatal(err)
 	}
 
@@ -242,7 +242,7 @@ func TestQueryLiveGitHubEvents(t *testing.T) {
 		{Type: "fork", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T11:00:00Z", User: "bob"},
 		{Type: "issue_open", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-02T09:00:00Z", User: "carol"},
 	}
-	if err := WriteEvents(dataDir, "github", "my-proj", events); err != nil {
+	if _, err := WriteEvents(dataDir, "github", "my-proj", events); err != nil {
 		t.Fatal(err)
 	}
 
@@ -274,14 +274,14 @@ func TestMetricsViewIncludesGitHubAggregated(t *testing.T) {
 	records := []source.Record{
 		{Metric: "downloads", ProjectID: "test", Date: "2025-06-01", Value: 10},
 	}
-	if err := WriteRecords(dataDir, "pypi", "test", records); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "test", records); err != nil {
 		t.Fatal(err)
 	}
 
 	events := []source.Event{
 		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
 	}
-	if err := WriteEvents(dataDir, "github", "test", events); err != nil {
+	if _, err := WriteEvents(dataDir, "github", "test", events); err != nil {
 		t.Fatal(err)
 	}
 
@@ -304,7 +304,7 @@ func TestQueryLiveGitHubView(t *testing.T) {
 		{Type: "star", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T12:00:00Z", User: "bob"},
 		{Type: "fork", ProjectID: "my-proj", Target: "owner/repo", Datetime: "2025-06-01T11:00:00Z", User: "carol"},
 	}
-	if err := WriteEvents(dataDir, "github", "my-proj", events); err != nil {
+	if _, err := WriteEvents(dataDir, "github", "my-proj", events); err != nil {
 		t.Fatal(err)
 	}
 
@@ -332,14 +332,14 @@ func TestMetricsFilledForwardFills(t *testing.T) {
 	records1 := []source.Record{
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-01", Value: 100},
 	}
-	if err := WriteRecords(dataDir, "openvsx", "proj", records1); err != nil {
+	if _, err := WriteRecords(dataDir, "openvsx", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
 	records4 := []source.Record{
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-04", Value: 110},
 	}
-	if err := WriteRecords(dataDir, "openvsx", "proj", records4); err != nil {
+	if _, err := WriteRecords(dataDir, "openvsx", "proj", records4); err != nil {
 		t.Fatal(err)
 	}
 
@@ -387,7 +387,7 @@ func TestMetricsFilledUsesWatermarkHorizon(t *testing.T) {
 	records1 := []source.Record{
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-01", Value: 100},
 	}
-	if err := WriteRecords(dataDir, "openvsx", "proj", records1); err != nil {
+	if _, err := WriteRecords(dataDir, "openvsx", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -395,7 +395,7 @@ func TestMetricsFilledUsesWatermarkHorizon(t *testing.T) {
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-02", Value: 100},
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/ext", Date: "2025-06-03", Value: 100},
 	}
-	if err := WriteRecords(dataDir, "openvsx", "proj", records2); err != nil {
+	if _, err := WriteRecords(dataDir, "openvsx", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -431,14 +431,14 @@ func TestMetricsFilledUsesWatermarkSeriesKey(t *testing.T) {
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/current", Date: "2025-06-01", Value: 100},
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/removed", Date: "2025-06-01", Value: 200},
 	}
-	if err := WriteRecords(dataDir, "openvsx", "proj", records1); err != nil {
+	if _, err := WriteRecords(dataDir, "openvsx", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
 	records2 := []source.Record{
 		{Metric: "total_downloads", ProjectID: "proj", Target: "ns/current", Date: "2025-06-02", Value: 100},
 	}
-	if err := WriteRecords(dataDir, "openvsx", "proj", records2); err != nil {
+	if _, err := WriteRecords(dataDir, "openvsx", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -480,14 +480,14 @@ func TestMetricsFilledFillsRemovedSeriesToTargetHorizon(t *testing.T) {
 		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-01", Value: 100, Extra: map[string]string{"video_id": "current"}},
 		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-01", Value: 200, Extra: map[string]string{"video_id": "removed"}},
 	}
-	if err := WriteRecords(dataDir, "youtube", "proj", records1); err != nil {
+	if _, err := WriteRecords(dataDir, "youtube", "proj", records1); err != nil {
 		t.Fatal(err)
 	}
 
 	records2 := []source.Record{
 		{Metric: "total_views", ProjectID: "proj", Target: "@chan", Date: "2025-06-02", Value: 100, Extra: map[string]string{"video_id": "current"}},
 	}
-	if err := WriteRecords(dataDir, "youtube", "proj", records2); err != nil {
+	if _, err := WriteRecords(dataDir, "youtube", "proj", records2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -526,7 +526,7 @@ func TestMetricsFilledPassesThroughDailyMetrics(t *testing.T) {
 		{Metric: "daily_downloads", ProjectID: "proj", Target: "pkg", Date: "2025-06-01", Value: 50},
 		{Metric: "daily_downloads", ProjectID: "proj", Target: "pkg", Date: "2025-06-03", Value: 75},
 	}
-	if err := WriteRecords(dataDir, "pypi", "proj", records); err != nil {
+	if _, err := WriteRecords(dataDir, "pypi", "proj", records); err != nil {
 		t.Fatal(err)
 	}
 

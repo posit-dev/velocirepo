@@ -17,7 +17,7 @@ func TestAggregateDailyToMonthly(t *testing.T) {
 		records := []source.Record{
 			{Metric: "downloads", ProjectID: "mylib", Date: date, Value: int64(day * 100)},
 		}
-		if err := WriteRecords(dir, "pypi", "mylib", records); err != nil {
+		if _, err := WriteRecords(dir, "pypi", "mylib", records); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -60,7 +60,7 @@ func TestAggregateSkipsIncompleteMonth(t *testing.T) {
 	records := []source.Record{
 		{Metric: "downloads", ProjectID: "mylib", Date: "2025-06-01", Value: 100},
 	}
-	if err := WriteRecords(dir, "pypi", "mylib", records); err != nil {
+	if _, err := WriteRecords(dir, "pypi", "mylib", records); err != nil {
 		t.Fatal(err)
 	}
 

@@ -19,7 +19,7 @@ var (
 	yearlyPattern  = regexp.MustCompile(`^(\d{4})\.jsonl$`)
 )
 
-func WriteRecords(dataDir, sourceName, projectID string, records []source.Record) error {
+func WriteRecords(dataDir, sourceName, projectID string, records []source.Record) (int, error) {
 	for i := range records {
 		records[i].Source = sourceName
 	}
@@ -32,7 +32,7 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 		var err error
 		lastValues, err = lastRecordedTotalsFor(dir, wantedTotalKeys)
 		if err != nil {
-			return fmt.Errorf("read last recorded totals: %w", err)
+			return 0, fmt.Errorf("read last recorded totals: %w", err)
 		}
 	}
 
@@ -43,18 +43,20 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 	}
 	sort.Strings(dates)
 
+	var filesWritten int
 	for _, date := range dates {
 		dateRecords := filterUnchangedTotals(grouped[date], lastValues)
 
 		if len(dateRecords) > 0 {
 			if err := os.MkdirAll(dir, 0755); err != nil {
-				return fmt.Errorf("create directory %s: %w", dir, err)
+				return filesWritten, fmt.Errorf("create directory %s: %w", dir, err)
 			}
 
 			path := filepath.Join(dir, date+".jsonl")
 			if err := writeFileAtomic(path, dateRecords); err != nil {
-				return err
+				return filesWritten, err
 			}
+			filesWritten++
 
 			for _, r := range dateRecords {
 				if isTotalMetric(r.Metric) {
@@ -67,12 +69,12 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 		}
 
 		if err := writeMetricWatermarks(dataDir, sourceName, projectID, date, grouped[date]); err != nil {
-			return err
+			return filesWritten, err
 		}
 	}
 
 	ensureSchemaVersion(dataDir)
-	return nil
+	return filesWritten, nil
 }
 
 func writeFileAtomic(path string, records []source.Record) error {
@@ -145,27 +147,29 @@ func groupByDate(records []source.Record) map[string][]source.Record {
 	return groupBy(records, func(r source.Record) string { return r.Date })
 }
 
-func WriteEvents(dataDir, sourceName, projectID string, events []source.Event) error {
+func WriteEvents(dataDir, sourceName, projectID string, events []source.Event) (int, error) {
 	for i := range events {
 		events[i].Source = sourceName
 	}
 
 	grouped := groupEventsByDate(events)
 
+	var filesWritten int
 	for date, dateEvents := range grouped {
 		dir := EventsProjectDir(dataDir, sourceName, projectID)
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("create directory %s: %w", dir, err)
+			return filesWritten, fmt.Errorf("create directory %s: %w", dir, err)
 		}
 
 		path := filepath.Join(dir, date+".jsonl")
 		if err := writeEventsFileAtomic(path, dateEvents); err != nil {
-			return err
+			return filesWritten, err
 		}
+		filesWritten++
 	}
 
 	ensureSchemaVersion(dataDir)
-	return nil
+	return filesWritten, nil
 }
 
 func writeEventsFileAtomic(path string, events []source.Event) error {
