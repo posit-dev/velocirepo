@@ -1,0 +1,121 @@
+---
+title: Installation
+---
+
+velocirepo can be used as a GitHub Action for automated nightly fetching, or installed locally for ad-hoc use.
+
+## GitHub Actions (recommended)
+
+```yaml
+name: Fetch Metrics
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: posit-dev/velocirepo@v0
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          # plausible-token: ${{ secrets.PLAUSIBLE_TOKEN }}
+          # youtube-token: ${{ secrets.YOUTUBE_TOKEN }}
+
+      - name: Commit and push
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add velocirepo/
+          git diff --staged --quiet || git commit -m "Update metrics - $(date -u +'%Y-%m-%d')"
+          git push
+```
+
+Or generate this workflow automatically (no installation required):
+
+```bash
+uvx velocirepo install-ci
+```
+
+## Local installation
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew install posit-dev/tap/velocirepo
+```
+
+### Scoop (Windows)
+
+```powershell
+scoop bucket add posit-dev https://github.com/posit-dev/scoop-bucket
+scoop install velocirepo
+```
+
+### uv
+
+```bash
+uv tool install velocirepo
+```
+
+Or run without installing:
+
+```bash
+uvx velocirepo fetch
+```
+
+### Go
+
+```bash
+go install github.com/posit-dev/velocirepo/cmd/velocirepo@latest
+```
+
+### From source
+
+```bash
+git clone https://github.com/posit-dev/velocirepo.git
+cd velocirepo
+go build -o bin/velocirepo ./cmd/velocirepo
+cp bin/velocirepo ~/.local/bin/
+```
+
+### Shell installer (macOS / Linux)
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/posit-dev/velocirepo/main/install.sh | sh
+```
+
+This downloads the latest binary to `./bin/velocirepo`. Set `INSTALL_DIR` to install elsewhere:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/posit-dev/velocirepo/main/install.sh | INSTALL_DIR=/usr/local/bin sh
+```
+
+### Download binary
+
+Pre-built binaries for Linux, macOS, and Windows are available on the [Releases](https://github.com/posit-dev/velocirepo/releases) page.
+
+## Shell completion
+
+```bash
+# Zsh (add to ~/.zshrc)
+eval "$(velocirepo completion zsh)"
+
+# Bash (add to ~/.bashrc)
+eval "$(velocirepo completion bash)"
+
+# Fish
+velocirepo completion fish | source
+```
+
+## Next steps
+
+- [Configure your projects](configuration.qmd)
+- [Fetch and query data](querying.qmd)

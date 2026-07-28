@@ -1,0 +1,151 @@
+---
+title: Indicators
+---
+
+The `indicators` view computes derived signals from your daily metrics, giving you a sense of how fast a project is growing and in which direction it's heading. Indicators are computed using 28-day trailing windows and are available wherever you [query data](querying.qmd) — via `velocirepo query`, the persistent `.duckdb` file, and Parquet exports.
+
+Only metrics with a `daily_` prefix are included (these represent per-day deltas like `daily_stars`, `daily_downloads`, `daily_pageviews`). Cumulative `total_*` metrics are excluded since growth rates on snapshots aren't meaningful.
+
+## Schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `project` | VARCHAR | Project ID |
+| `source` | VARCHAR | Source name (github, pypi, etc.) |
+| `target` | VARCHAR | Specific package, repo, or site being tracked |
+| `metric` | VARCHAR | Underlying metric (e.g., `daily_stars`) |
+| `indicator` | VARCHAR | Indicator name (`growth_rate` or `trend`) |
+| `date` | DATE | Date of computation |
+| `value` | DOUBLE | Computed value |
+| `tags` | JSON | Optional metadata from the underlying metric |
+
+## Growth rate
+
+Measures how much activity increased or decreased compared to the prior period. Computed as:
+
+```
+growth_rate = (sum_last_28d - sum_prior_28d) / sum_prior_28d
+```
+
+A value of `0.15` means 15% more activity in the last 28 days compared to the 28 days before that. Negative values indicate declining activity.
+
+```bash
+velocirepo query "
+  SELECT project, metric, date, ROUND(value, 3) AS growth_rate
+  FROM indicators
+  WHERE indicator = 'growth_rate'
+    AND metric = 'daily_stars'
+  ORDER BY date DESC
+  LIMIT 5
+"
+```
+
+```
+┌──────────────┬─────────────┬────────────┬─────────────┐
+│   project    │   metric    │    date    │ growth_rate │
+├──────────────┼─────────────┼────────────┼─────────────┤
+│ py-shiny     │ daily_stars │ 2026-06-22 │ 0.114       │
+│ dplyr        │ daily_stars │ 2026-06-22 │ -0.182      │
+│ plotnine     │ daily_stars │ 2026-06-22 │ -0.488      │
+│ great-tables │ daily_stars │ 2026-06-22 │ -0.174      │
+│ ggsql        │ daily_stars │ 2026-06-22 │ -0.875      │
+└──────────────┴─────────────┴────────────┴─────────────┘
+```
+
+## Trend
+
+Measures the daily rate of change via linear regression over the trailing 28 days. The value represents units per day — for example, a trend of `3.2` on `daily_stars` means the project is gaining roughly 3.2 more stars per day than it was at the start of the window.
+
+```bash
+velocirepo query "
+  SELECT project, metric, date, ROUND(value, 2) AS trend_per_day
+  FROM indicators
+  WHERE indicator = 'trend'
+    AND metric = 'daily_downloads'
+    AND project = 'plotnine'
+  ORDER BY date DESC
+  LIMIT 5
+"
+```
+
+```
+┌──────────┬─────────────────┬────────────┬───────────────┐
+│ project  │     metric      │    date    │ trend_per_day │
+├──────────┼─────────────────┼────────────┼───────────────┤
+│ plotnine │ daily_downloads │ 2026-06-22 │ -140.39       │
+│ plotnine │ daily_downloads │ 2026-06-21 │ -60.35        │
+│ plotnine │ daily_downloads │ 2026-06-20 │ 135.05        │
+│ plotnine │ daily_downloads │ 2026-06-19 │ 186.6         │
+│ plotnine │ daily_downloads │ 2026-06-18 │ 112.38        │
+└──────────┴─────────────────┴────────────┴───────────────┘
+```
+
+## Joining with project metadata
+
+You can join indicators with project metadata for richer views:
+
+```bash
+velocirepo query "
+  SELECT p.name, i.metric, i.indicator, i.date, ROUND(i.value, 3) AS value
+  FROM indicators i
+  JOIN projects p ON i.project = p.id
+  WHERE i.date = (SELECT MAX(date) FROM indicators)
+  ORDER BY i.indicator, i.value DESC
+  LIMIT 5
+"
+```
+
+```
+┌────────────┬─────────────────────┬─────────────┬────────────┬───────┐
+│    name    │       metric        │  indicator  │    date    │ value │
+├────────────┼─────────────────────┼─────────────┼────────────┼───────┤
+│ great-docs │ daily_issues_closed │ growth_rate │ 2026-06-22 │ 5.143 │
+│ mcp-repl   │ daily_prs_merged    │ growth_rate │ 2026-06-22 │ 3.143 │
+│ mcp-repl   │ daily_prs_opened    │ growth_rate │ 2026-06-22 │ 2.815 │
+│ great-docs │ daily_issues_opened │ growth_rate │ 2026-06-22 │ 1.647 │
+│ Positron   │ daily_pr_comment    │ growth_rate │ 2026-06-22 │ 1.271 │
+└────────────┴─────────────────────┴─────────────┴────────────┴───────┘
+```
+
+## Custom indicators
+
+You can define your own indicators in `velocirepo.toml`. Each indicator is a named TOML table with a description and a SQL query:
+
+```toml
+[indicators.weekly_momentum]
+description = "7-day trailing sum"
+query = """
+  SELECT project, source, target, metric,
+    '{{indicator_name}}' AS indicator, date,
+    SUM(value) OVER w AS value,
+    tags
+  FROM metrics WHERE metric LIKE 'daily_%'
+  WINDOW w AS (PARTITION BY project, source, target, metric, tags ORDER BY date ROWS 6 PRECEDING)
+"""
+```
+
+The `{{indicator_name}}` placeholder is replaced with the TOML key at runtime (e.g., `weekly_momentum`).
+
+**Behavior:** Custom indicators are added alongside the built-in defaults. To disable the defaults, set:
+
+```toml
+[settings]
+include_default_indicators = false
+```
+
+To inspect the built-in defaults:
+
+```bash
+velocirepo show-indicators --defaults
+```
+
+Without `--defaults`, `show-indicators` prints all active indicators (defaults + custom). You can redirect to your config to use as a starting point:
+
+```bash
+velocirepo show-indicators --defaults >> velocirepo.toml
+```
+
+## Next steps
+
+- [Generate badges from metrics](badges.qmd)
+- [Build dashboards with Views](views.qmd)

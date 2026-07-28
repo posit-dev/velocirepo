@@ -1,0 +1,199 @@
+---
+title: Querying Data
+---
+
+The `query` command reads JSONL files directly using DuckDB and exposes these views:
+
+| View | Description |
+|------|-------------|
+| `metrics` | Unified time-series: all sources including aggregated events |
+| `indicators` | Derived growth rate and trend for daily metrics (28-day windows) |
+| `events` | Raw events with timestamp and tags (e.g., GitHub stars, forks, issues, PRs) |
+| `content` | Entity data from content providers (e.g., YouTube video metadata) |
+| `projects` | Project metadata from your config |
+
+## Examples
+
+### Daily star counts
+
+```bash
+velocirepo query "
+  SELECT project, date, value AS stars
+  FROM metrics
+  WHERE source = 'github' AND metric = 'daily_stars'
+  ORDER BY date DESC
+  LIMIT 5
+"
+```
+
+```
+┌──────────────────┬────────────┬───────┐
+│     project      │    date    │ stars │
+├──────────────────┼────────────┼───────┤
+│ ggsql            │ 2026-06-22 │ 1     │
+│ gt               │ 2026-06-22 │ 1     │
+│ images-workbench │ 2026-06-22 │ 1     │
+│ rmarkdown        │ 2026-06-22 │ 1     │
+│ pointblank       │ 2026-06-22 │ 1     │
+└──────────────────┴────────────┴───────┘
+```
+
+### Total stars per project
+
+```bash
+velocirepo query "
+  SELECT p.name, SUM(value) AS stars
+  FROM metrics m
+  JOIN projects p ON m.project = p.id
+  WHERE m.source = 'github' AND m.metric = 'daily_stars'
+  GROUP BY p.name
+  ORDER BY stars DESC
+  LIMIT 5
+"
+```
+
+```
+┌─────────────┬───────┐
+│    name     │ stars │
+├─────────────┼───────┤
+│ ggplot2     │ 6877  │
+│ cheatsheets │ 6360  │
+│ shiny       │ 5655  │
+│ Shiny for R │ 5600  │
+│ Quarto      │ 5274  │
+└─────────────┴───────┘
+```
+
+### Monthly star activity using raw events
+
+The `events` view gives you access to individual events when you need per-user or per-timestamp detail:
+
+```bash
+velocirepo query "
+  SELECT date_trunc('month', datetime)::DATE AS month, COUNT(*) AS stars
+  FROM events
+  WHERE project = 'quarto' AND type = 'star'
+  GROUP BY month
+  ORDER BY month DESC
+  LIMIT 5
+"
+```
+
+```
+┌────────────┬───────┐
+│   month    │ stars │
+├────────────┼───────┤
+│ 2026-02-01 │ 40    │
+│ 2026-01-01 │ 107   │
+│ 2025-12-01 │ 91    │
+│ 2025-11-01 │ 97    │
+│ 2025-10-01 │ 85    │
+└────────────┴───────┘
+```
+
+### Top YouTube videos by views
+
+```bash
+velocirepo query "
+  SELECT c.title, m.value AS views
+  FROM metrics m
+  JOIN content c ON m.tags->>'video_id' = c.id
+  WHERE m.source = 'youtube' AND m.metric = 'total_views'
+  ORDER BY m.value DESC
+  LIMIT 5
+"
+```
+
+### Latest metrics across sources
+
+```bash
+velocirepo query "
+  SELECT project, source, metric, date, value
+  FROM metrics
+  WHERE source != 'github'
+  ORDER BY date DESC
+  LIMIT 5
+"
+```
+
+```
+┌───────────────────┬─────────┬─────────────────┬────────────┬─────────┐
+│      project      │ source  │     metric      │    date    │  value  │
+├───────────────────┼─────────┼─────────────────┼────────────┼─────────┤
+│ shiny-r           │ openvsx │ total_downloads │ 2026-06-22 │ 2404755 │
+│ shiny-r           │ openvsx │ rating          │ 2026-06-22 │ 5       │
+│ shiny-r           │ openvsx │ reviews         │ 2026-06-22 │ 2       │
+│ pointblank-python │ pypi    │ daily_downloads │ 2026-06-22 │ 604     │
+│ orbital-r         │ cran    │ daily_downloads │ 2026-06-22 │ 37      │
+└───────────────────┴─────────┴─────────────────┴────────────┴─────────┘
+```
+
+## Output formats
+
+By default, results are printed as a table. Use `--json`, `--csv`, or `--parquet` for machine-readable output:
+
+```bash
+velocirepo query --csv "SELECT project, metric, value FROM metrics LIMIT 3"
+velocirepo query --json "SELECT project, metric, value FROM metrics LIMIT 3"
+velocirepo query --parquet "SELECT * FROM metrics" > metrics.parquet
+```
+
+## Schema
+
+The `schema` command shows all available columns:
+
+```bash
+velocirepo schema
+```
+
+```
+┌───────────────┬──────────────┬───────────┐
+│ TABLE         │ COLUMN       │ TYPE      │
+├───────────────┼──────────────┼───────────┤
+│ content       │ source       │ VARCHAR   │
+│ content       │ target       │ VARCHAR   │
+│ content       │ id           │ VARCHAR   │
+│ content       │ title        │ VARCHAR   │
+│ content       │ description  │ VARCHAR   │
+│ content       │ published_at │ TIMESTAMP │
+│ content       │ url          │ VARCHAR   │
+│ content       │ duration     │ BIGINT    │
+│ content       │ tags         │ JSON      │
+│ content       │ type         │ VARCHAR   │
+│ content       │ metadata     │ JSON      │
+│ events        │ project      │ VARCHAR   │
+│ events        │ source       │ VARCHAR   │
+│ events        │ type         │ VARCHAR   │
+│ events        │ target       │ VARCHAR   │
+│ events        │ datetime     │ TIMESTAMP │
+│ events        │ tags         │ JSON      │
+│ indicators    │ project      │ VARCHAR   │
+│ indicators    │ source       │ VARCHAR   │
+│ indicators    │ target       │ VARCHAR   │
+│ indicators    │ metric       │ VARCHAR   │
+│ indicators    │ indicator    │ VARCHAR   │
+│ indicators    │ date         │ DATE      │
+│ indicators    │ value        │ DOUBLE    │
+│ indicators    │ tags         │ JSON      │
+│ metrics       │ project      │ VARCHAR   │
+│ metrics       │ source       │ VARCHAR   │
+│ metrics       │ target       │ VARCHAR   │
+│ metrics       │ metric       │ VARCHAR   │
+│ metrics       │ date         │ DATE      │
+│ metrics       │ value        │ BIGINT    │
+│ metrics       │ tags         │ JSON      │
+│ projects      │ id           │ VARCHAR   │
+│ projects      │ name         │ VARCHAR   │
+│ projects      │ description  │ VARCHAR   │
+│ projects      │ color        │ VARCHAR   │
+│ projects      │ tags         │ VARCHAR[] │
+│ projects      │ website      │ VARCHAR   │
+│ projects      │ logo         │ VARCHAR   │
+└───────────────┴──────────────┴───────────┘
+```
+
+## Next steps
+
+- [Explore indicators for growth trends](indicators.qmd)
+- [Export data for external tools](exporting.qmd)
+- [Learn about the data storage format](data-storage.qmd)

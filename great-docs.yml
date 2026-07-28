@@ -6,6 +6,23 @@ github_style: widget
 seo:
   default_description: "Track your open-source project's pulse across package registries, GitHub, and the web."
 
+user_guide:
+  - section: "Getting Started"
+    contents:
+      - installation.qmd
+      - configuration.qmd
+  - section: "Working with Data"
+    contents:
+      - data-storage.qmd
+      - querying.qmd
+      - exporting.qmd
+      - indicators.qmd
+  - section: "Features"
+    contents:
+      - badges.qmd
+      - views.qmd
+      - mcp-server.qmd
+
 go_cli:
   enabled: true
 

@@ -1,0 +1,69 @@
+---
+title: Configuration
+---
+
+## Config file
+
+Create a `velocirepo.toml` in your project root:
+
+```toml
+[projects.my-project]
+name = "My Project"
+github = "owner/repo"
+github-traffic = "owner/repo"
+pypi = "my-package"
+
+[projects.other-project]
+name = "Other Project"
+github = ["owner/other", "owner/other-utils"]
+cran = "other"
+homebrew = "other"
+youtube = "@ChannelHandle"
+linkedin = "urn:li:organization:123456"
+```
+
+Each source field accepts either a single string or an array of strings, so you can track multiple repositories or packages under one project.
+
+The `github-traffic` source fetches daily page views and clone counts. GitHub only retains this data for 14 days, so velocirepo preserves it before it's lost. It requires a token with **Administration:read** permission (or the `repo` scope for classic tokens).
+
+Or initialize one interactively (auto-detects sources from your repository):
+
+```bash
+velocirepo init
+```
+
+velocirepo looks for `velocirepo.toml` by walking up from the current directory. Override with `--config` or the `VELOCIREPO_CONFIG` environment variable.
+
+## Authentication
+
+velocirepo uses API tokens to authenticate with external services. Tokens can be provided in three ways:
+
+1. **Environment variables** — export them in your shell (e.g., `export GITHUB_TOKEN=ghp_...`)
+2. **`.env` file** — place a `.env` file next to your `velocirepo.toml`; variables are loaded automatically
+3. **GitHub Actions secrets** — when using `velocirepo install-ci` or the GitHub Action, pass tokens as secrets (see [Installation](installation.qmd#github-actions-recommended))
+
+| Variable | Required for | How to get one |
+|----------|-------------|----------------|
+| `GITHUB_TOKEN` | GitHub Events, GitHub Traffic | [Create a personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) — use a fine-grained token with **Contents:read** (add **Administration:read** for traffic data) |
+| `PLAUSIBLE_TOKEN` | Plausible | [Create an API key](https://plausible.io/docs/stats-api#authentication) in your Plausible site settings |
+| `YOUTUBE_TOKEN` | YouTube | [Create an API key](https://developers.google.com/youtube/v3/getting-started#before-you-start) in the Google Cloud Console with the YouTube Data API v3 enabled |
+| `LINKEDIN_TOKEN` | LinkedIn | Run `velocirepo auth linkedin` after creating a LinkedIn app; see [LinkedIn OAuth setup](https://github.com/posit-dev/velocirepo/blob/main/linkedin-oauth.md) |
+| `VELOCIREPO_CONFIG` | — | Path to config file (not a token, but supported as an env var) |
+
+## Supported sources
+
+| Source | What it tracks |
+|--------|----------------|
+| **GitHub Events** | Individual events (stars, forks, issues, PRs) with user and timestamp |
+| **GitHub Traffic** | Daily page views and git clones (requires admin access) |
+| **PyPI** | Daily download counts |
+| **CRAN** | Daily download counts |
+| **Homebrew** | Install counts (30-day, 90-day, 365-day, lifetime) |
+| **Plausible** | Daily pageviews, visitors, visits |
+| **OpenVSX** | Total downloads, reviews, ratings |
+| **YouTube** | Views, likes, comments, subscribers (channel and per-video) |
+
+## Next steps
+
+- [Understand the data storage format](data-storage.qmd)
+- [Query your metrics](querying.qmd)

@@ -1,0 +1,98 @@
+---
+title: Views
+---
+
+Views are self-contained directories that produce dashboards, reports, or visualizations from your metrics data. Each view has a `render.sh` script as the contract — velocirepo handles discovery and orchestration, while rendering is delegated to whatever tools the view needs.
+
+## Structure
+
+A view is any directory under `views/` that contains a `render.sh` file:
+
+```
+views/
+  weekly-stars/
+    render.sh          # the render contract (executable)
+    pyproject.toml     # Python dependencies (managed by uv)
+    view.qmd           # the actual view file
+  monthly-report/
+    render.sh
+    pyproject.toml
+    app.py             # marimo notebook
+  r-summary/
+    render.sh
+    view.R
+```
+
+## Quick start
+
+```bash
+# Scaffold a Quarto view (creates directory with render.sh, view.qmd, pyproject.toml)
+velocirepo add-view weekly-stars --framework quarto-python
+
+# Install dependencies
+velocirepo setup-views
+
+# Render the view (rebuilds DuckDB, then runs render.sh)
+velocirepo render-view weekly-stars
+
+# Or start a live dev server (requires serve.sh in the view)
+velocirepo serve-view weekly-stars
+```
+
+## Supported frameworks
+
+| Framework | Flag | View file | render.sh runs |
+|-----------|------|-----------|----------------|
+| [Quarto](https://quarto.org) (Python) | `-f quarto-python` | `view.qmd` | `uv run quarto render view.qmd` |
+| [Quarto](https://quarto.org) (R) | `-f quarto-r` | `view.qmd` | `ir render view.qmd` |
+| [Jupyter](https://jupyter.org) | `-f jupyter` | `view.ipynb` | `uv run jupyter nbconvert ...` |
+| [Marimo](https://marimo.io) | `-f marimo` | `app.py` | `uv run marimo export html app.py` |
+| R | `-f r` | `view.R` | `ir run view.R` |
+| [ggsql](https://ggsql.io) | `-f sql` | `view.sql` | `ggsql run view.sql` |
+
+R views (`-f r` and `-f quarto-r`) render through [`ir`](https://r-lib.github.io/ir/), which resolves the packages declared in the view's frontmatter into a cached, reproducible library. Install `ir` once; it bootstraps `renv`/`pak` on first render, so R views need no separate setup step.
+
+## Data access
+
+Views connect to `velocirepo.duckdb` by default (via a relative path embedded at scaffold time). The DB is rebuilt before every render, so views always see fresh data.
+
+For views that need Parquet files instead, use `--source parquet` when scaffolding and call `velocirepo export` in the view's own `render.sh`.
+
+## Flags for `add-view`
+
+| Flag | Description |
+|------|-------------|
+| `-f, --framework` | Framework: quarto-python, quarto-r, jupyter, marimo, r, sql (required) |
+| `-s, --source` | Data source: duckdb (default) or parquet |
+| `--no-uv` | Skip pyproject.toml generation |
+
+## Rendering
+
+```bash
+velocirepo render-view weekly-stars  # render one view
+velocirepo render-views              # render all views
+velocirepo render-views reports      # render views matching a prefix
+```
+
+## Setup and CI
+
+```bash
+# Install dependencies for all views (runs uv sync for Python views;
+# R views bootstrap automatically on first render via ir)
+velocirepo setup-views
+```
+
+In GitHub Actions:
+
+```yaml
+- name: Setup views
+  run: velocirepo setup-views
+
+- name: Render views
+  run: velocirepo render-views
+```
+
+## Next steps
+
+- [Export data for external tools](exporting.qmd)
+- [Use the MCP server with AI assistants](mcp-server.qmd)

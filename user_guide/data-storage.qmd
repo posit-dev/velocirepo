@@ -1,0 +1,101 @@
+---
+title: Data Storage
+---
+
+All data is stored as JSONL files under `velocirepo/data/`. This entire directory is meant to be committed to git — it's your permanent metric history. Data is organized into three categories:
+
+- `data/metrics/<source>/<project-id>/<date>.jsonl` — time-series metrics (date-partitioned)
+- `data/events/<source>/<project-id>/<date>.jsonl` — individual events (date-partitioned)
+- `data/content/<source>/<project-id>/<name>.jsonl` — entity data (upsert-by-id)
+
+## Metrics
+
+Sources like PyPI, CRAN, Homebrew, Plausible, OpenVSX, GitHub Traffic, YouTube, and LinkedIn store one JSON object per metric per day:
+
+```json
+{"source":"pypi","metric":"daily_downloads","project_id":"plotnine","target":"plotnine","date":"2026-06-15","value":1523}
+{"source":"openvsx","metric":"total_downloads","project_id":"quarto","target":"quarto/quarto","date":"2026-06-15","value":1250000}
+```
+
+Metric names are prefixed with `daily_` (for deltas — values that reset each day) or `total_` (for snapshots — cumulative totals at a point in time). Homebrew metrics use their own naming (`downloads_30d`, `downloads_365d`, etc.).
+
+Fields:
+
+| Field | Description |
+|-------|-------------|
+| `source` | Source name (pypi, cran, homebrew, plausible, openvsx, github-traffic, youtube, linkedin) |
+| `metric` | Metric name (e.g., `daily_downloads`, `total_views`, `daily_pageviews`) |
+| `project_id` | Project ID from your config |
+| `target` | Specific package, repo, site, or extension being tracked |
+| `date` | Date of the measurement (YYYY-MM-DD) |
+| `value` | Integer value |
+| `tags` | Optional key-value metadata (e.g., `{"video_id": "..."}` for YouTube) |
+
+## Events
+
+Event sources store individual events rather than pre-computed counts, giving you full historical detail including who performed each action and when. Currently, GitHub is the only event source.
+
+```json
+{"source":"github","type":"star","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T14:23:01Z","tags":{"user":"alice"}}
+{"source":"github","type":"fork","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T09:11:44Z","tags":{"user":"bob"}}
+```
+
+Fields:
+
+| Field | Description |
+|-------|-------------|
+| `source` | Source name (e.g., `github`) |
+| `type` | Event type (e.g., star, fork, issue_open, issue_close, pr_open, pr_merge) |
+| `project_id` | Project ID from your config |
+| `target` | Specific repo or resource being tracked (e.g., `owner/repo`) |
+| `datetime` | Full timestamp of the event (ISO 8601) |
+| `tags` | Optional key-value metadata (e.g., `{"user": "alice"}`) |
+
+These events are automatically aggregated into daily counts in the `metrics` DuckDB view (as `daily_stars`, `daily_forks`, etc.) so you can [query them](querying.qmd) alongside other sources.
+
+## Content
+
+Sources that implement the `ContentProvider` interface also write entity data to `data/content/<source>/<project-id>/<name>.jsonl`. These files use upsert-by-id (new entries are merged with existing ones) rather than date-partitioned concatenation.
+
+Currently, YouTube and LinkedIn are content sources. YouTube writes video metadata to `velocirepo/data/content/youtube/<project-id>/videos.jsonl`:
+
+```json
+{"source":"youtube","target":"@Fireship","id":"ML3q7Ok4hJg","title":"God-Tier Developer Roadmap","published_at":"2024-03-15T16:00:00Z","duration":423,"tags":["programming","roadmap"]}
+```
+
+LinkedIn writes post metadata to `velocirepo/data/content/linkedin/<project-id>/posts.jsonl`. Content is exposed as the `content` DuckDB view; filter by `source` to query source-specific entities.
+
+## Concatenation
+
+Daily JSONL files are automatically concatenated into monthly and yearly files once a period is complete. For example, once all days in January 2026 have been fetched, they're concatenated into `2026-01.jsonl`. This keeps the file count manageable for long-running histories. The original daily files are removed after concatenation.
+
+## Migrating data
+
+When a new version of velocirepo changes the on-disk data format, it tracks this with a schema version number in `velocirepo/data/.schema-version`. Commands like `fetch`, `query`, and `export` will refuse to run against stale data:
+
+```
+Error: data schema is at version 0, but version 1 is required; run `velocirepo migrate` to update
+```
+
+To migrate your data to the latest schema:
+
+```bash
+velocirepo migrate
+```
+
+If you've copied in data from an older schema (e.g., merged data from another repository), some files may be at a different version than what `.schema-version` claims. Use `--force` to re-run all migrations from scratch:
+
+```bash
+velocirepo migrate --force
+```
+
+This is safe to run repeatedly — all migrations are idempotent.
+
+## Repository layout
+
+You can either keep metrics in the same repository as your code, or create a dedicated metrics repository. A separate repo is useful when you want to track multiple projects in one place or keep metric history out of your main codebase.
+
+## Next steps
+
+- [Query the data with SQL](querying.qmd)
+- [Export to Parquet or CSV](exporting.qmd)

@@ -1,0 +1,51 @@
+---
+title: Badges
+---
+
+Generate shields.io-style SVG badges from your metrics data:
+
+```bash
+velocirepo badge stars -o stars.svg
+velocirepo badge forks --project quarto -o forks.svg
+velocirepo badge downloads --project ggplot2 -o downloads.svg
+```
+
+For custom metrics, provide a SQL query that returns a single value:
+
+```bash
+velocirepo badge custom \
+  --label "contributors" \
+  --query "SELECT COUNT(DISTINCT tags->>'user') AS value FROM events" \
+  --color "#ea7233" \
+  -o contributors.svg
+```
+
+## Styles
+
+Three styles are available via `--style`:
+
+| Style | Description |
+|-------|-------------|
+| `flat` (default) | Subtle gradient, rounded corners |
+| `flat-square` | No gradient, sharp corners |
+| `plastic` | Heavy gradient, more rounded |
+
+## Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project` | all | Scope to a specific project |
+| `--style` | `flat` | Badge style |
+| `--color` | preset-dependent | Message background color (hex) |
+| `--label-color` | `#555` | Label background color |
+| `--label` | preset-dependent | Override label text |
+| `--height` | style-dependent | Badge height in pixels |
+| `--radius` | style-dependent | Corner radius (0 = square) |
+| `-o` | stdout | Output file path |
+
+Numbers are automatically formatted for readability (e.g., `5274` becomes `5.3k`, `1500000` becomes `1.5M`).
+
+## Next steps
+
+- [Explore indicators for growth trends](indicators.qmd)
+- [Build dashboards with Views](views.qmd)
