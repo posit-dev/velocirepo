@@ -185,3 +185,48 @@ func TestAggregateDedupWithTags(t *testing.T) {
 		t.Errorf("got %d records after dedup, want 2", len(got))
 	}
 }
+
+func TestAggregateDedupPreservesMetricTargets(t *testing.T) {
+	dir := t.TempDir()
+	records := []source.Record{
+		{Source: "rss", Metric: "total_items", ProjectID: "site", Target: "https://example.com/blog.xml", Date: "2025-01-01", Value: 100},
+		{Source: "rss", Metric: "total_items", ProjectID: "site", Target: "https://example.com/events.xml", Date: "2025-01-01", Value: 20},
+	}
+	writeTestRecords(t, metricsPath(dir, "rss", "site", "2025-01-01"), records...)
+
+	if err := Aggregate(dir, time.Date(2025, 2, 5, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Aggregate failed: %v", err)
+	}
+
+	got, err := ReadRecords(metricsPath(dir, "rss", "site", "2025-01"))
+	if err != nil {
+		t.Fatalf("ReadRecords failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("got %d records after dedup, want 2", len(got))
+	}
+}
+
+func TestAggregateDedupPreservesEventTargetsAndRefs(t *testing.T) {
+	dir := t.TempDir()
+	firstRef := 101
+	secondRef := 102
+	events := []source.Event{
+		{Source: "github", Type: "issue_close", ProjectID: "pkg", Target: "org/pkg", Datetime: "2025-01-01T12:00:00Z", Ref: &firstRef, User: "maintainer"},
+		{Source: "github", Type: "issue_close", ProjectID: "pkg", Target: "org/pkg", Datetime: "2025-01-01T12:00:00Z", Ref: &secondRef, User: "maintainer"},
+		{Source: "github", Type: "issue_close", ProjectID: "pkg", Target: "org/other", Datetime: "2025-01-01T12:00:00Z", Ref: &firstRef, User: "maintainer"},
+	}
+	writeTestEvents(t, eventsPath(dir, "github", "pkg", "2025-01-01"), events...)
+
+	if err := Aggregate(dir, time.Date(2025, 2, 5, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Aggregate failed: %v", err)
+	}
+
+	got, err := ReadEvents(eventsPath(dir, "github", "pkg", "2025-01"))
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("got %d events after dedup, want 3", len(got))
+	}
+}
