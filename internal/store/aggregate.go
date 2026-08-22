@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -237,6 +238,8 @@ func dedupKey(r source.Record) string {
 	b.WriteByte('|')
 	b.WriteString(r.ProjectID)
 	b.WriteByte('|')
+	b.WriteString(r.Target)
+	b.WriteByte('|')
 	b.WriteString(r.Metric)
 	b.WriteByte('|')
 	b.WriteString(r.Date)
@@ -268,9 +271,15 @@ func dedupEventKey(e source.Event) string {
 	b.WriteByte('|')
 	b.WriteString(e.ProjectID)
 	b.WriteByte('|')
+	b.WriteString(e.Target)
+	b.WriteByte('|')
 	b.WriteString(e.Type)
 	b.WriteByte('|')
 	b.WriteString(e.Datetime)
+	b.WriteByte('|')
+	if e.Ref != nil {
+		b.WriteString(strconv.Itoa(*e.Ref))
+	}
 
 	if e.User != "" {
 		b.WriteByte('|')
