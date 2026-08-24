@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "velocirepo"
 dynamic = ["version"]
 description = "Track your open-source project's pulse across package registries, GitHub, and the web"
-readme = "../README.md"
+readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 authors = [{ name = "Jeroen Janssens", email = "jeroen@jeroenjanssens.com" }]

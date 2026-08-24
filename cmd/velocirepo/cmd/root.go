@@ -137,6 +137,10 @@ func newRootCmd() *cobra.Command {
 	setCommandAnnotation(version, requiresConfigAnnotation, "false")
 	rootCmd.AddCommand(version)
 
+	update := updateCmd()
+	setCommandAnnotation(update, requiresConfigAnnotation, "false")
+	rootCmd.AddCommand(update)
+
 	return rootCmd
 }
 

@@ -410,6 +410,7 @@ jobs:
 
       - name: Build wheels
         run: |
+          cp README.md python/README.md
           cd python
           uv run --with hatchling build_wheels.py \
             --binary ../artifacts/velocirepo-linux-amd64 \
