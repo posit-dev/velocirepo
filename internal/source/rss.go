@@ -91,7 +91,7 @@ func (it feedItem) toContentEntry(feedURL string) ContentEntry {
 		ID:          it.ID,
 		Title:       it.Title,
 		Description: it.Description,
-		Content:     it.Content,
+		Content:     stripHTMLContent(it.Content),
 		PublishedAt: it.Published,
 		UpdatedAt:   it.Updated,
 		URL:         it.URL,

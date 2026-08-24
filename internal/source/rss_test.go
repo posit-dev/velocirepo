@@ -274,7 +274,7 @@ func TestRSS20Mapping(t *testing.T) {
 	if e.Description != "Short summary." {
 		t.Errorf("description = %q", e.Description)
 	}
-	if e.Content != "<p>Show notes...</p>" {
+	if e.Content != "Show notes..." {
 		t.Errorf("content = %q (content:encoded)", e.Content)
 	}
 	// pubDate RFC1123Z normalized to RFC3339 UTC.
