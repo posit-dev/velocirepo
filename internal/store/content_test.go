@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/posit-dev/velocirepo/internal/source"
@@ -239,5 +240,41 @@ func TestContentDuckDBView(t *testing.T) {
 	}
 	if results[0]["type"] != "video" {
 		t.Errorf("expected type=video, got %v", results[0]["type"])
+	}
+}
+
+func TestWriteContentLargeLine(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+
+	largeBody := strings.Repeat("x", 2*1024*1024) // 2MB content field
+	initial := []source.ContentEntry{
+		{Source: "rss", Target: "https://example.com/feed.xml", ID: "big", Title: "Big Post", Content: largeBody, PublishedAt: "2026-01-01T00:00:00Z"},
+	}
+	if err := WriteContent(dataDir, "rss", "proj", "blog.jsonl", initial); err != nil {
+		t.Fatal(err)
+	}
+
+	// A subsequent write must be able to read back the large line and merge.
+	update := []source.ContentEntry{
+		{Source: "rss", Target: "https://example.com/feed.xml", ID: "small", Title: "Small Post", PublishedAt: "2026-02-01T00:00:00Z"},
+	}
+	if err := WriteContent(dataDir, "rss", "proj", "blog.jsonl", update); err != nil {
+		t.Fatalf("WriteContent failed after large line: %v", err)
+	}
+
+	path := filepath.Join(dataDir, "content", "rss", "proj", "blog.jsonl")
+	read, err := ReadContent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(read))
+	}
+	if read[0].ID != "big" || len(read[0].Content) != 2*1024*1024 {
+		t.Errorf("large entry not preserved: id=%s content_len=%d", read[0].ID, len(read[0].Content))
+	}
+	if read[1].ID != "small" {
+		t.Errorf("expected small entry appended, got id=%s", read[1].ID)
 	}
 }

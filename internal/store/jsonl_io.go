@@ -2,13 +2,13 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
-
-const jsonlMaxScanTokenSize = 1024 * 1024
 
 type readJSONLOptions struct {
 	skipInvalid bool
@@ -83,26 +83,41 @@ func readJSONL[T any](path string, opts readJSONLOptions) ([]T, error) {
 	defer func() { _ = f.Close() }()
 
 	var items []T
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), jsonlMaxScanTokenSize)
-	for scanner.Scan() {
-		var item T
-		if err := json.Unmarshal(scanner.Bytes(), &item); err != nil {
-			if opts.skipInvalid {
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			line = bytes.TrimRight(line, "\n")
+			if len(line) == 0 {
+				if err != nil {
+					break
+				}
 				continue
 			}
+			var item T
+			if jsonErr := json.Unmarshal(line, &item); jsonErr != nil {
+				if opts.skipInvalid {
+					if err != nil {
+						break
+					}
+					continue
+				}
+				if opts.wrapErrors {
+					return nil, fmt.Errorf("unmarshal line in %s: %w", path, jsonErr)
+				}
+				return nil, jsonErr
+			}
+			items = append(items, item)
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			if opts.wrapErrors {
-				return nil, fmt.Errorf("unmarshal line in %s: %w", path, err)
+				return nil, fmt.Errorf("read %s: %w", path, err)
 			}
 			return nil, err
 		}
-		items = append(items, item)
-	}
-	if err := scanner.Err(); err != nil {
-		if opts.wrapErrors {
-			return nil, fmt.Errorf("scan %s: %w", path, err)
-		}
-		return nil, err
 	}
 	return items, nil
 }
