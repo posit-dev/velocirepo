@@ -23,6 +23,7 @@ func fetchAllCmd() *cobra.Command {
 				return err
 			}
 			renderFetchResults(results)
+			writeFetchLog(results, "fetch")
 
 			if opts.Stats != nil {
 				ui.FetchSummary(ui.FetchStats{

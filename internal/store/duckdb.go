@@ -73,7 +73,7 @@ func SchemaLive(dataDir string, projects []ProjectInfo, indicators []IndicatorDe
 	}
 	defer func() { _ = db.Close() }()
 
-	rows, err := db.Query("SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name IN ('content', 'events', 'indicators', 'metrics', 'metrics_filled', 'projects') ORDER BY table_name, ordinal_position")
+	rows, err := db.Query("SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name IN ('content', 'events', 'fetch_log', 'indicators', 'metrics', 'metrics_filled', 'projects') ORDER BY table_name, ordinal_position")
 	if err != nil {
 		return nil, fmt.Errorf("query schema: %w", err)
 	}
@@ -138,11 +138,16 @@ func openLiveDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDe
 		return nil, err
 	}
 
+	if err := createFetchLogView(db, absDir); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	return db, nil
 }
 
 func materializeRestrictedTables(db *sql.DB) error {
-	tables := []string{"events", "metrics", "metrics_filled", "content", "projects", "indicators"}
+	tables := []string{"events", "fetch_log", "metrics", "metrics_filled", "content", "projects", "indicators"}
 	for _, table := range tables {
 		query := fmt.Sprintf("CREATE TABLE __velocirepo_%s AS SELECT * FROM %s", table, table)
 		if _, err := db.Exec(query); err != nil {
@@ -150,7 +155,7 @@ func materializeRestrictedTables(db *sql.DB) error {
 		}
 	}
 
-	for _, view := range []string{"indicators", "projects", "content", "metrics_filled", "metrics", "events"} {
+	for _, view := range []string{"indicators", "projects", "content", "metrics_filled", "metrics", "fetch_log", "events"} {
 		if _, err := db.Exec("DROP VIEW IF EXISTS " + view); err != nil {
 			return fmt.Errorf("drop %s view: %w", view, err)
 		}
@@ -521,6 +526,67 @@ func createEmptyIndicatorsView(db *sql.DB) error {
 		WHERE false`)
 	if err != nil {
 		return fmt.Errorf("create empty indicators view: %w", err)
+	}
+	return nil
+}
+
+func createFetchLogView(db *sql.DB, absDir string) error {
+	glob := filepath.ToSlash(filepath.Join(absDir, LogDir, "*.jsonl"))
+
+	if !globHasMatches(glob) {
+		slog.Debug("no fetch log files found, creating empty view")
+		return createEmptyFetchLogView(db)
+	}
+
+	query := fmt.Sprintf(`CREATE OR REPLACE VIEW fetch_log AS
+		SELECT
+			run_id,
+			CAST(timestamp AS TIMESTAMP) AS timestamp,
+			version,
+			command,
+			source,
+			project_id AS project,
+			records,
+			files,
+			start_date,
+			end_date,
+			duration_ms,
+			status_code,
+			skipped,
+			error
+		FROM read_json('%s',
+			format='newline_delimited',
+			columns={
+				run_id: 'VARCHAR',
+				timestamp: 'VARCHAR',
+				version: 'VARCHAR',
+				command: 'VARCHAR',
+				source: 'VARCHAR',
+				project_id: 'VARCHAR',
+				records: 'INTEGER',
+				files: 'INTEGER',
+				start_date: 'VARCHAR',
+				end_date: 'VARCHAR',
+				duration_ms: 'BIGINT',
+				status_code: 'INTEGER',
+				skipped: 'VARCHAR',
+				error: 'VARCHAR'
+			})`,
+		escapeSQLString(glob))
+
+	if _, err := db.Exec(query); err != nil {
+		slog.Debug("fetch_log view creation failed, using empty view", "error", err)
+		return createEmptyFetchLogView(db)
+	}
+	return nil
+}
+
+func createEmptyFetchLogView(db *sql.DB) error {
+	_, err := db.Exec(`CREATE VIEW fetch_log (run_id, timestamp, version, command, source, project, records, files, start_date, end_date, duration_ms, status_code, skipped, error) AS
+		SELECT NULL::VARCHAR, NULL::TIMESTAMP, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::INTEGER, NULL::INTEGER, NULL::VARCHAR, NULL::VARCHAR, NULL::BIGINT, NULL::INTEGER, NULL::VARCHAR, NULL::VARCHAR
+		WHERE false`)
+	if err != nil {
+		return fmt.Errorf("create empty fetch_log view: %w", err)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,15 +29,16 @@ type Options struct {
 }
 
 type Result struct {
-	Source    string        `json:"source"`
-	ProjectID string        `json:"project_id"`
-	Records   int           `json:"records"`
-	Files     int           `json:"files,omitempty"`
-	StartDate string        `json:"start_date"`
-	EndDate   string        `json:"end_date"`
-	Duration  time.Duration `json:"duration,omitempty"`
-	Skipped   string        `json:"skipped,omitempty"`
-	Error     string        `json:"error,omitempty"`
+	Source     string        `json:"source"`
+	ProjectID  string        `json:"project_id"`
+	Records    int           `json:"records"`
+	Files      int           `json:"files,omitempty"`
+	StartDate  string        `json:"start_date"`
+	EndDate    string        `json:"end_date"`
+	Duration   time.Duration `json:"duration,omitempty"`
+	StatusCode int           `json:"status_code,omitempty"`
+	Skipped    string        `json:"skipped,omitempty"`
+	Error      string        `json:"error,omitempty"`
 }
 
 type Tokens struct {
@@ -280,10 +282,11 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 		fetched, err := eventSrc.FetchEvents(ctx, opts)
 		if err != nil {
 			results = append(results, Result{
-				Source:    job.sourceName,
-				ProjectID: job.projectID,
-				Duration:  time.Since(started),
-				Error:     err.Error(),
+				Source:     job.sourceName,
+				ProjectID:  job.projectID,
+				Duration:   time.Since(started),
+				StatusCode: httpStatusCode(err),
+				Error:      err.Error(),
 			})
 			continue
 		}
@@ -362,10 +365,11 @@ func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source
 		fetched, err := src.Fetch(ctx, opts)
 		if err != nil {
 			results = append(results, Result{
-				Source:    job.sourceName,
-				ProjectID: job.projectID,
-				Duration:  time.Since(started),
-				Error:     err.Error(),
+				Source:     job.sourceName,
+				ProjectID:  job.projectID,
+				Duration:   time.Since(started),
+				StatusCode: httpStatusCode(err),
+				Error:      err.Error(),
 			})
 			continue
 		}
@@ -420,6 +424,14 @@ func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source
 		EndDate:   dateutil.FormatDate(opts.EndDate),
 		Duration:  time.Since(started),
 	})
+}
+
+func httpStatusCode(err error) int {
+	var statusErr *source.HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.Code
+	}
+	return 0
 }
 
 type fetchSourceDescriptor struct {

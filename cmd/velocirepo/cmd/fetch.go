@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"sync/atomic"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/fetch"
+	"github.com/posit-dev/velocirepo/internal/store"
 	"github.com/posit-dev/velocirepo/internal/ui"
+	"github.com/posit-dev/velocirepo/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -90,6 +93,39 @@ func renderFetchResults(results []fetch.Result) {
 	}
 }
 
+func writeFetchLog(results []fetch.Result, command string) {
+	if len(results) == 0 {
+		return
+	}
+
+	now := time.Now().UTC()
+	runID := now.Format(time.RFC3339)
+
+	entries := make([]store.LogEntry, len(results))
+	for i, r := range results {
+		entries[i] = store.LogEntry{
+			RunID:      runID,
+			Timestamp:  now.Format(time.RFC3339),
+			Version:    version.Version,
+			Command:    command,
+			Source:     r.Source,
+			ProjectID:  r.ProjectID,
+			Records:    r.Records,
+			Files:      r.Files,
+			StartDate:  r.StartDate,
+			EndDate:    r.EndDate,
+			DurationMS: r.Duration.Milliseconds(),
+			StatusCode: r.StatusCode,
+			Skipped:    r.Skipped,
+			Error:      r.Error,
+		}
+	}
+
+	if err := store.WriteLog(cfg.DataDir(), entries); err != nil {
+		slog.Warn("write fetch log", "error", err)
+	}
+}
+
 type fetchSourceDef struct {
 	use   string
 	short string
@@ -127,6 +163,7 @@ func makeFetchCmd(def fetchSourceDef) *cobra.Command {
 				return err
 			}
 			renderFetchResults(results)
+			writeFetchLog(results, def.use)
 
 			if opts.Stats != nil {
 				ui.FetchSummary(ui.FetchStats{

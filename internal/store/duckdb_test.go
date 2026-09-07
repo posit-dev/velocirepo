@@ -192,7 +192,7 @@ func TestSchemaLive(t *testing.T) {
 	metricsExpected := []string{"project", "source", "target", "metric", "date", "value", "extra"}
 	projectsExpected := []string{"id", "name", "description", "color", "tags", "website", "logo"}
 
-	var eventsCols, metricsCols, projectsCols []SchemaColumn
+	var eventsCols, metricsCols, projectsCols, fetchLogCols []SchemaColumn
 	for _, c := range cols {
 		switch c.Table {
 		case "events":
@@ -201,6 +201,8 @@ func TestSchemaLive(t *testing.T) {
 			metricsCols = append(metricsCols, c)
 		case "projects":
 			projectsCols = append(projectsCols, c)
+		case "fetch_log":
+			fetchLogCols = append(fetchLogCols, c)
 		}
 	}
 
@@ -212,6 +214,9 @@ func TestSchemaLive(t *testing.T) {
 	}
 	if len(projectsCols) != 7 {
 		t.Fatalf("expected 7 projects columns, got %d", len(projectsCols))
+	}
+	if len(fetchLogCols) != 14 {
+		t.Fatalf("expected 14 fetch_log columns, got %d", len(fetchLogCols))
 	}
 
 	for i, exp := range eventsExpected {
@@ -547,6 +552,70 @@ func TestMetricsFilledEmptyDB(t *testing.T) {
 	_ = os.MkdirAll(dataDir, 0755)
 
 	results, _, err := QueryLive(dataDir, nil, nil, "SELECT COUNT(*) AS cnt FROM metrics_filled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0]["cnt"].(int64) != 0 {
+		t.Fatalf("expected 0 rows, got %d", results[0]["cnt"])
+	}
+}
+
+func TestQueryLiveFetchLog(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+
+	entries := []LogEntry{
+		{
+			RunID: "2025-06-15T14:30:00Z", Timestamp: "2025-06-15T14:30:00Z",
+			Version: "1.0.0", Command: "fetch",
+			Source: "pypi", ProjectID: "my-proj", Records: 42,
+			StartDate: "2025-06-01", EndDate: "2025-06-14",
+			DurationMS: 1234, StatusCode: 0,
+		},
+		{
+			RunID: "2025-06-15T14:30:00Z", Timestamp: "2025-06-15T14:30:00Z",
+			Version: "1.0.0", Command: "fetch",
+			Source: "cran", ProjectID: "my-proj",
+			StatusCode: 500, Error: "CRAN API error 500",
+		},
+	}
+	if err := WriteLog(dataDir, entries); err != nil {
+		t.Fatal(err)
+	}
+
+	results, _, err := QueryLive(dataDir, nil, nil, "SELECT COUNT(*) AS cnt FROM fetch_log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0]["cnt"].(int64) != 2 {
+		t.Fatalf("expected 2 log rows, got %d", results[0]["cnt"])
+	}
+
+	results, _, err = QueryLive(dataDir, nil, nil,
+		"SELECT source, project, records, duration_ms, status_code, error FROM fetch_log ORDER BY source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0]["source"] != "cran" {
+		t.Errorf("expected source=cran, got %v", results[0]["source"])
+	}
+	if results[0]["status_code"].(int32) != 500 {
+		t.Errorf("expected status_code=500, got %v", results[0]["status_code"])
+	}
+	if results[1]["source"] != "pypi" {
+		t.Errorf("expected source=pypi, got %v", results[1]["source"])
+	}
+	if results[1]["records"].(int32) != 42 {
+		t.Errorf("expected records=42, got %v", results[1]["records"])
+	}
+}
+
+func TestQueryLiveFetchLogEmpty(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	_ = os.MkdirAll(dataDir, 0755)
+
+	results, _, err := QueryLive(dataDir, nil, nil, "SELECT COUNT(*) AS cnt FROM fetch_log")
 	if err != nil {
 		t.Fatal(err)
 	}
