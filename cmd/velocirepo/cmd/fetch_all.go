@@ -19,11 +19,11 @@ func fetchAllCmd() *cobra.Command {
 			ui.FetchPlan(sources, projects, sources*projects)
 
 			results, err := fetch.All(cmd.Context(), cfg, fetch.TokensFromEnv(), opts)
+			renderFetchResults(results)
+			writeFetchLog(results, "fetch")
 			if err != nil {
 				return err
 			}
-			renderFetchResults(results)
-			writeFetchLog(results, "fetch")
 
 			if opts.Stats != nil {
 				ui.FetchSummary(ui.FetchStats{

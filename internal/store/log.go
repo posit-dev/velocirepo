@@ -39,5 +39,10 @@ func WriteLog(dataDir string, entries []LogEntry) error {
 	existing, _ := readJSONL[LogEntry](path, readJSONLOptions{skipInvalid: true})
 	all := append(existing, entries...)
 
-	return writeJSONLAtomic(path, all, "log entry")
+	if err := writeJSONLAtomic(path, all, "log entry"); err != nil {
+		return err
+	}
+
+	ensureSchemaVersion(dataDir)
+	return nil
 }

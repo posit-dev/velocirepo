@@ -132,6 +132,24 @@ func TestWriteLogAppendsToExisting(t *testing.T) {
 	}
 }
 
+func TestWriteLogCreatesSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+
+	entries := []LogEntry{{
+		RunID: "2025-06-15T10:00:00Z", Timestamp: "2025-06-15T10:00:00Z",
+		Version: "1.0.0", Command: "fetch",
+		Source: "pypi", ProjectID: "proj-a", Skipped: "no new records",
+	}}
+	if err := WriteLog(dataDir, entries); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckSchemaVersion(dataDir); err != nil {
+		t.Fatalf("WriteLog should create schema version marker: %v", err)
+	}
+}
+
 func TestWriteLogEmpty(t *testing.T) {
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")

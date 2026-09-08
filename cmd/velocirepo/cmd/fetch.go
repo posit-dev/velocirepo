@@ -159,11 +159,11 @@ func makeFetchCmd(def fetchSourceDef) *cobra.Command {
 			ui.FetchPlan(1, projects, projects)
 
 			results, err := def.fn(cmd.Context(), cfg, fetch.TokensFromEnv(), opts)
+			renderFetchResults(results)
+			writeFetchLog(results, def.use)
 			if err != nil {
 				return err
 			}
-			renderFetchResults(results)
-			writeFetchLog(results, def.use)
 
 			if opts.Stats != nil {
 				ui.FetchSummary(ui.FetchStats{
