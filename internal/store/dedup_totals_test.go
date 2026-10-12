@@ -343,6 +343,18 @@ func TestLastRecordedTotalsBeforeDate(t *testing.T) {
 		}
 	})
 
+	t.Run("a period file spanning the cutoff only counts its earlier records", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestRecords(t, filepath.Join(dir, "2025-01.jsonl"), total("2025-01-10", 4), total("2025-01-15", 5), total("2025-01-20", 6))
+		got, err := lastRecordedTotalsFor(dir, keys, "2025-01-15")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[key] != 4 {
+			t.Errorf("baseline before 2025-01-15 = %d, want 4 from 2025-01-10", got[key])
+		}
+	})
+
 	t.Run("overlapping files don't end the search early", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTestRecords(t, filepath.Join(dir, "2025-01.jsonl"), total("2025-01-10", 3))
