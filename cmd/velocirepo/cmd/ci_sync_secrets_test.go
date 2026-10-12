@@ -16,13 +16,10 @@ import (
 
 func TestParseEnvFile(t *testing.T) {
 	dir := t.TempDir()
-	// Use double quotes (the format auth.UpsertEnvFile writes) so that the
-	// unescaping path is exercised. Single-quoted values are intentionally
-	// not unquoted: auth.quoteEnvValue only writes double quotes.
 	envPath := writeEnvFile(t, dir, `# comment
 PLAUSIBLE_API_KEY=abc123
 GITHUB_TOKEN="ghp_secret"
-YOUTUBE_TOKEN="yt_key"
+YOUTUBE_TOKEN='yt_key'
 
 EMPTY=
 `)

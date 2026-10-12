@@ -109,10 +109,14 @@ func quoteEnvValue(val string) string {
 }
 
 // UnquoteEnvValue reverses quoteEnvValue: if val is wrapped in double quotes
-// it removes them and unescapes the interior; otherwise it returns val
-// unchanged. It is exported so that commands that read .env files can use
-// the same logic as auth.UpsertEnvFile writes.
+// it removes them and unescapes the interior. A single-quoted value is taken
+// literally, as in shell and dotenv files written by hand. Anything else is
+// returned unchanged. It is exported so that commands that read .env files
+// use the same logic that UpsertEnvFile writes.
 func UnquoteEnvValue(val string) string {
+	if len(val) >= 2 && val[0] == '\'' && val[len(val)-1] == '\'' {
+		return val[1 : len(val)-1]
+	}
 	if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
 		val = val[1 : len(val)-1]
 		r := strings.NewReplacer(

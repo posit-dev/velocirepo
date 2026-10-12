@@ -47,6 +47,10 @@ func TestUnquoteEnvValue(t *testing.T) {
 		{`"bang\!val"`, "bang!val"},
 		{`""`, ""},
 		{`"a"`, "a"},
+		{`'yt_key'`, "yt_key"},
+		{`'literal \$ and "quotes"'`, `literal \$ and "quotes"`},
+		{`''`, ""},
+		{`'`, `'`},
 	}
 	for _, tt := range tests {
 		got := UnquoteEnvValue(tt.input)
