@@ -3,13 +3,17 @@ package fetch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/source"
+	"github.com/posit-dev/velocirepo/internal/store"
 )
 
 // endDateSource records the end date the orchestrator asks it for.
@@ -101,4 +105,64 @@ func (trafficDay) Name() string { return "github-traffic" }
 
 func (trafficDay) Fetch(_ context.Context, opts source.FetchOptions) ([]source.Record, error) {
 	return []source.Record{{Metric: "daily_views", ProjectID: opts.ProjectID, Target: "org/repo", Date: opts.StartDate.Format("2006-01-02"), Value: 1}}, nil
+}
+
+// fakeEvents is an event source that returns the given events, or fails.
+type fakeEvents struct {
+	events []source.Event
+	err    error
+}
+
+func (fakeEvents) Name() string { return "github" }
+
+func (s fakeEvents) FetchEvents(_ context.Context, _ source.FetchOptions) ([]source.Event, error) {
+	return s.events, s.err
+}
+
+func eventJob(targets []string, sources ...source.EventSource) []fetchJob {
+	return []fetchJob{{sourceName: "github", projectID: "proj", eventSources: sources, eventTargets: targets}}
+}
+
+// A repository without activity has no events to show how far it was
+// fetched. A successful run records it, so the next run resumes after it.
+func TestEventJobRecordsFetchedDateWithoutEvents(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := &config.Config{Data: config.DataConfig{Dir: dataDir}}
+	if _, err := runJobs(context.Background(), cfg, Options{StartDate: "2025-03-01", EndDate: "2025-03-09"},
+		eventJob([]string{"org/repo"}, fakeEvents{}), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	start, err := resolveStartDate(dataDir, "github", "proj", "", time.Date(2025, 3, 11, 1, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start.Format("2006-01-02") != "2025-03-10" {
+		t.Errorf("next run starts at %s, want 2025-03-10", start.Format("2006-01-02"))
+	}
+}
+
+// When one repository of a project fails, nothing is written for the
+// project and the fetched date doesn't move, so the next run retries all of
+// it.
+func TestEventJobWritesNothingWhenARepositoryFails(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := &config.Config{Data: config.DataConfig{Dir: dataDir}}
+	ok := fakeEvents{events: []source.Event{{Type: "star", ProjectID: "proj", Target: "org/a", Datetime: "2025-03-05T10:00:00Z", User: "alice"}}}
+	failing := fakeEvents{err: errors.New("boom")}
+
+	results, err := runJobs(context.Background(), cfg, Options{StartDate: "2025-03-01", EndDate: "2025-03-09"},
+		eventJob([]string{"org/a", "org/b"}, ok, failing), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Error != "boom" {
+		t.Fatalf("results = %+v, want one error result", results)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "events")); !os.IsNotExist(err) {
+		t.Errorf("events were written despite the failure")
+	}
+	if last, err := store.LastDate(dataDir, "github", "proj"); err != nil || !last.IsZero() {
+		t.Errorf("LastDate = %v (%v), want nothing recorded", last, err)
+	}
 }

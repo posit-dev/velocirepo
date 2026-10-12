@@ -131,6 +131,7 @@ type fetchJob struct {
 	projectID    string
 	sources      []source.Source
 	eventSources []source.EventSource
+	eventTargets []string
 	startDate    time.Time
 	startErr     error
 }
@@ -151,7 +152,7 @@ func addMetricJob(jobs map[jobKey]*fetchJob, order *[]jobKey, sourceName, projec
 	job.sources = append(job.sources, src)
 }
 
-func addEventJob(jobs map[jobKey]*fetchJob, order *[]jobKey, sourceName, projectID string, src source.EventSource) {
+func addEventJob(jobs map[jobKey]*fetchJob, order *[]jobKey, sourceName, projectID, target string, src source.EventSource) {
 	key := jobKey{sourceName: sourceName, projectID: projectID}
 	job := jobs[key]
 	if job == nil {
@@ -160,6 +161,7 @@ func addEventJob(jobs map[jobKey]*fetchJob, order *[]jobKey, sourceName, project
 		*order = append(*order, key)
 	}
 	job.eventSources = append(job.eventSources, src)
+	job.eventTargets = append(job.eventTargets, target)
 }
 
 func orderedJobs(jobs map[jobKey]*fetchJob, order []jobKey) []fetchJob {
@@ -343,6 +345,7 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 	}
 
 	if len(events) == 0 && len(contentByFilename) == 0 && len(records) == 0 {
+		markEventsFetched(dataDir, job, opts.EndDate)
 		return []Result{{
 			Source:    job.sourceName,
 			ProjectID: job.projectID,
@@ -382,6 +385,8 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 		filesWritten += n
 	}
 
+	markEventsFetched(dataDir, job, opts.EndDate)
+
 	return append(results, Result{
 		Source:    job.sourceName,
 		ProjectID: job.projectID,
@@ -391,6 +396,14 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 		EndDate:   dateutil.FormatDate(opts.EndDate),
 		Duration:  time.Since(started),
 	})
+}
+
+// markEventsFetched records that the job's repositories were fetched through
+// endDate, so that the next run resumes after it even when nothing happened.
+func markEventsFetched(dataDir string, job fetchJob, endDate time.Time) {
+	if err := store.MarkFetched(dataDir, job.sourceName, job.projectID, dateutil.FormatDate(endDate), job.eventTargets); err != nil {
+		slog.Warn("record fetched date failed", "source", job.sourceName, "project", job.projectID, "error", err)
+	}
 }
 
 func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source.FetchOptions, started time.Time) []Result {
@@ -607,7 +620,7 @@ func (d fetchSourceDescriptor) runBeforeFetch(ctx context.Context, tokens Tokens
 func (d fetchSourceDescriptor) addJobs(jobs map[jobKey]*fetchJob, order *[]jobKey, client *http.Client, tokens Tokens, projectID string, proj config.Project) {
 	for _, target := range proj.SourceValues(d.Name) {
 		if d.eventFactory != nil {
-			addEventJob(jobs, order, d.Name, projectID, d.eventFactory(client, tokens, target))
+			addEventJob(jobs, order, d.Name, projectID, target, d.eventFactory(client, tokens, target))
 			continue
 		}
 		addMetricJob(jobs, order, d.Name, projectID, d.metricFactory(client, tokens, target))
