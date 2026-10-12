@@ -230,3 +230,30 @@ func TestAggregateDedupPreservesEventTargetsAndRefs(t *testing.T) {
 		t.Errorf("got %d events after dedup, want 3", len(got))
 	}
 }
+
+// A re-fetched day corrects the value stored in an already-compacted month:
+// the newer daily file wins over the existing monthly file.
+func TestAggregateNewerFileWins(t *testing.T) {
+	dir := t.TempDir()
+	writeTestRecords(t, metricsPath(dir, "pypi", "mylib", "2025-01"),
+		source.Record{Source: "pypi", Metric: "daily_downloads", ProjectID: "mylib", Target: "mylib", Date: "2025-01-15", Value: 100},
+		source.Record{Source: "pypi", Metric: "daily_downloads", ProjectID: "mylib", Target: "mylib", Date: "2025-01-16", Value: 160},
+	)
+	if _, err := WriteRecords(dir, "pypi", "mylib", []source.Record{
+		{Metric: "daily_downloads", ProjectID: "mylib", Target: "mylib", Date: "2025-01-15", Value: 150},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Aggregate(dir, time.Date(2025, 2, 2, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Aggregate failed: %v", err)
+	}
+
+	got, err := ReadRecords(metricsPath(dir, "pypi", "mylib", "2025-01"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Date != "2025-01-15" || got[0].Value != 150 || got[1].Date != "2025-01-16" || got[1].Value != 160 {
+		t.Fatalf("got %+v, want 2025-01-15=150 (re-fetched) and 2025-01-16=160", got)
+	}
+}

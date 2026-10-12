@@ -42,7 +42,9 @@ func recordAggregateSpec() aggregateSpec[source.Record] {
 	return aggregateSpec[source.Record]{
 		read:  ReadRecords,
 		write: writeFileAtomic,
-		dedup: dedup,
+		dedup: func(records []source.Record) []source.Record {
+			return dedupNewest(records, dedupKey)
+		},
 		less: func(a, b source.Record) bool {
 			return a.Date < b.Date
 		},
@@ -54,7 +56,9 @@ func eventAggregateSpec() aggregateSpec[source.Event] {
 	return aggregateSpec[source.Event]{
 		read:  ReadEvents,
 		write: writeEventsFileAtomic,
-		dedup: dedupEvents,
+		dedup: func(events []source.Event) []source.Event {
+			return dedupNewest(events, dedupEventKey)
+		},
 		less: func(a, b source.Event) bool {
 			return a.Datetime < b.Datetime
 		},
@@ -131,24 +135,42 @@ func aggregateFiles[T any](
 		}
 	}
 
-	for group, files := range groupedFiles {
+	groups := make([]string, 0, len(groupedFiles))
+	for group := range groupedFiles {
+		groups = append(groups, group)
+	}
+	sort.Strings(groups)
+
+	for _, group := range groups {
 		if !isComplete(group, now) {
 			continue
 		}
 
+		files := groupedFiles[group]
 		sort.Strings(files)
 
-		items, err := readAllAggregateFiles(files, spec.read)
+		// A period file can already exist: data for an already-compacted period
+		// arrives through backfills and repairs, and a crash can interrupt the
+		// deletion of the inputs. Merge into it rather than replacing it. It is
+		// read first so that the newer inputs win for records with the same key.
+		outPath := filepath.Join(projDir, group+".jsonl")
+		inputs := files
+		if _, err := os.Stat(outPath); err == nil {
+			inputs = append([]string{outPath}, files...)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+
+		items, err := readAllAggregateFiles(inputs, spec.read)
 		if err != nil {
 			return fmt.Errorf("read %s files for %s: %w", spec.label, group, err)
 		}
 
 		items = spec.dedup(items)
-		sort.Slice(items, func(i, j int) bool {
+		sort.SliceStable(items, func(i, j int) bool {
 			return spec.less(items[i], items[j])
 		})
 
-		outPath := filepath.Join(projDir, group+".jsonl")
 		if err := spec.write(outPath, items); err != nil {
 			return err
 		}
@@ -227,6 +249,25 @@ func dedupBy[T any](items []T, keyFor func(T) string) []T {
 			continue
 		}
 		seen[key] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
+// dedupNewest keeps one item per key like dedupBy, but takes the value of the
+// last occurrence. Compaction reads its inputs oldest first, so a re-fetched
+// value replaces the one it corrects.
+func dedupNewest[T any](items []T, keyFor func(T) string) []T {
+	index := make(map[string]int, len(items))
+	result := make([]T, 0, len(items))
+
+	for _, item := range items {
+		key := keyFor(item)
+		if i, ok := index[key]; ok {
+			result[i] = item
+			continue
+		}
+		index[key] = len(result)
 		result = append(result, item)
 	}
 	return result

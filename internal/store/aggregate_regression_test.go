@@ -438,6 +438,9 @@ func TestWriteRecordsRefetchKeepsChangePointsOfThatDay(t *testing.T) {
 func TestAggregateRecoversFromCrashDuringDelete(t *testing.T) {
 	dir := t.TempDir()
 	records := dailyRecords("pkg", utcDate(2025, 1, 1), utcDate(2025, 1, 31))
+	for i := range records {
+		records[i].Source = "pypi"
+	}
 	writeTestRecords(t, metricsPath(dir, "pypi", "proj", "2025-01"), records...)
 	if _, err := WriteRecords(dir, "pypi", "proj", dailyRecords("pkg", utcDate(2025, 1, 20), utcDate(2025, 1, 31))); err != nil {
 		t.Fatal(err)
