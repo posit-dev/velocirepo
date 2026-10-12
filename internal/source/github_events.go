@@ -962,7 +962,6 @@ func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, op
 	return []ContentEntry{entry}, nil
 }
 
-
 func includeGitHubEventTime(timestamp string, opts FetchOptions) (include bool, stop bool) {
 	t, err := time.Parse(time.RFC3339, timestamp)
 	if err != nil {

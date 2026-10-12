@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/posit-dev/velocirepo/internal/views"
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/tw"
+	"github.com/posit-dev/velocirepo/internal/views"
 	"github.com/spf13/cobra"
 )
 

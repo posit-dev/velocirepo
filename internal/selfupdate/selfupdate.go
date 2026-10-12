@@ -22,7 +22,7 @@ import (
 type InstallMethod int
 
 const (
-	MethodDirect    InstallMethod = iota
+	MethodDirect InstallMethod = iota
 	MethodHomebrew
 	MethodUV
 	MethodPip

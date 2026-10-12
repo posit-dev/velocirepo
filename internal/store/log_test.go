@@ -26,13 +26,13 @@ func TestWriteLog(t *testing.T) {
 			StatusCode: 0,
 		},
 		{
-			RunID:      "2025-06-15T14:30:00Z",
-			Timestamp:  "2025-06-15T14:30:00Z",
-			Version:    "1.0.0",
-			Command:    "fetch",
-			Source:     "cran",
-			ProjectID:  "my-proj",
-			Skipped:    "already up to date",
+			RunID:     "2025-06-15T14:30:00Z",
+			Timestamp: "2025-06-15T14:30:00Z",
+			Version:   "1.0.0",
+			Command:   "fetch",
+			Source:    "cran",
+			ProjectID: "my-proj",
+			Skipped:   "already up to date",
 		},
 	}
 

@@ -84,4 +84,3 @@ func validateProjectsCmd() *cobra.Command {
 
 	return cmd
 }
-

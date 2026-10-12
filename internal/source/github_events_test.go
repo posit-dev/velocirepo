@@ -70,10 +70,10 @@ func TestGitHubEventsFetchStargazers(t *testing.T) {
 	],"pageInfo":{"hasNextPage":false,"endCursor":"c1"}}}}}`
 
 	srv := httptest.NewServer(graphqlHandler(map[string]string{
-		"stargazers":     resp,
-		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"issues":         `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"pullRequests":   `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"stargazers":       resp,
+		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues":           `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests":     `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
 	}))
 	defer srv.Close()
@@ -116,7 +116,7 @@ func TestGitHubEventsFetchAllTypes(t *testing.T) {
 			{"number":99,"title":"Add feature","createdAt":"2025-06-10T13:00:00Z","closedAt":"2025-06-10T15:00:00Z","mergedAt":"2025-06-10T15:00:00Z","author":{"login":"dave"},"labels":{"nodes":[]},"body":"","state":"MERGED","url":"https://github.com/owner/repo/pull/99"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
-		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":2},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}},"r1":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
+		"reactionCounts":   `{"data":{"repository":{"r0":{"reactions":{"totalCount":2},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}},"r1":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -183,9 +183,9 @@ func TestGitHubEventsDateFiltering(t *testing.T) {
 			{"starredAt":"2025-06-10T10:00:00Z","node":{"login":"bob"}},
 			{"starredAt":"2025-06-08T10:00:00Z","node":{"login":"carol"}}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"issues":         `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"pullRequests":   `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues":           `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests":     `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
 	}
 
@@ -296,7 +296,9 @@ func TestGitHubEventsAuthHeader(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		var req struct{ Query string `json:"query"` }
+		var req struct {
+			Query string `json:"query"`
+		}
 		_ = json.Unmarshal(body, &req)
 		if contains(req.Query, "repositoryTopics") {
 			_, _ = w.Write([]byte(repoInfoResponse))
@@ -330,11 +332,11 @@ func TestGitHubEventsAuthHeader(t *testing.T) {
 
 func TestGitHubEventsPRNotMerged(t *testing.T) {
 	responses := map[string]string{
-		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"issues":         `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"stargazers":       `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues":           `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
-		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
+		"reactionCounts":   `{"data":{"repository":{"r0":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[
 			{"number":7,"title":"Some PR","createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-10T12:00:00Z","mergedAt":null,"author":{"login":"alice"},"labels":{"nodes":[]},"body":"","state":"CLOSED","url":"https://github.com/owner/repo/pull/7"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
@@ -364,14 +366,14 @@ func TestGitHubEventsPRNotMerged(t *testing.T) {
 
 func TestGitHubEventsIssueCloseOutOfRange(t *testing.T) {
 	responses := map[string]string{
-		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"stargazers":       `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
-		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
+		"reactionCounts":   `{"data":{"repository":{"r0":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 		"issues": `{"data":{"repository":{"issues":{"nodes":[
 			{"number":5,"title":"Some issue","createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-20T10:00:00Z","author":{"login":"alice"},"labels":{"nodes":[]},"body":"","state":"CLOSED","url":"https://github.com/owner/repo/issues/5"}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"pullRequests":   `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -425,7 +427,7 @@ func TestGitHubEventsContent(t *testing.T) {
 			{"number":20,"title":"Fix bug","body":"This fixes #10","state":"MERGED","createdAt":"2025-06-10T11:00:00Z","closedAt":"2025-06-10T12:00:00Z","mergedAt":"2025-06-10T12:00:00Z","url":"https://github.com/owner/repo/pull/20","author":{"login":"bob"},"labels":{"nodes":[{"name":"fix"}]}}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
-		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":5},"comments":{"nodes":[{"reactions":{"totalCount":2}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}},"r1":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
+		"reactionCounts":   `{"data":{"repository":{"r0":{"reactions":{"totalCount":5},"comments":{"nodes":[{"reactions":{"totalCount":2}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}},"r1":{"reactions":{"totalCount":0},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -508,7 +510,9 @@ func TestGitHubEventsComments(t *testing.T) {
 		}
 
 		body, _ := io.ReadAll(r.Body)
-		var req struct{ Query string `json:"query"` }
+		var req struct {
+			Query string `json:"query"`
+		}
 		_ = json.Unmarshal(body, &req)
 		if contains(req.Query, "repositoryTopics") {
 			_, _ = w.Write([]byte(repoInfoResponse))
@@ -562,8 +566,8 @@ func TestGitHubEventsComments(t *testing.T) {
 
 func TestGitHubEventsReactionCounts(t *testing.T) {
 	responses := map[string]string{
-		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"stargazers":       `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
 		"issues": `{"data":{"repository":{"issues":{"nodes":[
 			{"number":10,"title":"Bug","body":"","state":"OPEN","createdAt":"2025-06-10T09:00:00Z","closedAt":null,"url":"https://github.com/owner/repo/issues/10","author":{"login":"alice"},"labels":{"nodes":[]}}

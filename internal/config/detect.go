@@ -12,15 +12,15 @@ import (
 )
 
 type Detected struct {
-	ProjectID   string
-	IDSource    string
-	GitHub      string
-	GitHubSource string
-	PyPI        string
-	PyPISource  string
-	CRAN        string
-	CRANSource  string
-	OpenVSX     string
+	ProjectID     string
+	IDSource      string
+	GitHub        string
+	GitHubSource  string
+	PyPI          string
+	PyPISource    string
+	CRAN          string
+	CRANSource    string
+	OpenVSX       string
 	OpenVSXSource string
 }
 

@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/joho/godotenv"
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/store"
 	"github.com/posit-dev/velocirepo/internal/ui"
-	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 )
 

@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-
 	"github.com/posit-dev/velocirepo/internal/store"
 	"github.com/spf13/cobra"
 )

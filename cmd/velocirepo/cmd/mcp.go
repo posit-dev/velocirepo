@@ -10,15 +10,15 @@ import (
 	"syscall"
 	"time"
 
-	mcpinternal "github.com/posit-dev/velocirepo/internal/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	mcpinternal "github.com/posit-dev/velocirepo/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
 func mcpCmd() *cobra.Command {
 	var (
-		httpAddr      string
-		readOnly      bool
+		httpAddr string
+		readOnly bool
 	)
 
 	cmd := &cobra.Command{
