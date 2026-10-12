@@ -27,11 +27,13 @@ runs:
       shell: bash
       env:
         VELOCIREPO_VERSION_INPUT: ${{ inputs.version }}
+        # VELOCIREPO_BASE_URL can be overridden in tests to point at a local server.
+        VELOCIREPO_BASE_URL: ${{ env.VELOCIREPO_BASE_URL || 'https://github.com' }}
       run: |
         set -euo pipefail
 
         if [ "$VELOCIREPO_VERSION_INPUT" = "latest" ]; then
-          VERSION=$(curl -sSL -o /dev/null -w '%{url_effective}' https://github.com/posit-dev/velocirepo/releases/latest | grep -o '[^/]*$' | sed 's/^v//')
+          VERSION=$(curl -sSL -o /dev/null -w '%{url_effective}' "${VELOCIREPO_BASE_URL}/posit-dev/velocirepo/releases/latest" | grep -o '[^/]*$' | sed 's/^v//')
         else
           if [[ ! "$VELOCIREPO_VERSION_INPUT" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid velocirepo version. Use 'latest' or a semantic version like v1.2.3." >&2
@@ -43,8 +45,42 @@ runs:
           echo "::error::Could not resolve a valid velocirepo version." >&2
           exit 1
         fi
-        URL="https://github.com/posit-dev/velocirepo/releases/download/v${VERSION}/velocirepo_${VERSION}_linux_amd64.tar.gz"
-        curl -sSL "$URL" | tar xz -C /usr/local/bin velocirepo
+
+        ARTIFACT="velocirepo_${VERSION}_linux_amd64.tar.gz"
+        URL="${VELOCIREPO_BASE_URL}/posit-dev/velocirepo/releases/download/v${VERSION}/${ARTIFACT}"
+        SUMS_URL="${VELOCIREPO_BASE_URL}/posit-dev/velocirepo/releases/download/v${VERSION}/SHA256SUMS"
+
+        TMPDIR=$(mktemp -d)
+        trap "rm -rf '$TMPDIR'" EXIT
+
+        ARCHIVE="${TMPDIR}/${ARTIFACT}"
+        SUMSFILE="${TMPDIR}/SHA256SUMS"
+
+        if ! curl -sSfL "$URL" -o "$ARCHIVE"; then
+          echo "::error::Download failed: ${URL}" >&2
+          exit 1
+        fi
+
+        if ! curl -sSfL "$SUMS_URL" -o "$SUMSFILE"; then
+          echo "::error::Could not download SHA256SUMS from ${SUMS_URL}" >&2
+          exit 1
+        fi
+
+        EXPECTED=$(awk -v a="$ARTIFACT" '$2 == a {print $1}' "$SUMSFILE")
+        if [ -z "$EXPECTED" ]; then
+          echo "::error::No checksum found for ${ARTIFACT} in SHA256SUMS" >&2
+          exit 1
+        fi
+
+        ACTUAL=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+        if [ "$ACTUAL" != "$EXPECTED" ]; then
+          echo "::error::Checksum mismatch for ${ARTIFACT}" >&2
+          echo "  expected: ${EXPECTED}" >&2
+          echo "  actual:   ${ACTUAL}" >&2
+          exit 1
+        fi
+
+        tar xz -C /usr/local/bin -f "$ARCHIVE" velocirepo
 
     - name: Print version
       shell: bash
