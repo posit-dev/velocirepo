@@ -181,7 +181,7 @@ func createMetricsView(db *sql.DB, absDir string) error {
 }
 
 func metricsViewSQL(absDir string) string {
-	glob := filepath.ToSlash(filepath.Join(absDir, "metrics", "*", "*", "*.jsonl"))
+	glob := filepath.ToSlash(filepath.Join(absDir, "metrics", "*", "*", dataFileGlob))
 
 	const eventsAgg = `SELECT
 			project,
@@ -337,7 +337,7 @@ func createEmptyMetricsView(db *sql.DB) error {
 }
 
 func createEventsView(db *sql.DB, absDir string) error {
-	glob := filepath.ToSlash(filepath.Join(absDir, "events", "*", "*", "*.jsonl"))
+	glob := filepath.ToSlash(filepath.Join(absDir, "events", "*", "*", dataFileGlob))
 
 	if !globHasMatches(glob) {
 		slog.Debug("no event files found, creating empty view")
@@ -377,7 +377,7 @@ func createEmptyEventsView(db *sql.DB) error {
 }
 
 func createContentView(db *sql.DB, absDir string) error {
-	glob := filepath.ToSlash(filepath.Join(absDir, ContentDataDir, "*", "*", "*.jsonl"))
+	glob := filepath.ToSlash(filepath.Join(absDir, ContentDataDir, "*", "*", dataFileGlob))
 
 	if !globHasMatches(glob) {
 		slog.Debug("no content files found, creating empty view")
@@ -531,7 +531,7 @@ func createEmptyIndicatorsView(db *sql.DB) error {
 }
 
 func createFetchLogView(db *sql.DB, absDir string) error {
-	glob := filepath.ToSlash(filepath.Join(absDir, LogDir, "*.jsonl"))
+	glob := filepath.ToSlash(filepath.Join(absDir, LogDir, dataFileGlob))
 
 	if !globHasMatches(glob) {
 		slog.Debug("no fetch log files found, creating empty view")

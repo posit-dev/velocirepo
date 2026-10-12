@@ -206,7 +206,7 @@ func ScanProjectDir(dir string) DirStats {
 
 	var stats DirStats
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())

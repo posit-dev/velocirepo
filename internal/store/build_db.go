@@ -95,7 +95,7 @@ func BuildDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDef) 
 }
 
 func createEventsViewRelative(db *sql.DB, absDir string) error {
-	glob := filepath.ToSlash(filepath.Join(absDir, "events", "*", "*", "*.jsonl"))
+	glob := filepath.ToSlash(filepath.Join(absDir, "events", "*", "*", dataFileGlob))
 
 	if !globHasMatches(glob) {
 		slog.Debug("no event files found, creating empty view")
@@ -133,13 +133,19 @@ func createMetricsViewRelative(db *sql.DB, absDir string) error {
 	return nil
 }
 
+// dataFileGlob matches data files in DuckDB globs. Hidden files are skipped
+// so that temp files left by an interrupted write are never read as data.
+const dataFileGlob = "[!.]*.jsonl"
+
+// globHasMatches reports whether a DuckDB glob matches any file. Go's
+// filepath.Glob writes a negated character class as [^...], DuckDB as [!...].
 func globHasMatches(pattern string) bool {
-	matches, err := filepath.Glob(pattern)
+	matches, err := filepath.Glob(strings.ReplaceAll(pattern, "[!", "[^"))
 	return err == nil && len(matches) > 0
 }
 
 func createContentViewRelative(db *sql.DB, absDir string) error {
-	glob := filepath.ToSlash(filepath.Join(absDir, ContentDataDir, "*", "*", "*.jsonl"))
+	glob := filepath.ToSlash(filepath.Join(absDir, ContentDataDir, "*", "*", dataFileGlob))
 
 	if !globHasMatches(glob) {
 		slog.Debug("no content files found, creating empty view")

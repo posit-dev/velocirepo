@@ -40,8 +40,10 @@ func writeJSONLLinesAtomic(path string, lines [][]byte) error {
 }
 
 func writeJSONLWith(path string, write func(*bufio.Writer) error) error {
+	// The temp file is hidden and doesn't end in .jsonl, so a leftover from an
+	// interrupted write is never read as data.
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".tmp-*.jsonl")
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp file in %s: %w", dir, err)
 	}
