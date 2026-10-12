@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/posit-dev/velocirepo/internal/dateutil"
 	"github.com/posit-dev/velocirepo/internal/source"
 	"github.com/posit-dev/velocirepo/internal/sourceinfo"
 )
@@ -21,12 +22,15 @@ func SourceCategory(sourceName string) string {
 	return sourceinfo.CategoryDir(sourceName)
 }
 
-// Aggregate concatenates daily→monthly→yearly for all projects. Errors for
-// individual projects are logged but not propagated; category directories that
-// don't exist yet are silently skipped.
+// Aggregate concatenates daily→monthly→yearly for all projects. A period is
+// compacted once it has ended and its last day has been stored, so a day that
+// is still missing (a failed fetch, a source that publishes late) is fetched by
+// the next run instead of being treated as done. Errors for individual projects
+// are logged but not propagated; category directories that don't exist yet are
+// silently skipped.
 func Aggregate(dataDir string, now time.Time) error {
-	aggregateCategory(filepath.Join(dataDir, MetricsDir), now, recordAggregateSpec())
-	aggregateCategory(filepath.Join(dataDir, EventsDir), now, eventAggregateSpec())
+	aggregateCategory(dataDir, MetricsDir, now, recordAggregateSpec())
+	aggregateCategory(dataDir, EventsDir, now, eventAggregateSpec())
 	return nil
 }
 
@@ -66,7 +70,8 @@ func eventAggregateSpec() aggregateSpec[source.Event] {
 	}
 }
 
-func aggregateCategory[T any](categoryDir string, now time.Time, spec aggregateSpec[T]) {
+func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggregateSpec[T]) {
+	categoryDir := filepath.Join(dataDir, category)
 	sourceDirs, err := os.ReadDir(categoryDir)
 	if err != nil {
 		return
@@ -88,26 +93,36 @@ func aggregateCategory[T any](categoryDir string, now time.Time, spec aggregateS
 				continue
 			}
 			projPath := filepath.Join(sourcePath, projEntry.Name())
-			if err := aggregateProject(projPath, now, spec); err != nil {
+			watermarkPath := WatermarkFilePath(dataDir, sourceEntry.Name(), projEntry.Name())
+			if err := aggregateProject(projPath, watermarkPath, now, spec); err != nil {
 				slog.Warn("concatenation failed", "path", projPath, "error", err)
 			}
 		}
 	}
 }
 
-func aggregateProject[T any](projDir string, now time.Time, spec aggregateSpec[T]) error {
-	if err := aggregateDailyToMonthly(projDir, now, spec); err != nil {
+// aggregateProject compacts the complete months and years of one project
+// directory. A period counts as complete once it has ended and the project's
+// data has been stored through its last day. That keeps LastDate's reading of
+// a period file as "fetched through the period's last day" true, and leaves a
+// period with a missing last day as daily files until the next fetch fills it.
+func aggregateProject[T any](projDir, watermarkPath string, now time.Time, spec aggregateSpec[T]) error {
+	through, err := latestStoredDate(projDir, watermarkPath)
+	if err != nil {
 		return err
 	}
-	return aggregateMonthlyToYearly(projDir, now, spec)
-}
 
-func aggregateDailyToMonthly[T any](projDir string, now time.Time, spec aggregateSpec[T]) error {
-	return aggregateFiles(projDir, now, spec, groupDailyFile, isMonthComplete, "month", "daily to monthly")
-}
+	monthComplete := func(month string, now time.Time) bool {
+		return isMonthComplete(month, now) && through >= dateutil.LastDayOfMonth(month)
+	}
+	if err := aggregateFiles(projDir, now, spec, groupDailyFile, monthComplete, "month", "daily to monthly"); err != nil {
+		return err
+	}
 
-func aggregateMonthlyToYearly[T any](projDir string, now time.Time, spec aggregateSpec[T]) error {
-	return aggregateFiles(projDir, now, spec, groupMonthlyFile, isYearComplete, "year", "monthly to yearly")
+	yearComplete := func(year string, now time.Time) bool {
+		return isYearComplete(year, now) && through >= year+"-12-31"
+	}
+	return aggregateFiles(projDir, now, spec, groupMonthlyFile, yearComplete, "year", "monthly to yearly")
 }
 
 func aggregateFiles[T any](

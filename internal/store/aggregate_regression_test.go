@@ -23,6 +23,9 @@ func readProjectRecords(t *testing.T, dataDir, sourceName, projectID string) []s
 	t.Helper()
 	dir := MetricsProjectDir(dataDir, sourceName, projectID)
 	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +67,9 @@ func readProjectEvents(t *testing.T, dataDir, sourceName, projectID string) []so
 func projectFileNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
