@@ -4,6 +4,7 @@ package store
 // docs/review/2026-10-correctness-review.md. Fails at deabcc6.
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -109,5 +110,96 @@ func TestFixDateMismatchesRegroupsEventsOutsideDefaultDataDir(t *testing.T) {
 	}
 	if len(moved) != 1 || moved[0].User != "bob" || moved[0].Type != "star" {
 		t.Errorf("2025-06-02 = %+v, want bob's star", moved)
+	}
+}
+
+func TestValidateReportsAndMergesPeriodOverlaps(t *testing.T) {
+	dataDir := t.TempDir()
+	rec := func(date string, value int64) source.Record {
+		return source.Record{Source: "pypi", Metric: "daily_downloads", ProjectID: "proj", Target: "pkg", Date: date, Value: value}
+	}
+	writeTestRecords(t, metricsPath(dataDir, "pypi", "proj", "2024"), rec("2024-11-30", 1), rec("2024-12-15", 2))
+	writeTestRecords(t, metricsPath(dataDir, "pypi", "proj", "2024-12"), rec("2024-12-15", 20), rec("2024-12-16", 21))
+	writeTestRecords(t, metricsPath(dataDir, "pypi", "proj", "2025-01"), rec("2025-01-14", 3), rec("2025-01-15", 4))
+	writeTestRecords(t, metricsPath(dataDir, "pypi", "proj", "2025-01-15"), rec("2025-01-15", 40))
+	star := source.Event{Source: "github", Type: "star", ProjectID: "proj", Target: "org/repo", User: "alice"}
+	first, late := star, star
+	first.Datetime, late.Datetime, late.User = "2025-01-10T10:00:00Z", "2025-01-20T10:00:00Z", "bob"
+	writeTestEvents(t, eventsPath(dataDir, "github", "proj", "2025-01"), first)
+	writeTestEvents(t, eventsPath(dataDir, "github", "proj", "2025-01-20"), late)
+
+	result, err := ValidateData(dataDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overlaps []string
+	for _, issue := range result.Issues {
+		if issue.Type == IssuePeriodOverlap {
+			overlaps = append(overlaps, issue.Path)
+		}
+	}
+	if len(overlaps) != 3 {
+		t.Fatalf("overlaps = %v, want 2024, 2025-01 (metrics) and 2025-01 (events)", overlaps)
+	}
+
+	if fix := FixPeriodOverlaps(overlaps); len(fix.Errors) > 0 || fix.Fixed != 3 {
+		t.Fatalf("FixPeriodOverlaps = %+v, want 3 files merged", fix)
+	}
+	if names := projectFileNames(t, MetricsProjectDir(dataDir, "pypi", "proj")); len(names) != 2 || names[0] != "2024.jsonl" || names[1] != "2025-01.jsonl" {
+		t.Fatalf("metrics files = %v, want 2024.jsonl and 2025-01.jsonl", names)
+	}
+	values := map[string]int64{}
+	for _, r := range readProjectRecords(t, dataDir, "pypi", "proj") {
+		values[r.Date] = r.Value
+	}
+	want := map[string]int64{"2024-11-30": 1, "2024-12-15": 20, "2024-12-16": 21, "2025-01-14": 3, "2025-01-15": 40}
+	for date, v := range want {
+		if values[date] != v {
+			t.Errorf("%s = %d, want %d (newer files win)", date, values[date], v)
+		}
+	}
+	if got := len(readProjectEvents(t, dataDir, "github", "proj")); got != 2 {
+		t.Errorf("got %d events after merging, want 2", got)
+	}
+}
+
+func TestValidateReportsLeftoverTempFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	writeTestRecords(t, metricsPath(dataDir, "pypi", "proj", "2025-01-01"),
+		source.Record{Source: "pypi", Metric: "daily_downloads", ProjectID: "proj", Date: "2025-01-01", Value: 1})
+	temps := []string{
+		filepath.Join(MetricsProjectDir(dataDir, "pypi", "proj"), ".tmp-123.jsonl"),
+		filepath.Join(MetricsProjectDir(dataDir, "pypi", "proj"), ".2025-01-02.jsonl.456.tmp"),
+		filepath.Join(EventsProjectDir(dataDir, "github", "proj"), ".tmp-789.jsonl"),
+		filepath.Join(ContentProjectDir(dataDir, "rss", "proj"), ".posts.jsonl.1.tmp"),
+	}
+	for _, path := range temps {
+		writeTestRaw(t, path, []string{`{}`})
+	}
+
+	result, err := ValidateData(dataDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, issue := range result.Issues {
+		switch issue.Type {
+		case IssueLeftoverTempFile:
+			found = append(found, issue.Path)
+		case IssueUnexpectedFile:
+			t.Errorf("temp file reported as unexpected: %s", issue.Path)
+		}
+	}
+	if len(found) != len(temps) {
+		t.Fatalf("leftover temp files = %v, want %d", found, len(temps))
+	}
+
+	if fix := FixLeftoverTempFiles(found); len(fix.Errors) > 0 || fix.Fixed != len(temps) {
+		t.Fatalf("FixLeftoverTempFiles = %+v", fix)
+	}
+	for _, path := range temps {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s still exists", path)
+		}
 	}
 }

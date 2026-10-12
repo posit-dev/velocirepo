@@ -32,6 +32,8 @@ const (
 	IssueSourceMismatch
 	IssueDeprecatedMetric
 	IssueProjectMismatch
+	IssuePeriodOverlap
+	IssueLeftoverTempFile
 )
 
 func (t IssueType) String() string {
@@ -58,6 +60,10 @@ func (t IssueType) String() string {
 		return "deprecated metric"
 	case IssueProjectMismatch:
 		return "project mismatch"
+	case IssuePeriodOverlap:
+		return "period overlap"
+	case IssueLeftoverTempFile:
+		return "leftover temp file"
 	default:
 		return "unknown"
 	}
@@ -154,6 +160,11 @@ func validateRecordsDir(dir, sourceName, projectID string, result *ValidationRes
 		}
 		path := filepath.Join(dir, name)
 
+		if isLeftoverTempFile(name) {
+			result.Issues = append(result.Issues, leftoverTempFileIssue(path))
+			continue
+		}
+
 		fileDateRange := extractDateRange(name)
 		if fileDateRange == "" {
 			result.Issues = append(result.Issues, Issue{
@@ -167,6 +178,7 @@ func validateRecordsDir(dir, sourceName, projectID string, result *ValidationRes
 
 		validateRecordsFile(path, sourceName, projectID, fileDateRange, result)
 	}
+	reportPeriodOverlaps(dir, entries, result)
 }
 
 // lineValidator parses a single JSONL line and returns:
@@ -295,6 +307,11 @@ func validateEventsDir(dir string, result *ValidationResult) {
 		name := entry.Name()
 		path := filepath.Join(dir, name)
 
+		if isLeftoverTempFile(name) {
+			result.Issues = append(result.Issues, leftoverTempFileIssue(path))
+			continue
+		}
+
 		fileDateRange := extractDateRange(name)
 		if fileDateRange == "" {
 			result.Issues = append(result.Issues, Issue{
@@ -307,6 +324,67 @@ func validateEventsDir(dir string, result *ValidationResult) {
 		}
 
 		validateEventsFile(path, fileDateRange, result)
+	}
+	reportPeriodOverlaps(dir, entries, result)
+}
+
+// isLeftoverTempFile reports whether name is a temp file left by an
+// interrupted atomic write: ".<target>.<random>.tmp", or ".tmp-<random>.jsonl"
+// from versions before that naming.
+func isLeftoverTempFile(name string) bool {
+	if !strings.HasPrefix(name, ".") {
+		return false
+	}
+	return strings.HasSuffix(name, ".tmp") || (strings.HasPrefix(name, ".tmp-") && strings.HasSuffix(name, ".jsonl"))
+}
+
+func leftoverTempFileIssue(path string) Issue {
+	return Issue{
+		Type:    IssueLeftoverTempFile,
+		Path:    path,
+		Message: "temp file left by an interrupted write",
+		Fixable: true,
+	}
+}
+
+// reportPeriodOverlaps flags monthly files that still have daily files next
+// to them, and yearly files that still have monthly files. Every query counts
+// such data twice until it is merged.
+func reportPeriodOverlaps(dir string, entries []os.DirEntry, result *ValidationResult) {
+	periods := make(map[string]bool)
+	for _, e := range entries {
+		if m := monthlyPattern.FindStringSubmatch(e.Name()); m != nil {
+			periods[m[1]] = true
+		} else if m := yearlyPattern.FindStringSubmatch(e.Name()); m != nil {
+			periods[m[1]] = true
+		}
+	}
+
+	inner := make(map[string]int)
+	for _, e := range entries {
+		if group, ok := groupDailyFile(e.Name()); ok && periods[group] {
+			inner[group]++
+		} else if group, ok := groupMonthlyFile(e.Name()); ok && periods[group] {
+			inner[group]++
+		}
+	}
+
+	groups := make([]string, 0, len(inner))
+	for group := range inner {
+		groups = append(groups, group)
+	}
+	sort.Strings(groups)
+	for _, group := range groups {
+		kind := "daily"
+		if len(group) == len("2006") {
+			kind = "monthly"
+		}
+		result.Issues = append(result.Issues, Issue{
+			Type:    IssuePeriodOverlap,
+			Path:    filepath.Join(dir, group+".jsonl"),
+			Message: fmt.Sprintf("%d %s file(s) hold data that also belongs in %s.jsonl", inner[group], kind, group),
+			Fixable: true,
+		})
 	}
 }
 
@@ -432,6 +510,69 @@ func FixDateMismatches(paths []string) *FixResult {
 			result.Errors = append(result.Errors, fmt.Errorf("%s: %w", path, err))
 		} else {
 			result.Fixed += n
+		}
+	}
+	return result
+}
+
+// FixPeriodOverlaps merges daily files into the monthly file next to them and
+// monthly files into the yearly file next to them, the same way compaction
+// merges late data. paths are the period files reported by ValidateData.
+func FixPeriodOverlaps(paths []string) *FixResult {
+	result := &FixResult{}
+	dirs := make(map[string]string)
+	for _, path := range paths {
+		dirs[filepath.Dir(path)] = dataCategory(path)
+	}
+	for dir, category := range dirs {
+		before, err := os.ReadDir(dir)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			continue
+		}
+		switch category {
+		case MetricsDir:
+			err = mergeOverlappingPeriods(dir, recordAggregateSpec())
+		case EventsDir:
+			err = mergeOverlappingPeriods(dir, eventAggregateSpec())
+		default:
+			err = fmt.Errorf("not a metrics or events directory")
+		}
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("%s: %w", dir, err))
+			continue
+		}
+		after, err := os.ReadDir(dir)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			continue
+		}
+		result.Fixed += len(before) - len(after)
+	}
+	return result
+}
+
+// mergeOverlappingPeriods folds daily files into an existing monthly file and
+// monthly files into an existing yearly file.
+func mergeOverlappingPeriods[T any](dir string, spec aggregateSpec[T]) error {
+	periodExists := func(group string, _ time.Time) bool {
+		_, err := os.Stat(filepath.Join(dir, group+".jsonl"))
+		return err == nil
+	}
+	if err := aggregateFiles(dir, time.Time{}, spec, groupDailyFile, periodExists, "month", "daily into monthly"); err != nil {
+		return err
+	}
+	return aggregateFiles(dir, time.Time{}, spec, groupMonthlyFile, periodExists, "year", "monthly into yearly")
+}
+
+// FixLeftoverTempFiles removes temp files left by interrupted writes.
+func FixLeftoverTempFiles(paths []string) *FixResult {
+	result := &FixResult{}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			result.Errors = append(result.Errors, err)
+		} else {
+			result.Fixed++
 		}
 	}
 	return result
@@ -982,6 +1123,11 @@ func validateContentDir(dir, sourceName, projectID string, result *ValidationRes
 		}
 		name := entry.Name()
 		path := filepath.Join(dir, name)
+
+		if isLeftoverTempFile(name) {
+			result.Issues = append(result.Issues, leftoverTempFileIssue(path))
+			continue
+		}
 
 		if !strings.HasSuffix(name, ".jsonl") {
 			result.Issues = append(result.Issues, Issue{
