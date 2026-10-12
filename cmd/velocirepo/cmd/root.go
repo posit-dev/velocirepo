@@ -181,7 +181,10 @@ func isCompletionCmd(cmd *cobra.Command) bool {
 }
 
 func setupLogging() {
-	level := slog.LevelError + 1 // suppress all by default
+	// Warnings report failures that don't stop the command (a project that
+	// couldn't be compacted, content that couldn't be written), so they are
+	// shown by default.
+	level := slog.LevelWarn
 	if verbose {
 		level = slog.LevelDebug
 	}

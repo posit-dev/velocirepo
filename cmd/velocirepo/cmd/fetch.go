@@ -93,6 +93,45 @@ func renderFetchResults(results []fetch.Result) {
 	}
 }
 
+// finishFetch reports a fetch run and returns the error the command exits
+// with. Whatever was fetched is logged, summarised and loaded into the
+// database first, so a partial failure keeps the data of the jobs that
+// succeeded while the exit code still shows that something went wrong.
+func finishFetch(opts fetch.Options, results []fetch.Result, fetchErr error, command string) error {
+	renderFetchResults(results)
+	writeFetchLog(results, command)
+
+	if opts.Stats != nil {
+		ui.FetchSummary(ui.FetchStats{
+			Elapsed:      opts.Stats.Elapsed(),
+			Records:      opts.Stats.Records,
+			FilesWritten: opts.Stats.FilesWritten,
+			APICalls:     opts.Stats.APICalls,
+			Succeeded:    opts.Stats.Succeeded,
+			Skipped:      opts.Stats.Skipped,
+			Failed:       opts.Stats.Failed,
+		})
+	}
+
+	if len(results) > 0 {
+		rebuildDB()
+	}
+
+	if fetchErr != nil {
+		return fetchErr
+	}
+	failed := 0
+	for _, r := range results {
+		if r.Error != "" {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d fetch job(s) failed", failed)
+	}
+	return nil
+}
+
 func writeFetchLog(results []fetch.Result, command string) {
 	if len(results) == 0 {
 		return
@@ -159,26 +198,7 @@ func makeFetchCmd(def fetchSourceDef) *cobra.Command {
 			ui.FetchPlan(1, projects, projects)
 
 			results, err := def.fn(cmd.Context(), cfg, fetch.TokensFromEnv(), opts)
-			renderFetchResults(results)
-			writeFetchLog(results, def.use)
-			if err != nil {
-				return err
-			}
-
-			if opts.Stats != nil {
-				ui.FetchSummary(ui.FetchStats{
-					Elapsed:      opts.Stats.Elapsed(),
-					Records:      opts.Stats.Records,
-					FilesWritten: opts.Stats.FilesWritten,
-					APICalls:     opts.Stats.APICalls,
-					Succeeded:    opts.Stats.Succeeded,
-					Skipped:      opts.Stats.Skipped,
-					Failed:       opts.Stats.Failed,
-				})
-			}
-
-			rebuildDB()
-			return nil
+			return finishFetch(opts, results, err, def.use)
 		},
 	}
 	addFetchFlags(cmd)
