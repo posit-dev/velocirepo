@@ -97,12 +97,23 @@ func resolveStartDate(dataDir, sourceName, projectID, startDateStr string, now t
 	if sourceName == "github-traffic" {
 		earliest := now.AddDate(0, 0, -14).Truncate(24 * time.Hour)
 		if start.Before(earliest) {
+			if !last.IsZero() {
+				slog.Warn("github traffic only covers the last 14 days; earlier days can no longer be fetched",
+					"project", projectID, "from", dateutil.FormatDate(start), "to", dateutil.FormatDate(earliest.AddDate(0, 0, -1)))
+			}
 			start = earliest
 		}
 	}
 
 	return start, nil
 }
+
+// settleDays delays the default end date for sources whose days don't end at
+// UTC midnight. Plausible reports days in the site's time zone, so at the
+// 01:00 UTC run "yesterday" is still in progress for sites in the Americas and
+// a partial value would be stored for good. One more day is complete in every
+// time zone.
+var settleDays = map[string]int{"plausible": 1}
 
 func filterProjects(projects map[string]config.Project, projectID string) map[string]config.Project {
 	if projectID == "" {
@@ -183,6 +194,16 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	if err != nil {
 		return nil, fmt.Errorf("parse end date: %w", err)
 	}
+	if opts.StartDate != "" {
+		startDate, err := dateutil.ParseDate(opts.StartDate)
+		if err != nil {
+			return nil, fmt.Errorf("parse start date: %w", err)
+		}
+		if startDate.After(endDate) {
+			return nil, fmt.Errorf("start date %s is after end date %s", opts.StartDate, dateutil.FormatDate(endDate))
+		}
+	}
+	defaultEnd := opts.EndDate == "" && (cfg.Settings.EndDate == "" || cfg.Settings.EndDate == "yesterday")
 
 	dataDir := cfg.DataDir()
 	for i := range jobs {
@@ -202,8 +223,12 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 
 	for _, job := range jobs {
 		job := job
+		jobEnd := endDate
+		if defaultEnd {
+			jobEnd = endDate.AddDate(0, 0, -settleDays[job.sourceName])
+		}
 		g.Go(func() error {
-			resultsCh <- runJob(gctx, dataDir, endDate, job)
+			resultsCh <- runJob(gctx, dataDir, jobEnd, job)
 			return nil
 		})
 	}
