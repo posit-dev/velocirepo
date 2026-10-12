@@ -27,13 +27,11 @@ runs:
       shell: bash
       env:
         VELOCIREPO_VERSION_INPUT: ${{ inputs.version }}
-        # VELOCIREPO_BASE_URL can be overridden in tests to point at a local server.
-        VELOCIREPO_BASE_URL: ${{ env.VELOCIREPO_BASE_URL || 'https://github.com' }}
       run: |
         set -euo pipefail
 
         if [ "$VELOCIREPO_VERSION_INPUT" = "latest" ]; then
-          VERSION=$(curl -sSL -o /dev/null -w '%{url_effective}' "${VELOCIREPO_BASE_URL}/posit-dev/velocirepo/releases/latest" | grep -o '[^/]*$' | sed 's/^v//')
+          VERSION=$(curl -sSL -o /dev/null -w '%{url_effective}' https://github.com/posit-dev/velocirepo/releases/latest | grep -o '[^/]*$' | sed 's/^v//')
         else
           if [[ ! "$VELOCIREPO_VERSION_INPUT" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid velocirepo version. Use 'latest' or a semantic version like v1.2.3." >&2
@@ -47,14 +45,14 @@ runs:
         fi
 
         ARTIFACT="velocirepo_${VERSION}_linux_amd64.tar.gz"
-        URL="${VELOCIREPO_BASE_URL}/posit-dev/velocirepo/releases/download/v${VERSION}/${ARTIFACT}"
-        SUMS_URL="${VELOCIREPO_BASE_URL}/posit-dev/velocirepo/releases/download/v${VERSION}/SHA256SUMS"
+        URL="https://github.com/posit-dev/velocirepo/releases/download/v${VERSION}/${ARTIFACT}"
+        SUMS_URL="https://github.com/posit-dev/velocirepo/releases/download/v${VERSION}/SHA256SUMS"
 
-        TMPDIR=$(mktemp -d)
-        trap "rm -rf '$TMPDIR'" EXIT
+        WORKDIR=$(mktemp -d)
+        trap "rm -rf '$WORKDIR'" EXIT
 
-        ARCHIVE="${TMPDIR}/${ARTIFACT}"
-        SUMSFILE="${TMPDIR}/SHA256SUMS"
+        ARCHIVE="${WORKDIR}/${ARTIFACT}"
+        SUMSFILE="${WORKDIR}/SHA256SUMS"
 
         if ! curl -sSfL "$URL" -o "$ARCHIVE"; then
           echo "::error::Download failed: ${URL}" >&2

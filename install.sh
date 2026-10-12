@@ -70,12 +70,12 @@ echo "  from: ${URL}" >&2
 
 mkdir -p "$INSTALL_DIR"
 
-TMPDIR=$(mktemp -d)
+WORKDIR=$(mktemp -d)
 # shellcheck disable=SC2064
-trap "rm -rf '$TMPDIR'" EXIT
+trap "rm -rf '$WORKDIR'" EXIT
 
-ARCHIVE="${TMPDIR}/${ARTIFACT}"
-SUMSFILE="${TMPDIR}/SHA256SUMS"
+ARCHIVE="${WORKDIR}/${ARTIFACT}"
+SUMSFILE="${WORKDIR}/SHA256SUMS"
 
 if ! curl -sSfL "$URL" -o "$ARCHIVE"; then
     echo "Error: download failed. Check that v${VERSION} exists for ${OS}/${ARCH}." >&2
