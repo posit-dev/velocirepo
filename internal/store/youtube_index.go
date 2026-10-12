@@ -1,7 +1,6 @@
 package store
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 
@@ -16,8 +15,7 @@ func readYouTubeIndex(path string) ([]source.YouTubeIndexEntry, error) {
 	defer func() { _ = f.Close() }()
 
 	var entries []source.YouTubeIndexEntry
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 	for scanner.Scan() {
 		var e source.YouTubeIndexEntry
 		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {

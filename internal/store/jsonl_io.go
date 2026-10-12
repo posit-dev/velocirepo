@@ -132,3 +132,38 @@ func groupBy[T any](items []T, key func(T) string) map[string][]T {
 	}
 	return grouped
 }
+
+// lineReader reads lines like a bufio.Scanner, without its 1 MB token limit:
+// a JSONL line holding a long RSS post can be several megabytes.
+type lineReader struct {
+	r    *bufio.Reader
+	line []byte
+	err  error
+}
+
+func newLineReader(r io.Reader) *lineReader {
+	return &lineReader{r: bufio.NewReader(r)}
+}
+
+// Scan advances to the next line, which Bytes then returns without its line
+// ending. It returns false at the end of the input or on a read error.
+func (l *lineReader) Scan() bool {
+	if l.err != nil {
+		return false
+	}
+	line, err := l.r.ReadBytes('\n')
+	if err != nil && err != io.EOF {
+		l.err = err
+		return false
+	}
+	if len(line) == 0 && err == io.EOF {
+		return false
+	}
+	line = bytes.TrimSuffix(line, []byte("\n"))
+	l.line = bytes.TrimSuffix(line, []byte("\r"))
+	return true
+}
+
+func (l *lineReader) Bytes() []byte { return l.line }
+
+func (l *lineReader) Err() error { return l.err }

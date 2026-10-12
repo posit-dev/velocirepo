@@ -1,7 +1,6 @@
 package store
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -270,8 +269,7 @@ func rewriteEventFields(path string) error {
 
 	var lines [][]byte
 	modified := false
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var record map[string]interface{}
@@ -578,8 +576,7 @@ func migrateEventTagsToExtra(path string) error {
 
 	var lines [][]byte
 	modified := false
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var record map[string]interface{}
@@ -640,8 +637,7 @@ func renameFieldInFile(path, oldName, newName string) error {
 
 	var lines [][]byte
 	modified := false
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var record map[string]interface{}
@@ -685,8 +681,7 @@ func renameMetricsInFile(path string, renames map[string]string) error {
 
 	var lines [][]byte
 	modified := false
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var record map[string]interface{}

@@ -186,8 +186,7 @@ func validateJSONLFile(path, fileDateRange string, result *ValidationResult, val
 
 	result.FilesRead++
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 
 	seen := make(map[string]int)
 	lineNum := 0
@@ -479,8 +478,7 @@ func fixSourceInFile(path string) (int, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 
 	var lines [][]byte
 	fixed := 0
@@ -554,8 +552,7 @@ func fixProjectIDInFile(path string) (int, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 
 	var lines [][]byte
 	fixed := 0
@@ -629,8 +626,7 @@ func fixDeprecatedMetricsInFile(path string) (int, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 
 	var lines [][]byte
 	fixed := 0
@@ -720,8 +716,7 @@ func removeLinesFromFile(path string, badLines []int) error {
 	}
 
 	var kept [][]byte
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++
@@ -1011,8 +1006,7 @@ func validateContentFile(path, sourceName, projectID string, result *ValidationR
 
 	result.FilesRead++
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newLineReader(f)
 
 	seen := make(map[contentKey]int)
 	lineNum := 0
