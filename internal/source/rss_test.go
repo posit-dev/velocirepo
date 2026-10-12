@@ -369,6 +369,87 @@ func TestRSSPluralExtensionCardinality(t *testing.T) {
 	}
 }
 
+// rdfFixture is a realistic RSS 1.0 / RDF feed with two items. Items use
+// rdf:about for identity and dc:date for the publication date (no <guid>,
+// no <pubDate>).
+const rdfFixture = `<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns="http://purl.org/rss/1.0/"
+  xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel rdf:about="https://example.com/">
+    <title>Example RDF Blog</title>
+    <link>https://example.com/</link>
+  </channel>
+  <item rdf:about="https://example.com/posts/hello-world">
+    <title>Hello World</title>
+    <link>https://example.com/posts/hello-world</link>
+    <description>A first post.</description>
+    <dc:date>2024-01-15T10:00:00Z</dc:date>
+  </item>
+  <item rdf:about="https://example.com/posts/second-post">
+    <title>Second Post</title>
+    <link>https://example.com/posts/second-post</link>
+    <description>A second post.</description>
+    <dc:date>2024-02-20T08:30:00Z</dc:date>
+    <dc:creator>Alice</dc:creator>
+  </item>
+</rdf:RDF>`
+
+// TestRSSRDFMapping verifies that RSS 1.0 / RDF feeds are parsed correctly:
+// items are siblings of <channel>, rdf:about is used as the identity, and
+// dc:date flows into Updated.
+func TestRSSRDFMapping(t *testing.T) {
+	srv := serveFeed(t, rdfFixture)
+	r, records := fetchOne(t, srv.URL)
+
+	if len(records) != 1 || records[0].Metric != "total_items" || records[0].Value != 2 {
+		t.Fatalf("unexpected metric records: %+v", records)
+	}
+
+	entries := r.ContentEntries()
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 content entries, got %d", len(entries))
+	}
+
+	e0 := entries[0]
+	if e0.ID != "https://example.com/posts/hello-world" {
+		t.Errorf("entry[0] id = %q, want rdf:about URL", e0.ID)
+	}
+	if e0.Title != "Hello World" {
+		t.Errorf("entry[0] title = %q", e0.Title)
+	}
+	if e0.URL != "https://example.com/posts/hello-world" {
+		t.Errorf("entry[0] url = %q", e0.URL)
+	}
+	if e0.Description != "A first post." {
+		t.Errorf("entry[0] description = %q", e0.Description)
+	}
+	// dc:date lands in UpdatedAt via the rssItem.toFeedItem Extra walk.
+	if e0.UpdatedAt != "2024-01-15T10:00:00Z" {
+		t.Errorf("entry[0] updated_at = %q, want 2024-01-15T10:00:00Z", e0.UpdatedAt)
+	}
+
+	e1 := entries[1]
+	if e1.ID != "https://example.com/posts/second-post" {
+		t.Errorf("entry[1] id = %q", e1.ID)
+	}
+	if e1.Title != "Second Post" {
+		t.Errorf("entry[1] title = %q", e1.Title)
+	}
+	if e1.UpdatedAt != "2024-02-20T08:30:00Z" {
+		t.Errorf("entry[1] updated_at = %q", e1.UpdatedAt)
+	}
+	// dc:creator promoted to authors metadata.
+	authors, ok := e1.Extra["authors"].([]any)
+	if !ok || len(authors) != 1 {
+		t.Fatalf("entry[1] authors = %#v", e1.Extra["authors"])
+	}
+	if authors[0].(map[string]any)["name"] != "Alice" {
+		t.Errorf("entry[1] author = %#v", authors[0])
+	}
+}
+
 func TestRSSFetchError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
