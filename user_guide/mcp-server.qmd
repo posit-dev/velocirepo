@@ -77,6 +77,26 @@ Add to your project's `.mcp.json`:
 | `migrate` | Migrate data to latest schema |
 | `version` | Show version info |
 
+## Query tool limits
+
+The `query` tool wraps every SQL statement in an outer `LIMIT` clause to
+protect against accidentally returning very large result sets.
+
+| Parameter | Behaviour |
+|-----------|-----------|
+| `limit` not set | defaults to **1 000** rows |
+| `limit <= 0` | treated as the default (1 000 rows) |
+| `limit > 10 000` | capped at **10 000** rows |
+
+To retrieve more than 10 000 rows, use the `export` tool, which writes
+Parquet or CSV files without a row limit.
+
+## Export tool restrictions
+
+The `export` tool writes files relative to the project directory (the
+directory that contains `velocirepo.toml`). Absolute paths, `..`
+traversals, and symlinks that escape the project directory are rejected.
+
 ## Example prompts
 
 Once connected, you can ask things like:

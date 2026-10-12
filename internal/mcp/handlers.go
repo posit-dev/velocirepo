@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/posit-dev/velocirepo/internal/badge"
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/fetch"
@@ -19,7 +20,6 @@ import (
 	"github.com/posit-dev/velocirepo/internal/store"
 	"github.com/posit-dev/velocirepo/internal/version"
 	"github.com/posit-dev/velocirepo/internal/views"
-	"github.com/mark3labs/mcp-go/mcp"
 )
 
 type handlers struct {
@@ -601,13 +601,18 @@ func (h *handlers) handleExport(ctx context.Context, req mcp.CallToolRequest) (*
 		return errorResult(err.Error()), nil
 	}
 
+	outDir, err := h.resolveExportDir(directory)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid export directory: %v", err)), nil
+	}
+
 	format := req.GetString("format", "parquet")
 	source := req.GetString("source", "")
 	project := req.GetString("project", "")
 
 	written, err := store.Export(store.ExportOptions{
 		DataDir:    h.cfg.DataDir(),
-		OutDir:     directory,
+		OutDir:     outDir,
 		Format:     format,
 		Source:     source,
 		Project:    project,
@@ -623,7 +628,36 @@ func (h *handlers) handleExport(ctx context.Context, req mcp.CallToolRequest) (*
 		files = append(files, filepath.Base(path))
 	}
 
-	return textResult(fmt.Sprintf("Exported %d files to %s: %s", len(files), directory, strings.Join(files, ", "))), nil
+	return textResult(fmt.Sprintf("Exported %d files to %s: %s", len(files), outDir, strings.Join(files, ", "))), nil
+}
+
+// resolveExportDir resolves and validates an export directory supplied by the
+// MCP caller. Only relative paths that stay inside the project directory
+// (h.cfg.Dir) are accepted; absolute paths, ".." escapes, and symlinks that
+// point outside the project directory are all rejected.
+func (h *handlers) resolveExportDir(directory string) (string, error) {
+	if filepath.IsAbs(directory) {
+		return "", fmt.Errorf("must be a relative path, not an absolute path")
+	}
+	projectDir, err := filepath.Abs(h.cfg.Dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve project directory: %w", err)
+	}
+	resolved := filepath.Clean(filepath.Join(projectDir, directory))
+	// filepath.Clean resolves ".." components, so this catches path traversal.
+	if resolved != projectDir && !strings.HasPrefix(resolved, projectDir+string(filepath.Separator)) {
+		return "", fmt.Errorf("must be inside the project directory")
+	}
+	// Reject symlinks that point outside the project directory.
+	if _, err := os.Lstat(resolved); err == nil {
+		real, err := filepath.EvalSymlinks(resolved)
+		if err == nil {
+			if real != projectDir && !strings.HasPrefix(real, projectDir+string(filepath.Separator)) {
+				return "", fmt.Errorf("resolves via symlink to a path outside the project directory")
+			}
+		}
+	}
+	return resolved, nil
 }
 
 func (h *handlers) handleMigrate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

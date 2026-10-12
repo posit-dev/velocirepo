@@ -90,6 +90,18 @@ func TestPrepareMCPQueryAlwaysAddsOuterLimit(t *testing.T) {
 			limit: -5,
 			want:  "SELECT * FROM (SELECT * FROM metrics) AS velocirepo_mcp_query LIMIT 1000",
 		},
+		{
+			name:  "at maximum is not capped",
+			input: "SELECT * FROM metrics",
+			limit: 10000,
+			want:  "SELECT * FROM (SELECT * FROM metrics) AS velocirepo_mcp_query LIMIT 10000",
+		},
+		{
+			name:  "above maximum is capped",
+			input: "SELECT * FROM metrics",
+			limit: 99999,
+			want:  "SELECT * FROM (SELECT * FROM metrics) AS velocirepo_mcp_query LIMIT 10000",
+		},
 	}
 
 	for _, tt := range tests {
@@ -100,6 +112,30 @@ func TestPrepareMCPQueryAlwaysAddsOuterLimit(t *testing.T) {
 			}
 			if query != tt.want {
 				t.Fatalf("query = %q, want %q", query, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMCPQueryRejectsQueryTableFunctions(t *testing.T) {
+	// query() and query_table() are DuckDB functions that can execute
+	// arbitrary SQL strings, bypassing the guard. They must be forbidden.
+	tests := []struct {
+		query   string
+		wantErr string
+	}{
+		{"SELECT * FROM query('SELECT * FROM metrics')", "query"},
+		{"SELECT * FROM query_table('metrics')", "query_table"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			_, err := validateMCPQuery(tt.query)
+			if err == nil {
+				t.Fatal("validateMCPQuery() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validateMCPQuery() error = %q, want substring %q", err, tt.wantErr)
 			}
 		})
 	}
