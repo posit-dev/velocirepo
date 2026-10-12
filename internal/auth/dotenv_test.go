@@ -49,14 +49,49 @@ func TestUnquoteEnvValue(t *testing.T) {
 		{`"a"`, "a"},
 	}
 	for _, tt := range tests {
-		got := unquoteEnvValue(tt.input)
+		got := UnquoteEnvValue(tt.input)
 		if got != tt.want {
-			t.Errorf("unquoteEnvValue(%q) = %q, want %q", tt.input, got, tt.want)
+			t.Errorf("UnquoteEnvValue(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestQuoteEnvValueRoundTripsNewlines(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"newline\nval", `"newline\nval"`},
+		{"cr\rval", `"cr\rval"`},
+		{"crlf\r\nval", `"crlf\r\nval"`},
+	}
+	for _, tt := range tests {
+		got := quoteEnvValue(tt.input)
+		if got != tt.want {
+			t.Errorf("quoteEnvValue(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestUnquoteEnvValueRoundTripsNewlines(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"newline\nval"`, "newline\nval"},
+		{`"cr\rval"`, "cr\rval"},
+		{`"crlf\r\nval"`, "crlf\r\nval"},
+	}
+	for _, tt := range tests {
+		got := UnquoteEnvValue(tt.input)
+		if got != tt.want {
+			t.Errorf("UnquoteEnvValue(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }
 
 func TestRoundTrip(t *testing.T) {
+	// All values must survive UpsertEnvFile → ReadEnvValue unchanged.
 	values := []string{
 		"simple",
 		"has space",
@@ -66,6 +101,11 @@ func TestRoundTrip(t *testing.T) {
 		"back`tick",
 		"bang!val",
 		"token$foo`bar\"baz",
+		"has#comment",
+		"has=equals",
+		"has'single",
+		"newline\nembedded",
+		"crlf\r\nembedded",
 		"",
 	}
 

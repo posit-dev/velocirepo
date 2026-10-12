@@ -55,7 +55,7 @@ func ReadEnvValue(path, key string) string {
 		if k == key {
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
-				return unquoteEnvValue(parts[1])
+				return UnquoteEnvValue(parts[1])
 			}
 		}
 	}
@@ -90,20 +90,29 @@ func envKey(line string) string {
 }
 
 func quoteEnvValue(val string) string {
-	if strings.ContainsAny(val, " \t#=\"'\\$`!") {
+	// \n and \r are included so that values with embedded newlines or
+	// carriage returns are quoted and escaped, not written as literal line
+	// breaks that would corrupt the file.
+	if strings.ContainsAny(val, " \t\n\r#=\"'\\$`!") {
 		r := strings.NewReplacer(
 			"\\", "\\\\",
 			"\"", "\\\"",
 			"$", "\\$",
 			"`", "\\`",
 			"!", "\\!",
+			"\n", "\\n",
+			"\r", "\\r",
 		)
 		return "\"" + r.Replace(val) + "\""
 	}
 	return val
 }
 
-func unquoteEnvValue(val string) string {
+// UnquoteEnvValue reverses quoteEnvValue: if val is wrapped in double quotes
+// it removes them and unescapes the interior; otherwise it returns val
+// unchanged. It is exported so that commands that read .env files can use
+// the same logic as auth.UpsertEnvFile writes.
+func UnquoteEnvValue(val string) string {
 	if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
 		val = val[1 : len(val)-1]
 		r := strings.NewReplacer(
@@ -111,6 +120,8 @@ func unquoteEnvValue(val string) string {
 			"\\$", "$",
 			"\\`", "`",
 			"\\!", "!",
+			"\\n", "\n",
+			"\\r", "\r",
 			"\\\\", "\\",
 		)
 		return r.Replace(val)

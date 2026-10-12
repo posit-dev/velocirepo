@@ -9,16 +9,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/posit-dev/velocirepo/internal/auth"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
 )
 
 func TestParseEnvFile(t *testing.T) {
 	dir := t.TempDir()
+	// Use double quotes (the format auth.UpsertEnvFile writes) so that the
+	// unescaping path is exercised. Single-quoted values are intentionally
+	// not unquoted: auth.quoteEnvValue only writes double quotes.
 	envPath := writeEnvFile(t, dir, `# comment
 PLAUSIBLE_API_KEY=abc123
 GITHUB_TOKEN="ghp_secret"
-YOUTUBE_TOKEN='yt_key'
+YOUTUBE_TOKEN="yt_key"
 
 EMPTY=
 `)
@@ -39,6 +43,44 @@ EMPTY=
 	}
 	if secrets["EMPTY"] != "" {
 		t.Errorf("EMPTY = %q, want empty", secrets["EMPTY"])
+	}
+}
+
+func TestParseEnvFileRoundTripsSpecialValues(t *testing.T) {
+	// Verify that values written by auth.UpsertEnvFile (which uses
+	// quoteEnvValue) are recovered identically by parseEnvFile (which now
+	// uses auth.UnquoteEnvValue). This is the end-to-end sync-secrets path.
+	values := map[string]string{
+		"DOLLAR":    "token$foo",
+		"QUOTE":     `has"quote`,
+		"BACKTICK":  "back`tick",
+		"BANG":      "bang!val",
+		"BACKSLASH": `back\slash`,
+		"SPACE":     "has space",
+		"HASH":      "has#comment",
+		"EQUALS":    "has=sign",
+		"SINGLE":    "has'single",
+		"NEWLINE":   "line1\nline2",
+		"CRLF":      "line1\r\nline2",
+	}
+
+	dir := t.TempDir()
+	envPath := writeTempFile(t, dir, ".env", "")
+
+	// Write values through auth.UpsertEnvFile, then read through parseEnvFile.
+	if err := auth.UpsertEnvFile(envPath, values); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := parseEnvFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for key, want := range values {
+		if got[key] != want {
+			t.Errorf("key %s: got %q, want %q", key, got[key], want)
+		}
 	}
 }
 
