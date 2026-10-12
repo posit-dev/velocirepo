@@ -26,6 +26,18 @@ type Options struct {
 	Quiet         bool
 	OnResult      ResultCallback
 	Stats         *Stats
+	// Now returns the current time; nil means time.Now. It decides the
+	// default end date, the GitHub traffic window and which periods
+	// compaction may close, so tests can run the orchestrator on a simulated
+	// clock.
+	Now func() time.Time
+}
+
+func (o Options) now() time.Time {
+	if o.Now != nil {
+		return o.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 type Result struct {
@@ -57,17 +69,17 @@ func TokensFromEnv() Tokens {
 	}
 }
 
-func resolveEndDate(cfg *config.Config, endDateStr string) (time.Time, error) {
+func resolveEndDate(cfg *config.Config, endDateStr string, now time.Time) (time.Time, error) {
 	if endDateStr != "" {
 		return dateutil.ParseDate(endDateStr)
 	}
 	if cfg.Settings.EndDate == "yesterday" || cfg.Settings.EndDate == "" {
-		return time.Now().UTC().AddDate(0, 0, -1).Truncate(24 * time.Hour), nil
+		return now.AddDate(0, 0, -1).Truncate(24 * time.Hour), nil
 	}
 	return dateutil.ParseDate(cfg.Settings.EndDate)
 }
 
-func resolveStartDate(dataDir, sourceName, projectID, startDateStr string) (time.Time, error) {
+func resolveStartDate(dataDir, sourceName, projectID, startDateStr string, now time.Time) (time.Time, error) {
 	if startDateStr != "" {
 		return dateutil.ParseDate(startDateStr)
 	}
@@ -83,7 +95,7 @@ func resolveStartDate(dataDir, sourceName, projectID, startDateStr string) (time
 	}
 
 	if sourceName == "github-traffic" {
-		earliest := time.Now().UTC().AddDate(0, 0, -14).Truncate(24 * time.Hour)
+		earliest := now.AddDate(0, 0, -14).Truncate(24 * time.Hour)
 		if start.Before(earliest) {
 			start = earliest
 		}
@@ -167,14 +179,14 @@ func runJobs(ctx context.Context, cfg *config.Config, opts Options, jobs []fetch
 }
 
 func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, jobs []fetchJob, concurrency int, onResult ResultCallback) ([]Result, error) {
-	endDate, err := resolveEndDate(cfg, opts.EndDate)
+	endDate, err := resolveEndDate(cfg, opts.EndDate, opts.now())
 	if err != nil {
 		return nil, fmt.Errorf("parse end date: %w", err)
 	}
 
 	dataDir := cfg.DataDir()
 	for i := range jobs {
-		startDate, err := resolveStartDate(dataDir, jobs[i].sourceName, jobs[i].projectID, opts.StartDate)
+		startDate, err := resolveStartDate(dataDir, jobs[i].sourceName, jobs[i].projectID, opts.StartDate, opts.now())
 		jobs[i].startDate = startDate
 		jobs[i].startErr = err
 	}
@@ -218,7 +230,7 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	<-done
 
 	if !opts.NoConcatenate {
-		if err := store.Aggregate(dataDir, time.Now().UTC()); err != nil {
+		if err := store.Aggregate(dataDir, opts.now()); err != nil {
 			return results, fmt.Errorf("concatenation: %w", err)
 		}
 	}

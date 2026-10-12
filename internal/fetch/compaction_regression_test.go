@@ -2,8 +2,8 @@ package fetch
 
 // End-to-end regression tests for the compaction findings in
 // docs/review/2026-10-correctness-review.md. They drive the real orchestrator
-// (Source → runJobs → resolveStartDate → runMetricJob → store.WriteRecords).
-// All fail at deabcc6.
+// (Source → runJobs → resolveStartDate → runMetricJob → store.WriteRecords →
+// store.Aggregate). All fail at deabcc6.
 
 import (
 	"context"
@@ -139,17 +139,20 @@ func TestFetchBackfillInChunksKeepsAllData(t *testing.T) {
 
 // clockSource simulates an upstream API on a simulated clock. Data for day D
 // is published at D+1 00:00 UTC plus lag. Fetch fails on the run dates in
-// failOn.
+// failOn. Every fetch moves the clock on by runDuration, so the orchestrator's
+// compaction step sees the time at which the run ends.
 type clockSource struct {
-	now       *time.Time
-	firstData time.Time
-	lag       time.Duration
-	failOn    map[string]bool
+	now         *time.Time
+	firstData   time.Time
+	lag         time.Duration
+	failOn      map[string]bool
+	runDuration time.Duration
 }
 
 func (*clockSource) Name() string { return "pypi" }
 
 func (s *clockSource) Fetch(_ context.Context, opts source.FetchOptions) ([]source.Record, error) {
+	defer func() { *s.now = s.now.Add(s.runDuration) }()
 	if s.failOn[s.now.Format("2006-01-02")] {
 		return nil, errors.New("simulated outage")
 	}
@@ -167,27 +170,19 @@ func (s *clockSource) Fetch(_ context.Context, opts source.FetchOptions) ([]sour
 }
 
 // simulateCron runs the orchestrator once per simulated day, the way the
-// generated GitHub workflow does, from first through last. The orchestrator
-// reads the wall clock (resolveEndDate and the Aggregate call in
-// runJobsWithCallback), so the test passes the end date explicitly, disables
-// the built-in compaction, and calls store.Aggregate with the simulated time
-// at which the run would finish.
-func simulateCron(t *testing.T, src *clockSource, first, last time.Time, startOfRun, runDuration time.Duration) string {
+// generated GitHub workflow does, from first through last. Options.Now puts
+// the whole run, including compaction, on the simulated clock.
+func simulateCron(t *testing.T, src *clockSource, first, last time.Time, startOfRun time.Duration) string {
 	t.Helper()
 	dataDir := t.TempDir()
-	now := first
+	var now time.Time
 	src.now = &now
 	for day := first; !day.After(last); day = day.AddDate(0, 0, 1) {
 		now = day.Add(startOfRun)
-		yesterday := now.AddDate(0, 0, -1).Truncate(24 * time.Hour)
 		if _, err := Source(context.Background(), pypiConfig(dataDir), Tokens{}, "pypi",
-			Options{EndDate: yesterday.Format("2006-01-02"), NoConcatenate: true},
+			Options{Now: func() time.Time { return now }},
 			func(string, config.Project) []source.Source { return []source.Source{src} },
 		); err != nil {
-			t.Fatal(err)
-		}
-		now = now.Add(runDuration)
-		if err := store.Aggregate(dataDir, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -206,35 +201,31 @@ func TestSimulatedDailyCronStoresEveryDay(t *testing.T) {
 	checkThrough := last.AddDate(0, 0, -3)
 
 	tests := []struct {
-		name        string
-		src         clockSource
-		startOfRun  time.Duration
-		runDuration time.Duration
+		name       string
+		src        clockSource
+		startOfRun time.Duration
 	}{
 		{
-			name:        "outage on the first of a month",
-			src:         clockSource{failOn: map[string]bool{"2025-03-01": true, "2026-01-01": true}},
-			startOfRun:  time.Hour, // the default "0 1 * * *" cron
-			runDuration: time.Minute,
+			name:       "outage on the first of a month",
+			src:        clockSource{failOn: map[string]bool{"2025-03-01": true, "2026-01-01": true}, runDuration: time.Minute},
+			startOfRun: time.Hour, // the default "0 1 * * *" cron
 		},
 		{
-			name:        "source publishes a day late",
-			src:         clockSource{lag: 6 * time.Hour}, // yesterday is not available at 01:00 UTC
-			startOfRun:  time.Hour,
-			runDuration: time.Minute,
+			name:       "source publishes a day late",
+			src:        clockSource{lag: 6 * time.Hour, runDuration: time.Minute}, // yesterday is not available at 01:00 UTC
+			startOfRun: time.Hour,
 		},
 		{
-			name:        "run crosses midnight UTC",
-			src:         clockSource{},
-			startOfRun:  23*time.Hour + 55*time.Minute,
-			runDuration: 10 * time.Minute,
+			name:       "run crosses midnight UTC",
+			src:        clockSource{runDuration: 10 * time.Minute},
+			startOfRun: 23*time.Hour + 55*time.Minute,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			src := tt.src
 			src.firstData = firstData
-			dataDir := simulateCron(t, &src, first, last, tt.startOfRun, tt.runDuration)
+			dataDir := simulateCron(t, &src, first, last, tt.startOfRun)
 			if missing := missingDates(storedDates(t, dataDir), firstData, checkThrough); len(missing) > 0 {
 				t.Errorf("%d days never stored: %s", len(missing), strings.Join(missing, ", "))
 			}
@@ -247,8 +238,8 @@ func TestSimulatedDailyCronStoresEveryDay(t *testing.T) {
 func TestSimulatedDailyCronHarness(t *testing.T) {
 	first := time.Date(2024, 12, 1, 0, 0, 0, 0, time.UTC)
 	last := time.Date(2025, 3, 10, 0, 0, 0, 0, time.UTC)
-	src := clockSource{firstData: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)}
-	dataDir := simulateCron(t, &src, first, last, time.Hour, time.Minute)
+	src := clockSource{firstData: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC), runDuration: time.Minute}
+	dataDir := simulateCron(t, &src, first, last, time.Hour)
 	if missing := missingDates(storedDates(t, dataDir), src.firstData, last.AddDate(0, 0, -1)); len(missing) > 0 {
 		t.Fatalf("%d days never stored: %s", len(missing), fmt.Sprint(missing))
 	}
