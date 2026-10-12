@@ -61,6 +61,43 @@ func TestGitHubEventsRecordsCloseAndMergeOfItemsOpenedEarlier(t *testing.T) {
 	}
 }
 
+// GitHub returns NOT_FOUND errors next to the data of the other items when an
+// item was deleted or transferred after it was listed. The other counts are
+// kept; any other error still fails the fetch.
+func TestGitHubEventsReactionBatchToleratesMissingItems(t *testing.T) {
+	issues := `{"data":{"repository":{"issues":{"nodes":[
+		{"number":1,"title":"a","body":"","state":"OPEN","createdAt":"2025-06-10T08:00:00Z","updatedAt":"2025-06-10T08:00:00Z","closedAt":null,"url":"u","author":{"login":"alice"},"labels":{"nodes":[]}},
+		{"number":2,"title":"b","body":"","state":"OPEN","createdAt":"2025-06-10T07:00:00Z","updatedAt":"2025-06-10T07:00:00Z","closedAt":null,"url":"u","author":{"login":"bob"},"labels":{"nodes":[]}}
+	],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`
+	run := func(reactions string) (*GitHubEvents, error) {
+		srv := httptest.NewServer(graphqlHandler(map[string]string{
+			"stargazers":       `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+			"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+			"issues":           issues,
+			"pullRequests":     `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+			"repositoryTopics": repoInfoResponse,
+			"reactionCounts":   reactions,
+		}))
+		t.Cleanup(srv.Close)
+		g := &GitHubEvents{Client: srv.Client(), Token: "test-token", Repo: "owner/repo", BaseURL: srv.URL}
+		_, err := g.FetchEvents(context.Background(), juneFetchOptions("proj", 10, 10))
+		return g, err
+	}
+
+	g, err := run(`{"data":{"repository":{"r0":{"reactions":{"totalCount":3},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}},"r1":null}},
+		"errors":[{"type":"NOT_FOUND","path":["repository","r1"],"message":"Could not resolve to an issue or pull request with the number of 2."}]}`)
+	if err != nil {
+		t.Fatalf("FetchEvents failed on a NOT_FOUND item: %v", err)
+	}
+	if records := g.Records(); len(records) != 1 || records[0].Extra["ref"] != "1" || records[0].Value != 3 {
+		t.Errorf("records = %+v, want only #1 with 3 reactions", records)
+	}
+
+	if _, err := run(`{"data":{"repository":{"r0":null,"r1":null}},"errors":[{"type":"FORBIDDEN","message":"Resource not accessible"}]}`); err == nil {
+		t.Error("FetchEvents succeeded despite a FORBIDDEN error")
+	}
+}
+
 // Comments come newest first. Once one predates the window, the rest do too,
 // so paging stops instead of walking every edited old comment.
 func TestGitHubEventsCommentPagingStopsAtTheWindow(t *testing.T) {

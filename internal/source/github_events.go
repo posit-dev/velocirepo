@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -592,6 +593,12 @@ func (g *GitHubEvents) fetchReactionCountBatch(ctx context.Context, owner, repo 
 	query := buildReactionCountQuery(numbers)
 	vars := map[string]interface{}{"owner": owner, "name": repo}
 	resp, err := g.doGraphQL(ctx, query, vars)
+	var gqlErr *graphQLError
+	if errors.As(err, &gqlErr) && gqlErr.onlyNotFound() {
+		// Some items were deleted or transferred after they were listed.
+		// GitHub still returns the counts of the others.
+		resp, err = gqlErr.body, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reaction counts batch: %w", err)
 	}
@@ -632,7 +639,8 @@ func (g *GitHubEvents) fetchReactionCountBatch(ctx context.Context, owner, repo 
 		alias := fmt.Sprintf("r%d", idx)
 		itemRaw, ok := repoObj[alias]
 		if !ok || string(itemRaw) == "null" {
-			results = append(results, reactionCount{number: number, count: 0})
+			// The item no longer exists. Keep its last stored count instead
+			// of recording a drop to zero.
 			continue
 		}
 
@@ -1070,13 +1078,39 @@ func (g *GitHubEvents) doGraphQL(ctx context.Context, query string, vars map[str
 	}
 
 	var errResp struct {
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
+		Errors []graphQLErrorEntry `json:"errors"`
 	}
 	if json.Unmarshal(data, &errResp) == nil && len(errResp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", errResp.Errors[0].Message)
+		return nil, &graphQLError{errors: errResp.Errors, body: data}
 	}
 
 	return data, nil
+}
+
+type graphQLErrorEntry struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// graphQLError is a GraphQL response that carries errors. GitHub can return
+// errors next to partial data; body keeps the response for callers that can
+// use it.
+type graphQLError struct {
+	errors []graphQLErrorEntry
+	body   []byte
+}
+
+func (e *graphQLError) Error() string {
+	return "graphql error: " + e.errors[0].Message
+}
+
+// onlyNotFound reports whether every error is about a node that doesn't
+// exist (anymore).
+func (e *graphQLError) onlyNotFound() bool {
+	for _, entry := range e.errors {
+		if entry.Type != "NOT_FOUND" {
+			return false
+		}
+	}
+	return true
 }
