@@ -19,10 +19,31 @@ func BuildDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDef) 
 
 	dbPath := filepath.Join(absDir, "velocirepo.duckdb")
 
-	_ = os.Remove(dbPath)
-	_ = os.Remove(dbPath + ".wal")
+	// Build into a temp file in the same directory so the final rename is
+	// atomic on the same filesystem. Any failure leaves the previous database
+	// intact.
+	tmpDB, err := os.CreateTemp(absDir, ".velocirepo-build-*.duckdb")
+	if err != nil {
+		return fmt.Errorf("create temp db file: %w", err)
+	}
+	tmpPath := tmpDB.Name()
+	// DuckDB opens the file by path; close the Go handle immediately.
+	if err := tmpDB.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temp db file: %w", err)
+	}
+	// Remove the empty placeholder so DuckDB creates a fresh database.
+	_ = os.Remove(tmpPath)
 
-	db, err := sql.Open("duckdb", dbPath)
+	buildOK := false
+	defer func() {
+		if !buildOK {
+			_ = os.Remove(tmpPath)
+			_ = os.Remove(tmpPath + ".wal")
+		}
+	}()
+
+	db, err := sql.Open("duckdb", tmpPath)
 	if err != nil {
 		return fmt.Errorf("open duckdb file: %w", err)
 	}
@@ -52,6 +73,23 @@ func BuildDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDef) 
 	if err := createIndicatorsView(db, indicators); err != nil {
 		return err
 	}
+
+	// Flush and close before renaming so the DuckDB WAL is committed.
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("close temp db: %w", err)
+	}
+
+	// Replace the previous database atomically.
+	if err := os.Rename(tmpPath, dbPath); err != nil {
+		return fmt.Errorf("replace database: %w", err)
+	}
+	buildOK = true
+
+	// Remove a stale WAL from the previous database (the new file starts
+	// clean). Also clean any WAL that DuckDB may have left for the temp path
+	// before db.Close() checkpointed it.
+	_ = os.Remove(dbPath + ".wal")
+	_ = os.Remove(tmpPath + ".wal")
 
 	return nil
 }
