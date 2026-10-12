@@ -648,11 +648,17 @@ func (h *handlers) resolveExportDir(directory string) (string, error) {
 	if resolved != projectDir && !strings.HasPrefix(resolved, projectDir+string(filepath.Separator)) {
 		return "", fmt.Errorf("must be inside the project directory")
 	}
-	// Reject symlinks that point outside the project directory.
+	// Reject symlinks that point outside the project directory. Compare real
+	// paths on both sides: the project directory itself may be reached through
+	// a symlink (on macOS /tmp and /var are).
 	if _, err := os.Lstat(resolved); err == nil {
 		real, err := filepath.EvalSymlinks(resolved)
 		if err == nil {
-			if real != projectDir && !strings.HasPrefix(real, projectDir+string(filepath.Separator)) {
+			realProject, err := filepath.EvalSymlinks(projectDir)
+			if err != nil {
+				realProject = projectDir
+			}
+			if real != realProject && !strings.HasPrefix(real, realProject+string(filepath.Separator)) {
 				return "", fmt.Errorf("resolves via symlink to a path outside the project directory")
 			}
 		}

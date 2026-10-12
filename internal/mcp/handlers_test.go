@@ -120,3 +120,27 @@ func TestResolveExportDirRejectsSymlinkEscape(t *testing.T) {
 		t.Fatal("expected error for symlink escaping project directory, got nil")
 	}
 }
+
+// The project directory itself may sit behind a symlink (on macOS /tmp and
+// /var are symlinks into /private). An existing export directory inside the
+// project must still be accepted.
+func TestResolveExportDirAcceptsExistingSubdirectoryBehindSymlinkedProject(t *testing.T) {
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	cfgPath := testutil.WriteTempFile(t, linkRoot, "velocirepo.toml", "")
+	if err := os.MkdirAll(filepath.Join(linkRoot, "exports"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handlers{cfg: cfg}
+
+	if _, err := h.resolveExportDir("exports"); err != nil {
+		t.Fatalf("existing export directory inside a symlinked project was rejected: %v", err)
+	}
+}
