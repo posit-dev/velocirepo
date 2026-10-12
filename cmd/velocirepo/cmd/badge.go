@@ -78,10 +78,11 @@ For custom badges, provide --query and --label.`,
 				return fmt.Errorf("unknown badge type %q (available: stars, forks, downloads, pageviews, custom)", badgeType)
 			}
 
-			q := preset.Query
+			projectLit := ""
 			if project != "" {
-				q += fmt.Sprintf(" AND project = %s", store.SQLStringLiteral(project))
+				projectLit = store.SQLStringLiteral(project)
 			}
+			q := preset.BuildQuery(projectLit)
 
 			msg, err := queryBadgeValue(q)
 			if err != nil {
