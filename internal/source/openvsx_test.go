@@ -39,6 +39,13 @@ func TestOpenVSXFetch(t *testing.T) {
 		"total_reviews":   42,
 		"total_ratings":   450,
 	})
+
+	// Snapshot sources must date every record with opts.EndDate.
+	for _, r := range records {
+		if r.Date != "2025-06-01" {
+			t.Errorf("expected date=2025-06-01 (opts.EndDate), got %s for metric %s", r.Date, r.Metric)
+		}
+	}
 }
 
 func TestOpenVSXInvalidExtensionID(t *testing.T) {

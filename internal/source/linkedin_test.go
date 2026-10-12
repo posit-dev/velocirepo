@@ -126,6 +126,13 @@ func TestLinkedInFetchOrganization(t *testing.T) {
 	if entries[1].Extra["article_url"] != "https://example.com/blog" {
 		t.Errorf("unexpected metadata: %v", entries[1].Extra)
 	}
+
+	// Snapshot sources must date every record with opts.EndDate.
+	for _, r := range records {
+		if r.Date != "2025-06-30" {
+			t.Errorf("expected date=2025-06-30 (opts.EndDate), got %s for metric %s", r.Date, r.Metric)
+		}
+	}
 }
 
 func TestLinkedInFetchPagination(t *testing.T) {

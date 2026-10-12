@@ -305,6 +305,11 @@ func TestRSS20Mapping(t *testing.T) {
 	if e.Extra["episode"] != "42" {
 		t.Errorf("episode = %#v", e.Extra["episode"])
 	}
+
+	// The total_items metric record must be dated with opts.EndDate.
+	if records[0].Date != "2026-07-24" {
+		t.Errorf("metric date = %q, want opts.EndDate 2026-07-24", records[0].Date)
+	}
 }
 
 // TestRSSPluralExtensionCardinality guards feed-level pre-scan cardinality:

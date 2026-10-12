@@ -103,6 +103,13 @@ func TestYouTubeFetchChannel(t *testing.T) {
 		}
 	}
 
+	// Snapshot sources (channel and video stats) must date every record with opts.EndDate.
+	for _, r := range records {
+		if r.Date != "2025-06-15" {
+			t.Errorf("expected date=2025-06-15 (opts.EndDate), got %s for metric %s", r.Date, r.Metric)
+		}
+	}
+
 	// Check content entries
 	entries := yt.ContentEntries()
 	if len(entries) != 2 {
