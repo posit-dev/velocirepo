@@ -430,3 +430,60 @@ By design, `go test ./...` on this branch fails in `internal/store`, `internal/f
 - **Config edits** keep comments and unknown keys.
 - **Content upserts** are keyed by `(target, id)`, and the fetch log appends rather than overwrites.
 - **Version strings** are validated in `release.yml` and `action.yml` before use in shell.
+
+## Resolution (branch `fix/correctness-review`)
+
+Every finding above, and three found while fixing them, is resolved on `fix/correctness-review` (plan: [2026-10-fix-plan.md](2026-10-fix-plan.md)). Each fix has a test that fails without it, and all 11 regression tests from Appendix A now pass.
+
+### Found while fixing
+
+| ID | Severity | Finding | Fix |
+|---|---|---|---|
+| A8 | High | `validate-data --fix` rewrote content files as metric records whenever it found a duplicate content id: every title, id and other field was replaced by an empty metric row. The duplicate check was itself wrong (L17), so two feeds sharing an id were enough to trigger it. | `3ab13fb` |
+| A9 | Medium | Twelve readers still used a 1 MB `bufio.Scanner`. A long line (an RSS post) made `validate-data` stop reading the file and report no issues for the rest, made `rename-project` fail, and aborted migrations. | `88e4094` |
+| A10 | Low | GitHub reaction batches recorded items missing from the response (deleted or transferred) as zero reactions, which looks like a drop to zero. | `8b8c748` |
+
+### Resolution by finding
+
+| Finding | Commits | Notes |
+|---|---|---|
+| A1 Compaction overwrites period files | `c0293b0` | Merges into the existing period file; newer files win. |
+| A2 Unfetched days marked as fetched | `2c3d10e`, `1cdb70f`, `b82f985` | A period compacts once its last day is stored (watermarks count). Event jobs record how far they fetched. The orchestrator takes an injectable clock, so the cron simulation runs through it. |
+| A3 Failures invisible | `ca96174`, `e4c08ab`, `5a19590` | `Aggregate` returns errors; fetch commands exit non-zero after storing what succeeded; warnings shown by default; the generated workflow commits anyway. |
+| A4 Re-fetch drops change points | `b4e2be1` | The baseline only counts earlier days. |
+| A5 Leftover temp files | `9c037c7`, `1096106` | Hidden `.tmp` names, views skip hidden files, `validate-data` reports and removes leftovers. |
+| A6 Event files destroyed by `--fix` | `3ab13fb` | Category from the file's position. |
+| A7 Overlaps undetected | `1096106` | Reported; `--fix` merges like compaction. |
+| S1 GitHub closes and merges lost | `5b6da95` | Listed by last update; content and reactions refreshed. Re-fetch history once to recover past events. |
+| S2 Plausible partial days | `be11511` | Default end date one day earlier for Plausible. Still unverified against a live site. |
+| S3 Homebrew dated today | `6960f12` | |
+| C1 Badges render `<nil>` | `13333f2`, `67809dc` | Current metric names, parenthesised filter, `1.5k` formatting for `SUM` results, shared with MCP. |
+| C2 Export content filter | `5a5624c` | |
+| X1 Unverified installers | `bb9ce14`, `a1f0fb9` | |
+| L1 LinkedIn follower errors | `9f9ae54` | |
+| L2 RSS 1.0 / RDF | `9b029c0` | |
+| L3 YouTube durations | `0336d1a` | |
+| L4 Traffic gap silent | `be11511` | Logged as a warning. |
+| L5 GraphQL partial errors | `8b8c748` | Only `NOT_FOUND` in reaction batches is tolerated; other partial errors still fail the job. |
+| L6 Comment paging | `f44e18e` | |
+| L7 LinkedIn pagination / API version | `1be85d6` | Pagination fixed. The version is a named constant but **unchanged**: bumping it needs real credentials to verify. |
+| L8 Plausible client-side range | `5470ea1` | |
+| L9 Start after end | `be11511` | |
+| L10, L11 Rename and fetch log, rollback errors | `978d543` | |
+| L12 Atomic config writes | `130d41e` | |
+| L13 Workflow concurrency and push | `5a19590` | Existing workflows need `if: ${{ !cancelled() }}` on their commit step (see the installation guide). |
+| L14 `build-db` atomic | `29d5eee` | |
+| L15 `migrate --force` | `e32e78e`, `44a9c77` | Clear error and documented procedure, not an automatic merge. |
+| L16 Migration line limit, float64 | `88e4094`, `e32e78e` | |
+| L17 Content duplicate key | `3ab13fb` | |
+| L18 `.env` quoting | `c704ac4`, `cc18b94` | Single-quoted values are taken literally. |
+| L19 MCP limit and export directory | `a3d7c5c`, `91487cc` | |
+| L20 Unpinned `great-docs`, stale docs | `6972baa`, `44a9c77` | |
+| Tests and hygiene | `aab76d5`, `400484a`, `aad6804`, `f4144be`, `81d9b01`, `262ad1d` | Snapshot-date, `projectdata` and restricted-query tests; survivors M09, M18, M20, M23–M25 and M27 covered; gofmt; CI runs vet, `-race` and a format check. |
+
+### Problems in delegated fixes, caught in review before landing
+
+- `sync-secrets` would have uploaded single-quoted `.env` values with their quotes, and the original test had been changed to hide it.
+- MCP `export` rejected existing directories inside projects reached through a symlink (all of `/tmp` and `/var` on macOS).
+- `SUM`-based badges rendered `1500` instead of `1.5k`, because DuckDB returns `HUGEINT` and the formatter didn't handle `*big.Int`.
+- The installers shadowed `TMPDIR` for child processes, and `action.yml` took its download URL from the workflow environment, which defeats the checksum.

@@ -166,3 +166,43 @@ func TestEventJobWritesNothingWhenARepositoryFails(t *testing.T) {
 		t.Errorf("LastDate = %v (%v), want nothing recorded", last, err)
 	}
 }
+
+// fullEvents is an event source that also provides content and records, like
+// the GitHub source.
+type fullEvents struct{ fakeEvents }
+
+func (fullEvents) ContentByFilename() map[string][]source.ContentEntry {
+	return map[string][]source.ContentEntry{
+		"issues.jsonl": {{Source: "github", Target: "org/repo", ID: "issue/1", Title: "Bug", PublishedAt: "2025-03-05T09:00:00Z"}},
+	}
+}
+
+func (fullEvents) Records() []source.Record {
+	return []source.Record{{Metric: "total_reactions", ProjectID: "proj", Target: "org/repo", Date: "2025-03-09", Value: 2, Extra: map[string]string{"ref": "1"}}}
+}
+
+func TestEventJobWritesEventsContentAndRecords(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := &config.Config{Data: config.DataConfig{Dir: dataDir}}
+	src := fullEvents{fakeEvents{events: []source.Event{{Type: "issue_open", ProjectID: "proj", Target: "org/repo", Datetime: "2025-03-05T09:00:00Z", User: "alice"}}}}
+
+	results, err := runJobs(context.Background(), cfg, Options{StartDate: "2025-03-01", EndDate: "2025-03-09", NoConcatenate: true}, eventJob([]string{"org/repo"}, src), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Error != "" || results[0].Records != 2 || results[0].Files != 3 {
+		t.Fatalf("results = %+v, want one success with 2 records in 3 files", results)
+	}
+	if events, err := store.ReadEvents(filepath.Join(store.EventsProjectDir(dataDir, "github", "proj"), "2025-03-05.jsonl")); err != nil || len(events) != 1 {
+		t.Errorf("events = %v (%v), want the issue_open event", events, err)
+	}
+	if content, err := store.ReadContent(filepath.Join(store.ContentProjectDir(dataDir, "github", "proj"), "issues.jsonl")); err != nil || len(content) != 1 || content[0].ProjectID != "proj" {
+		t.Errorf("content = %+v (%v), want issue/1 stamped with the project", content, err)
+	}
+	if records, err := store.ReadRecords(filepath.Join(store.MetricsProjectDir(dataDir, "github", "proj"), "2025-03-09.jsonl")); err != nil || len(records) != 1 || records[0].Value != 2 {
+		t.Errorf("records = %+v (%v), want total_reactions 2", records, err)
+	}
+	if last, err := store.LastDate(dataDir, "github", "proj"); err != nil || last.Format("2006-01-02") != "2025-03-09" {
+		t.Errorf("LastDate = %v (%v), want 2025-03-09", last, err)
+	}
+}
