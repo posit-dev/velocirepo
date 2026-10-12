@@ -1,8 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -238,7 +240,7 @@ func migrate3to4(dataDir string) error {
 			return fmt.Errorf("create events dir: %w", err)
 		}
 		dst := filepath.Join(eventsDir, src)
-		if err := os.Rename(srcDir, dst); err != nil {
+		if err := moveLegacySourceDir(srcDir, dst); err != nil {
 			return fmt.Errorf("move %s to events/: %w", src, err)
 		}
 	}
@@ -252,12 +254,41 @@ func migrate3to4(dataDir string) error {
 			return fmt.Errorf("create metrics dir: %w", err)
 		}
 		dst := filepath.Join(metricsDir, src)
-		if err := os.Rename(srcDir, dst); err != nil {
+		if err := moveLegacySourceDir(srcDir, dst); err != nil {
 			return fmt.Errorf("move %s to metrics/: %w", src, err)
 		}
 	}
 
 	return nil
+}
+
+// moveLegacySourceDir moves a pre-v4 source directory into its category. It
+// refuses to merge into an existing directory: old-format data copied into a
+// current data directory has to be migrated in a data directory of its own
+// first.
+func moveLegacySourceDir(srcDir, dst string) error {
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("%s already exists; migrate the old data in a separate data directory, then copy the migrated files in", dst)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(srcDir, dst)
+}
+
+// decodeObject decodes a JSONL line into a map, keeping numbers exact.
+// Decoding into interface{} would turn every number into a float64, which
+// loses precision above 2^53.
+func decodeObject(line []byte) (map[string]interface{}, error) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	var record map[string]interface{}
+	if err := dec.Decode(&record); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("unexpected data after JSON object")
+	}
+	return record, nil
 }
 
 func rewriteEventFields(path string) error {
@@ -272,8 +303,8 @@ func rewriteEventFields(path string) error {
 	scanner := newLineReader(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		var record map[string]interface{}
-		if err := json.Unmarshal(line, &record); err != nil {
+		record, err := decodeObject(line)
+		if err != nil {
 			lines = append(lines, append([]byte(nil), line...))
 			continue
 		}
@@ -579,8 +610,8 @@ func migrateEventTagsToExtra(path string) error {
 	scanner := newLineReader(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		var record map[string]interface{}
-		if err := json.Unmarshal(line, &record); err != nil {
+		record, err := decodeObject(line)
+		if err != nil {
 			lines = append(lines, append([]byte(nil), line...))
 			continue
 		}
@@ -640,8 +671,8 @@ func renameFieldInFile(path, oldName, newName string) error {
 	scanner := newLineReader(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		var record map[string]interface{}
-		if err := json.Unmarshal(line, &record); err != nil {
+		record, err := decodeObject(line)
+		if err != nil {
 			lines = append(lines, append([]byte(nil), line...))
 			continue
 		}
@@ -684,8 +715,8 @@ func renameMetricsInFile(path string, renames map[string]string) error {
 	scanner := newLineReader(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		var record map[string]interface{}
-		if err := json.Unmarshal(line, &record); err != nil {
+		record, err := decodeObject(line)
+		if err != nil {
 			lines = append(lines, append([]byte(nil), line...))
 			continue
 		}

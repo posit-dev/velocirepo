@@ -1,8 +1,10 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -339,4 +341,93 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+func TestMigrationsKeepIntegersExact(t *testing.T) {
+	dir := t.TempDir()
+	path := metricsPath(dir, "youtube", "proj", "2025-06-01")
+	writeTestRaw(t, path, []string{`{"source":"youtube","metric":"total_views","project_id":"proj","date":"2025-06-01","value":9007199254740993,"tags":{"video_id":"a"}}`})
+
+	if err := migrate6to7(dir); err != nil {
+		t.Fatal(err)
+	}
+	lines := readRawLines(t, path)
+	if len(lines) != 1 || !strings.Contains(lines[0], `"value":9007199254740993`) || !strings.Contains(lines[0], `"extra":{"video_id":"a"}`) {
+		t.Errorf("migrated line = %v, want value 9007199254740993 and extra.video_id", lines)
+	}
+}
+
+func TestMigrate3to4MovesAndRewritesGitHubEvents(t *testing.T) {
+	dir := t.TempDir()
+	writeTestRaw(t, filepath.Join(dir, "github", "proj", "2025-06-01.jsonl"), []string{
+		`{"source":"github","event_type":"star","project_id":"proj","github_repo":"org/repo","datetime":"2025-06-01T10:00:00Z","user":"alice"}`,
+	})
+	writeTestRaw(t, filepath.Join(dir, "pypi", "proj", "2025-06-01.jsonl"), []string{
+		`{"source":"pypi","metric":"daily_downloads","project_id":"proj","date":"2025-06-01","value":3}`,
+	})
+
+	if err := migrate3to4(dir); err != nil {
+		t.Fatal(err)
+	}
+	lines := readRawLines(t, eventsPath(dir, "github", "proj", "2025-06-01"))
+	var got map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+		t.Fatal(err)
+	}
+	tags, _ := got["tags"].(map[string]any)
+	if got["type"] != "star" || got["target"] != "org/repo" || tags["user"] != "alice" || got["event_type"] != nil || got["github_repo"] != nil {
+		t.Errorf("migrated event = %v", got)
+	}
+	if _, err := os.Stat(metricsPath(dir, "pypi", "proj", "2025-06-01")); err != nil {
+		t.Errorf("pypi data not moved to metrics/: %v", err)
+	}
+}
+
+func TestMigrate3to4RefusesToMergeIntoExistingDir(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "pypi", "old", "2024-06-01.jsonl")
+	writeTestRaw(t, legacy, []string{`{"source":"pypi","metric":"downloads","project_id":"old","date":"2024-06-01","value":3}`})
+	writeTestRaw(t, metricsPath(dir, "pypi", "new", "2025-06-01"), []string{`{"source":"pypi","metric":"daily_downloads","project_id":"new","date":"2025-06-01","value":4}`})
+
+	err := migrate3to4(dir)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("migrate3to4 error = %v, want one explaining that metrics/pypi already exists", err)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Errorf("legacy data should be left in place: %v", err)
+	}
+}
+
+func TestMigrate6to7PromotesUserAndRenamesTags(t *testing.T) {
+	dir := t.TempDir()
+	eventPath := eventsPath(dir, "github", "proj", "2025-06-01")
+	writeTestRaw(t, eventPath, []string{
+		`{"source":"github","type":"star","project_id":"proj","target":"org/repo","datetime":"2025-06-01T10:00:00Z","tags":{"user":"alice","via":"api"}}`,
+		`{"source":"github","type":"fork","project_id":"proj","target":"org/repo","datetime":"2025-06-01T11:00:00Z","tags":{"user":"bob"}}`,
+	})
+	metricPath := metricsPath(dir, "youtube", "proj", "2025-06-01")
+	writeTestRaw(t, metricPath, []string{`{"source":"youtube","metric":"total_views","project_id":"proj","date":"2025-06-01","value":5,"tags":{"video_id":"a"}}`})
+
+	if err := migrate6to7(dir); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ReadEvents(eventPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events[0].User != "alice" || events[0].Extra["via"] != "api" || events[1].User != "bob" || len(events[1].Extra) != 0 {
+		t.Errorf("migrated events = %+v", events)
+	}
+	for _, line := range readRawLines(t, eventPath) {
+		if strings.Contains(line, `"tags"`) {
+			t.Errorf("tags left in event line: %s", line)
+		}
+	}
+	records, err := ReadRecords(metricPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[0].Extra["video_id"] != "a" {
+		t.Errorf("migrated record = %+v, want extra.video_id", records[0])
+	}
 }
