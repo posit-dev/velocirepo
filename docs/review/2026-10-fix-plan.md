@@ -117,3 +117,15 @@ Each item lists the change, the tests that prove it, and the commit it goes into
 - **Commits.** Small and focused: one finding per commit, imperative subject, the reason in the body, no attribution trailers.
 - **Before every commit.** `gofmt` and `go vet`. `go test ./...` must pass except for the regression tests whose fix hasn't landed yet.
 - **At milestones and at the end.** `go test -race ./...`, `-shuffle=on -count=3`, the mutation suite, coverage, and the built binary end to end.
+
+## Status
+
+Implemented in full on `fix/correctness-review`. Every finding maps to its commits in the resolution section of the [review](2026-10-correctness-review.md#resolution-branch-fixcorrectness-review). Where the implementation differs from the plan above:
+
+- **Event watermarks (item 2).** A successful event job records how far it fetched, using the same watermark file. Without it, quiet repositories would re-fetch the same days on every run and never compact.
+- **Reaction refresh (item 18).** The "skip known closed items" heuristic is gone. Every item updated in the window is refreshed, which also fixes counts going stale when an item is closed.
+- **Three new findings.**
+  - `validate-data --fix` destroyed content files (A8).
+  - Twelve readers still had a 1 MB line limit (A9).
+  - Missing reaction items were recorded as zero (A10).
+- **Delegated work.** Four problems in it were caught in review and fixed before merging. They're listed in the review's resolution section.
