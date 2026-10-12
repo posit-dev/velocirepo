@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -187,6 +188,77 @@ func TestLinkedInFetchPagination(t *testing.T) {
 	entries := li.ContentEntries()
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 content entries, got %d", len(entries))
+	}
+}
+
+// TestLinkedInPaginationNoTotalNoCount verifies that pagination terminates
+// correctly when both paging.total and paging.count are absent (zero): two
+// full pages of 100 followed by a partial page should all be fetched.
+func TestLinkedInPaginationNoTotalNoCount(t *testing.T) {
+	pageItems := func(n int, startID int) []linkedinPost {
+		posts := make([]linkedinPost, n)
+		for i := range posts {
+			posts[i] = linkedinPost{
+				ID:         fmt.Sprintf("urn:li:share:%d", startID+i),
+				CreatedAt:  1719792000000,
+				Commentary: "post",
+			}
+		}
+		return posts
+	}
+
+	callCount := 0
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/rest/posts", func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		start := r.URL.Query().Get("start")
+		var elements []linkedinPost
+		switch start {
+		case "", "0":
+			elements = pageItems(100, 0)
+		case "100":
+			elements = pageItems(100, 100)
+		default:
+			elements = pageItems(50, 200) // partial last page
+		}
+		// Total and Count are both zero — the broken path.
+		_ = json.NewEncoder(w).Encode(postsResponse{
+			Elements: elements,
+			Paging: struct {
+				Count int `json:"count"`
+				Start int `json:"start"`
+				Total int `json:"total"`
+			}{},
+		})
+	})
+
+	mux.HandleFunc("/rest/organizationalEntityShareStatistics", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(statsResponse{Elements: []statsElement{}})
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	li := &LinkedIn{
+		Client:  srv.Client(),
+		Token:   "test-token",
+		Target:  "urn:li:person:abc",
+		BaseURL: srv.URL,
+	}
+
+	_, err := li.Fetch(context.Background(), juneFetchOptions("proj", 1, 30))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if callCount != 3 {
+		t.Errorf("expected 3 page requests (2 full + 1 partial), got %d", callCount)
+	}
+
+	entries := li.ContentEntries()
+	if len(entries) != 250 {
+		t.Fatalf("expected 250 content entries (100+100+50), got %d", len(entries))
 	}
 }
 
