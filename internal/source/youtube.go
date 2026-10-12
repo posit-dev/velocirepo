@@ -320,31 +320,61 @@ func detectYouTubeType(target string) string {
 	}
 }
 
+// parseISO8601Duration parses the P[nW][nD][T[nH][nM][nS]] form that YouTube
+// uses and returns the total duration in seconds. Years and months are not
+// used by YouTube; if they appear the function returns 0 (callers treat 0 as
+// "unknown"). Fractional seconds are not supported.
 func parseISO8601Duration(d string) int64 {
+	if !strings.HasPrefix(d, "P") {
+		return 0
+	}
+	d = d[1:] // strip leading "P"
+
+	// Split at "T" to separate the date part (W, D) from the time part (H, M, S).
+	datePart := d
+	timePart := ""
+	if idx := strings.IndexByte(d, 'T'); idx >= 0 {
+		datePart = d[:idx]
+		timePart = d[idx+1:]
+	}
+
 	var total int64
-	d = strings.TrimPrefix(d, "PT")
+
+	// Date part: W (weeks) and D (days). Y and M (years, months) are unsupported.
 	var num string
-	for _, c := range d {
+	for _, c := range datePart {
+		switch c {
+		case 'W':
+			total += parseInt(num) * 7 * 24 * 3600
+			num = ""
+		case 'D':
+			total += parseInt(num) * 24 * 3600
+			num = ""
+		case 'Y', 'M': // YouTube doesn't use years/months; treat as unsupported.
+			return 0
+		default:
+			num += string(c)
+		}
+	}
+
+	// Time part: H (hours), M (minutes), S (seconds).
+	num = ""
+	for _, c := range timePart {
 		switch c {
 		case 'H':
-			if n := parseInt(num); n > 0 {
-				total += n * 3600
-			}
+			total += parseInt(num) * 3600
 			num = ""
 		case 'M':
-			if n := parseInt(num); n > 0 {
-				total += n * 60
-			}
+			total += parseInt(num) * 60
 			num = ""
 		case 'S':
-			if n := parseInt(num); n > 0 {
-				total += n
-			}
+			total += parseInt(num)
 			num = ""
 		default:
 			num += string(c)
 		}
 	}
+
 	return total
 }
 

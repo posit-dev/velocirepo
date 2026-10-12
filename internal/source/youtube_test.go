@@ -379,6 +379,44 @@ func TestYouTubeZeroDurationIsNil(t *testing.T) {
 	}
 }
 
+// TestParseISO8601Duration covers the P[nW][nD][T[nH][nM][nS]] form including
+// day and week components that the old implementation ignored.
+func TestParseISO8601Duration(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		// Basic time-only forms (existing behaviour).
+		{"PT5M30S", 330},
+		{"PT10M0S", 600},
+		{"PT1H", 3600},
+		{"PT3M33S", 213},
+		// Day component.
+		{"P1D", 86400},
+		{"P1DT2H3M4S", 93784}, // 1*86400 + 2*3600 + 3*60 + 4
+		{"P1DT2H", 93600},     // 1*86400 + 2*3600
+		// Week component.
+		{"P2W", 1209600},  // 2*7*86400
+		{"P1W3D", 864000}, // 1*7*86400 + 3*86400 = 691200+259200
+		// Zero values.
+		{"PT0S", 0},
+		{"P0DT0H", 0},
+		// Unsupported years/months → 0.
+		{"P1Y", 0},
+		{"P1M", 0},
+		// Bad prefix → 0.
+		{"", 0},
+		{"1H", 0},
+	}
+
+	for _, tt := range tests {
+		got := parseISO8601Duration(tt.input)
+		if got != tt.want {
+			t.Errorf("parseISO8601Duration(%q) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestDetectYouTubeType(t *testing.T) {
 	tests := []struct {
 		target   string
