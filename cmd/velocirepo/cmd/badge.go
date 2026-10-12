@@ -131,16 +131,7 @@ func queryBadgeValue(query string) (string, error) {
 	}
 
 	for _, v := range results[0] {
-		switch val := v.(type) {
-		case int64:
-			return badge.FormatNumber(val), nil
-		case float64:
-			return badge.FormatNumber(int64(val)), nil
-		case string:
-			return val, nil
-		default:
-			return fmt.Sprintf("%v", v), nil
-		}
+		return badge.FormatValue(v), nil
 	}
 	return "0", nil
 }

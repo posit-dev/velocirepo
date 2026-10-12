@@ -44,13 +44,13 @@ func TestPresetsBuildQueryWithProject(t *testing.T) {
 // metric name that no source emits, preventing silent regressions when sources
 // change their metric names.
 func TestPresetsReferencesKnownMetrics(t *testing.T) {
-	emittedSet := make(map[string]bool, len(EmittedMetrics))
-	for _, m := range EmittedMetrics {
+	emittedSet := make(map[string]bool, len(emittedMetrics))
+	for _, m := range emittedMetrics {
 		emittedSet[m] = true
 	}
 
-	eventSet := make(map[string]bool, len(EmittedEventTypes))
-	for _, e := range EmittedEventTypes {
+	eventSet := make(map[string]bool, len(emittedEventTypes))
+	for _, e := range emittedEventTypes {
 		eventSet[e] = true
 	}
 
@@ -58,9 +58,9 @@ func TestPresetsReferencesKnownMetrics(t *testing.T) {
 		switch p.Table {
 		case "metrics":
 			// Each metrics preset Condition must mention at least one metric
-			// in EmittedMetrics.
+			// in emittedMetrics.
 			found := false
-			for _, m := range EmittedMetrics {
+			for _, m := range emittedMetrics {
 				if strings.Contains(p.Condition, "'"+m+"'") {
 					found = true
 					break
@@ -68,13 +68,13 @@ func TestPresetsReferencesKnownMetrics(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("preset %q references no known emitted metric in condition %q\nemitted metrics: %v",
-					name, p.Condition, EmittedMetrics)
+					name, p.Condition, emittedMetrics)
 			}
 		case "events":
 			// Each events preset Condition must mention at least one type in
-			// EmittedEventTypes.
+			// emittedEventTypes.
 			found := false
-			for _, e := range EmittedEventTypes {
+			for _, e := range emittedEventTypes {
 				if strings.Contains(p.Condition, "'"+e+"'") {
 					found = true
 					break
@@ -82,8 +82,37 @@ func TestPresetsReferencesKnownMetrics(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("preset %q references no known emitted event type in condition %q\nemitted event types: %v",
-					name, p.Condition, EmittedEventTypes)
+					name, p.Condition, emittedEventTypes)
 			}
 		}
 	}
+}
+
+// emittedMetrics lists the metric names that sources emit today. A preset that
+// filters on a name not in this list would always render 0.
+var emittedMetrics = []string{
+	// PyPI, CRAN
+	"daily_downloads",
+	// OpenVSX
+	"total_downloads",
+	"total_reviews",
+	"total_ratings",
+	// Plausible site-level
+	"daily_site_pageviews",
+	"daily_site_visitors",
+	"daily_site_visits",
+	// Plausible page-level
+	"daily_pageviews",
+	"daily_visitors",
+	"daily_visits",
+	// YouTube
+	"total_views",
+	"total_likes",
+	"total_comments",
+	"total_subscribers",
+}
+
+// emittedEventTypes lists the event types that sources emit today.
+var emittedEventTypes = []string{
+	"star", "fork", "issue_open", "issue_close", "pr_open", "pr_merge", "comment",
 }

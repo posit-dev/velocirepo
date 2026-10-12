@@ -220,10 +220,11 @@ func (h *handlers) handleBadge(ctx context.Context, req mcp.CallToolRequest) (*m
 		if !ok {
 			return errorResult(fmt.Sprintf("unknown badge type %q (available: stars, forks, downloads, pageviews, custom)", badgeType)), nil
 		}
-		q = preset.Query
+		projectLit := ""
 		if project != "" {
-			q += fmt.Sprintf(" AND project = %s", store.SQLStringLiteral(project))
+			projectLit = store.SQLStringLiteral(project)
 		}
+		q = preset.BuildQuery(projectLit)
 		if label == "" {
 			label = preset.Label
 		}
@@ -240,16 +241,7 @@ func (h *handlers) handleBadge(ctx context.Context, req mcp.CallToolRequest) (*m
 	msg := "0"
 	if len(results) > 0 {
 		for _, v := range results[0] {
-			switch val := v.(type) {
-			case int64:
-				msg = badge.FormatNumber(val)
-			case float64:
-				msg = badge.FormatNumber(int64(val))
-			case string:
-				msg = val
-			default:
-				msg = fmt.Sprintf("%v", v)
-			}
+			msg = badge.FormatValue(v)
 			break
 		}
 	}

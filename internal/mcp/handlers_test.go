@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/posit-dev/velocirepo/internal/config"
+	"github.com/posit-dev/velocirepo/internal/source"
+	"github.com/posit-dev/velocirepo/internal/store"
 	"github.com/posit-dev/velocirepo/internal/testutil"
 )
 
@@ -142,5 +145,47 @@ func TestResolveExportDirAcceptsExistingSubdirectoryBehindSymlinkedProject(t *te
 
 	if _, err := h.resolveExportDir("exports"); err != nil {
 		t.Fatalf("existing export directory inside a symlinked project was rejected: %v", err)
+	}
+}
+
+func TestHandleBadgePresetIsScopedToProject(t *testing.T) {
+	cfgPath := testutil.WriteConfig(t, `[data]
+dir = "data"
+
+[projects.alpha]
+pypi = "alpha"
+
+[projects.beta]
+pypi = "beta"
+`)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for project, values := range map[string][]int64{"alpha": {1000, 500}, "beta": {7}} {
+		var records []source.Record
+		for i, v := range values {
+			records = append(records, source.Record{Metric: "daily_downloads", ProjectID: project, Target: project, Date: fmt.Sprintf("2025-06-%02d", i+1), Value: v})
+		}
+		if _, err := store.WriteRecords(cfg.DataDir(), "pypi", project, records); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := &handlers{cfg: cfg}
+
+	for project, want := range map[string]string{"alpha": "1.5k", "beta": ">7<"} {
+		result, err := h.handleBadge(context.Background(), mcplib.CallToolRequest{
+			Params: mcplib.CallToolParams{Arguments: map[string]any{"type": "downloads", "project": project}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			t.Fatalf("handleBadge(%s) returned error result: %#v", project, result.Content)
+		}
+		text := result.Content[0].(mcplib.TextContent).Text
+		if !strings.Contains(text, want) {
+			t.Errorf("badge for %s does not contain %q:\n%s", project, want, text)
+		}
 	}
 }
