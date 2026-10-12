@@ -61,6 +61,40 @@ func TestGitHubEventsRecordsCloseAndMergeOfItemsOpenedEarlier(t *testing.T) {
 	}
 }
 
+// Items are listed by last update, so an item updated after the window (today)
+// is still examined, and one only commented on in the window gets its content
+// refreshed without new open or close events.
+func TestGitHubEventsWindowEdges(t *testing.T) {
+	srv := httptest.NewServer(graphqlHandler(map[string]string{
+		"stargazers": `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":      `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues": `{"data":{"repository":{"issues":{"nodes":[
+			{"number":9,"title":"Closed in the window, edited since","body":"","state":"CLOSED","createdAt":"2025-05-01T10:00:00Z","updatedAt":"2025-06-11T08:00:00Z","closedAt":"2025-06-10T09:00:00Z","url":"u","author":{"login":"alice"},"labels":{"nodes":[]}},
+			{"number":8,"title":"Commented on in the window","body":"","state":"OPEN","createdAt":"2025-04-01T10:00:00Z","updatedAt":"2025-06-10T07:00:00Z","closedAt":null,"url":"u","author":{"login":"bob"},"labels":{"nodes":[]}},
+			{"number":7,"title":"Untouched","body":"","state":"OPEN","createdAt":"2025-03-01T10:00:00Z","updatedAt":"2025-06-01T07:00:00Z","closedAt":null,"url":"u","author":{"login":"carol"},"labels":{"nodes":[]}}
+		],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`,
+		"pullRequests":     `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
+	}))
+	defer srv.Close()
+
+	g := &GitHubEvents{Client: srv.Client(), Token: "test-token", Repo: "owner/repo", BaseURL: srv.URL}
+	events, err := g.FetchEvents(context.Background(), juneFetchOptions("proj", 10, 10))
+	if err != nil {
+		t.Fatalf("FetchEvents failed: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != "issue_close" || *events[0].Ref != 9 {
+		t.Fatalf("events = %+v, want only the close of #9", events)
+	}
+	var ids []string
+	for _, e := range g.ContentByFilename()["issues.jsonl"] {
+		ids = append(ids, e.ID)
+	}
+	if len(ids) != 2 || ids[0] != "issue/9" || ids[1] != "issue/8" {
+		t.Errorf("refreshed content = %v, want issue/9 and issue/8 (the listing stops at #7)", ids)
+	}
+}
+
 // GitHub returns NOT_FOUND errors next to the data of the other items when an
 // item was deleted or transferred after it was listed. The other counts are
 // kept; any other error still fails the fetch.

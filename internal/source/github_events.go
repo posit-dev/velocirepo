@@ -1,15 +1,12 @@
 package source
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -239,13 +236,14 @@ func (g *GitHubEvents) fetchForks(ctx context.Context, owner, repo string, opts 
 func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, []ContentEntry, error) {
 	query := `query($owner: String!, $name: String!, $after: String) {
 		repository(owner: $owner, name: $name) {
-			issues(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+			issues(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
 				nodes {
 					number
 					title
 					body
 					state
 					createdAt
+					updatedAt
 					closedAt
 					url
 					author { login }
@@ -268,6 +266,7 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 							Body      string  `json:"body"`
 							State     string  `json:"state"`
 							CreatedAt string  `json:"createdAt"`
+							UpdatedAt string  `json:"updatedAt"`
 							ClosedAt  *string `json:"closedAt"`
 							URL       string  `json:"url"`
 							Author    *struct {
@@ -291,8 +290,7 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 		var events []Event
 		done := false
 		for _, node := range result.Data.Repository.Issues.Nodes {
-			include, stop := includeGitHubEventTime(node.CreatedAt, opts)
-			if stop {
+			if updatedBeforeWindow(opts, node.UpdatedAt, node.CreatedAt, node.ClosedAt) {
 				done = true
 				break
 			}
@@ -336,10 +334,7 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 			}
 			content = append(content, entry)
 
-			if !include {
-				continue
-			}
-			events = append(events, githubEvent(opts, g.Repo, "issue_open", node.CreatedAt, &ref, login, nil))
+			events = appendOptionalGitHubEvent(events, opts, g.Repo, "issue_open", node.CreatedAt, &ref, login)
 
 			if node.ClosedAt != nil {
 				events = appendOptionalGitHubEvent(events, opts, g.Repo, "issue_close", *node.ClosedAt, &ref, login)
@@ -355,13 +350,14 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, []ContentEntry, error) {
 	query := `query($owner: String!, $name: String!, $after: String) {
 		repository(owner: $owner, name: $name) {
-			pullRequests(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+			pullRequests(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
 				nodes {
 					number
 					title
 					body
 					state
 					createdAt
+					updatedAt
 					closedAt
 					mergedAt
 					url
@@ -385,6 +381,7 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 							Body      string  `json:"body"`
 							State     string  `json:"state"`
 							CreatedAt string  `json:"createdAt"`
+							UpdatedAt string  `json:"updatedAt"`
 							ClosedAt  *string `json:"closedAt"`
 							MergedAt  *string `json:"mergedAt"`
 							URL       string  `json:"url"`
@@ -409,8 +406,7 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 		var events []Event
 		done := false
 		for _, node := range result.Data.Repository.PullRequests.Nodes {
-			include, stop := includeGitHubEventTime(node.CreatedAt, opts)
-			if stop {
+			if updatedBeforeWindow(opts, node.UpdatedAt, node.CreatedAt, node.ClosedAt, node.MergedAt) {
 				done = true
 				break
 			}
@@ -460,10 +456,7 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 			}
 			content = append(content, entry)
 
-			if !include {
-				continue
-			}
-			events = append(events, githubEvent(opts, g.Repo, "pr_open", node.CreatedAt, &ref, login, nil))
+			events = appendOptionalGitHubEvent(events, opts, g.Repo, "pr_open", node.CreatedAt, &ref, login)
 
 			if node.MergedAt != nil {
 				events = appendOptionalGitHubEvent(events, opts, g.Repo, "pr_merge", *node.MergedAt, &ref, login)
@@ -535,18 +528,13 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 const reactionCountBatchSize = 10
 
 func (g *GitHubEvents) fetchReactionCounts(ctx context.Context, owner, repo string, opts FetchOptions, content []ContentEntry) ([]Record, error) {
-	knownRefs := g.readKnownReactionRefs(opts)
-
+	// content holds the issues and pull requests updated since StartDate,
+	// closed ones included. Refresh all of their counts: a count is otherwise
+	// only refreshed the next time its item shows up as updated.
 	var numbers []int
 	for _, entry := range content {
-		if entry.Ref == nil {
-			continue
-		}
-		ref := *entry.Ref
-		state, _ := entry.Extra["state"].(string)
-		isOpen := state == "OPEN"
-		if isOpen || !knownRefs[ref] {
-			numbers = append(numbers, ref)
+		if entry.Ref != nil {
+			numbers = append(numbers, *entry.Ref)
 		}
 	}
 
@@ -833,45 +821,6 @@ func parseCommentReactionCounts(resp []byte) (int64, pageInfo, error) {
 	return total, result.Data.Repository.IssueOrPullRequest.Comments.PageInfo, nil
 }
 
-func (g *GitHubEvents) readKnownReactionRefs(opts FetchOptions) map[int]bool {
-	known := make(map[int]bool)
-	if opts.DataDir == "" {
-		return known
-	}
-
-	dir := filepath.Join(opts.DataDir, "metrics", "github", opts.ProjectID)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return known
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		f, err := os.Open(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			var rec struct {
-				Metric string            `json:"metric"`
-				Extra  map[string]string `json:"extra"`
-			}
-			if json.Unmarshal(scanner.Bytes(), &rec) == nil && rec.Metric == "total_reactions" {
-				if ref, err := strconv.Atoi(rec.Extra["ref"]); err == nil {
-					known[ref] = true
-				}
-			}
-		}
-		f.Close()
-	}
-
-	return known
-}
-
 func (g *GitHubEvents) restBaseURL() string {
 	if g.BaseURL != "" {
 		return g.BaseURL
@@ -1113,4 +1062,26 @@ func (e *graphQLError) onlyNotFound() bool {
 		}
 	}
 	return true
+}
+
+// updatedBeforeWindow reports whether an issue or pull request last changed
+// before the fetch window. They are listed by last update, newest first, so
+// the listing can stop there: anything opened, closed or merged in the window
+// was updated in it. Without updatedAt, the latest of the other timestamps
+// stands in.
+func updatedBeforeWindow(opts FetchOptions, updatedAt, createdAt string, others ...*string) bool {
+	latest := updatedAt
+	if latest == "" {
+		latest = createdAt
+		for _, o := range others {
+			if o != nil && *o > latest {
+				latest = *o
+			}
+		}
+	}
+	t, err := time.Parse(time.RFC3339, latest)
+	if err != nil {
+		return false
+	}
+	return t.Before(opts.StartDate)
 }

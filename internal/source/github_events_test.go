@@ -613,8 +613,10 @@ func TestGitHubEventsReactionCounts(t *testing.T) {
 	}
 }
 
-func TestGitHubEventsReactionCountsSkipsKnownClosed(t *testing.T) {
-	// Set up a data dir with an existing total_reactions record for closed issue #5
+// A closed issue that was updated in the window (here: closed in it) gets its
+// reaction count refreshed even though a count is already stored. Skipping
+// known closed items froze counts at whatever they were when last fetched.
+func TestGitHubEventsReactionCountsRefreshUpdatedClosedItems(t *testing.T) {
 	dir := t.TempDir()
 	metricsDir := dir + "/metrics/github/test"
 	_ = os.MkdirAll(metricsDir, 0755)
@@ -623,13 +625,14 @@ func TestGitHubEventsReactionCountsSkipsKnownClosed(t *testing.T) {
 	), 0644)
 
 	responses := map[string]string{
-		"stargazers":     `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":          `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"stargazers":       `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
 		"issues": `{"data":{"repository":{"issues":{"nodes":[
-			{"number":5,"title":"Old issue","body":"","state":"CLOSED","createdAt":"2025-06-10T10:00:00Z","closedAt":"2025-06-10T12:00:00Z","url":"https://github.com/owner/repo/issues/5","author":{"login":"alice"},"labels":{"nodes":[]}}
+			{"number":5,"title":"Old issue","body":"","state":"CLOSED","createdAt":"2025-06-01T10:00:00Z","updatedAt":"2025-06-10T12:00:00Z","closedAt":"2025-06-10T12:00:00Z","url":"https://github.com/owner/repo/issues/5","author":{"login":"alice"},"labels":{"nodes":[]}}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"pullRequests": `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests":   `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"reactionCounts": `{"data":{"repository":{"r0":{"reactions":{"totalCount":4},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`,
 	}
 
 	srv := httptest.NewServer(graphqlHandler(responses))
@@ -643,15 +646,13 @@ func TestGitHubEventsReactionCountsSkipsKnownClosed(t *testing.T) {
 
 	opts := juneFetchOptions("test", 10, 10)
 	opts.DataDir = dir
-	_, err := g.FetchEvents(context.Background(), opts)
-	if err != nil {
+	if _, err := g.FetchEvents(context.Background(), opts); err != nil {
 		t.Fatalf("FetchEvents failed: %v", err)
 	}
 
-	// Closed issue #5 already has a record, so no new records should be produced
 	records := g.Records()
-	if len(records) != 0 {
-		t.Fatalf("got %d records, want 0 (closed issue already has record)", len(records))
+	if len(records) != 1 || records[0].Value != 4 || records[0].Extra["ref"] != "5" {
+		t.Fatalf("records = %+v, want total_reactions 4 for #5", records)
 	}
 }
 
