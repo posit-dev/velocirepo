@@ -27,14 +27,6 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 	dir := MetricsProjectDir(dataDir, sourceName, projectID)
 
 	wantedTotalKeys := totalKeys(records)
-	var lastValues map[string]int64
-	if len(wantedTotalKeys) > 0 {
-		var err error
-		lastValues, err = lastRecordedTotalsFor(dir, wantedTotalKeys)
-		if err != nil {
-			return 0, fmt.Errorf("read last recorded totals: %w", err)
-		}
-	}
 
 	grouped := groupByDate(records)
 	dates := make([]string, 0, len(grouped))
@@ -45,6 +37,16 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 
 	var filesWritten int
 	for _, date := range dates {
+		// total_* series only store changes. Compare with the latest value
+		// before this date; earlier dates of this batch are already written.
+		var lastValues map[string]int64
+		if len(wantedTotalKeys) > 0 {
+			var err error
+			lastValues, err = lastRecordedTotalsFor(dir, wantedTotalKeys, date)
+			if err != nil {
+				return filesWritten, fmt.Errorf("read last recorded totals: %w", err)
+			}
+		}
 		dateRecords := filterUnchangedTotals(grouped[date], lastValues)
 
 		if len(dateRecords) > 0 {
@@ -57,15 +59,6 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 				return filesWritten, err
 			}
 			filesWritten++
-
-			for _, r := range dateRecords {
-				if isTotalMetric(r.Metric) {
-					if lastValues == nil {
-						lastValues = make(map[string]int64)
-					}
-					lastValues[totalKey(r)] = r.Value
-				}
-			}
 		}
 
 		if err := writeMetricWatermarks(dataDir, sourceName, projectID, date, grouped[date]); err != nil {
