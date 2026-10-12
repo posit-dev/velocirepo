@@ -455,3 +455,25 @@ func TestAggregateReportsErrorsAndContinues(t *testing.T) {
 		t.Errorf("the broken project's daily file should be left alone: %v", err)
 	}
 }
+
+// Two people starring a repository in the same second are two events.
+func TestAggregateKeepsSameSecondEventsOfDifferentUsers(t *testing.T) {
+	dir := t.TempDir()
+	writeTestEvents(t, eventsPath(dir, "github", "pkg", "2025-01-01"),
+		source.Event{Source: "github", Type: "star", ProjectID: "pkg", Target: "org/pkg", Datetime: "2025-01-01T12:00:00Z", User: "alice"},
+		source.Event{Source: "github", Type: "star", ProjectID: "pkg", Target: "org/pkg", Datetime: "2025-01-01T12:00:00Z", User: "bob"},
+	)
+	writeTestEvents(t, eventsPath(dir, "github", "pkg", "2025-02-01"),
+		source.Event{Source: "github", Type: "star", ProjectID: "pkg", Target: "org/pkg", Datetime: "2025-02-01T09:00:00Z", User: "carol"})
+
+	if err := Aggregate(dir, time.Date(2025, 2, 5, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadEvents(eventsPath(dir, "github", "pkg", "2025-01"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("got %d events, want both stars", len(got))
+	}
+}
