@@ -463,6 +463,87 @@ github ="org/beta"
 	}
 }
 
+func TestProjectRenameRewritesLogEntries(t *testing.T) {
+	cfgPath := setupTestConfig(t, `[data]
+dir = "data"
+
+[projects.old-proj]
+name = "Old"
+pypi = "pkg"
+`)
+	dir := filepath.Dir(cfgPath)
+
+	// Seed a metrics data directory so the rename has something to move.
+	metricsDir := filepath.Join(dir, "data", "metrics", "pypi", "old-proj")
+	if err := os.MkdirAll(metricsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTempFile(t, metricsDir, "2025-06-01.jsonl",
+		`{"source":"pypi","metric":"daily_downloads","project_id":"old-proj","target":"pkg","date":"2025-06-01","value":42}`+"\n")
+
+	// Seed a log entry that references old-proj.
+	logDir := filepath.Join(dir, "data", "log")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTempFile(t, logDir, "2025-06-01.jsonl",
+		`{"run_id":"2025-06-01-01","timestamp":"2025-06-01T01:00:00Z","version":"v0.1.0","command":"fetch","source":"pypi","project_id":"old-proj","records":1}`+"\n")
+	writeTempFile(t, filepath.Join(dir, "data"), ".schema-version", currentSchemaVersion)
+
+	_, _, err := execCmd(cfgPath, "rename-project", "old-proj", "new-proj")
+	if err != nil {
+		t.Fatalf("rename-project failed: %v", err)
+	}
+
+	// The log file must now reference new-proj.
+	logContent := readFileString(t, filepath.Join(logDir, "2025-06-01.jsonl"))
+	assertContains(t, logContent, `"project_id":"new-proj"`)
+	assertNotContains(t, logContent, `"project_id":"old-proj"`)
+}
+
+func TestRollbackProjectDataMovesReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	// Create a move whose 'to' directory does not exist; RewriteProjectID will
+	// fail when it tries to walk it, so rollback returns an error.
+	moves := []projectDataMove{
+		{
+			from:  filepath.Join(dir, "src"),
+			to:    filepath.Join(dir, "nonexistent"),
+			oldID: "new-id",
+			newID: "old-id",
+		},
+	}
+	if err := rollbackProjectDataMoves(moves); err == nil {
+		t.Fatal("expected rollbackProjectDataMoves to return error for non-existent path")
+	}
+}
+
+func TestMoveProjectDataForRenameRollbackErrorPropagated(t *testing.T) {
+	// Seed a metrics dir with invalid JSONL so RewriteProjectID fails.
+	// Both the forward rewrite and the rollback rewrite fail on the same
+	// file, producing a compound error.
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	oldMetrics := filepath.Join(dataDir, "metrics", "pypi", "old-id")
+	if err := os.MkdirAll(oldMetrics, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Invalid JSON triggers a rewrite error.
+	if err := os.WriteFile(filepath.Join(oldMetrics, "2025-06-01.jsonl"),
+		[]byte("{not valid json}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := moveProjectDataForRename(dataDir, "old-id", "new-id")
+	if err == nil {
+		t.Fatal("expected error from failed rewrite")
+	}
+	// The error should mention both the rewrite failure and rollback.
+	if !strings.Contains(err.Error(), "rollback") {
+		t.Errorf("expected compound error mentioning rollback, got: %v", err)
+	}
+}
+
 func TestProjectImportFromJSON(t *testing.T) {
 	cfgPath := setupTestConfig(t, `[data]
 dir = "data"

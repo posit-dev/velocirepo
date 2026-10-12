@@ -102,20 +102,46 @@ func moveProjectDataForRename(dataDir, oldID, newID string) ([]projectDataMove, 
 			return moves, moved, err
 		}
 		if err := os.MkdirAll(filepath.Dir(newDir), 0755); err != nil {
-			_ = rollbackProjectDataMoves(moves)
+			if rollbackErr := rollbackProjectDataMoves(moves); rollbackErr != nil {
+				return nil, nil, fmt.Errorf("%w (rollback data: %v)", err, rollbackErr)
+			}
 			return nil, nil, err
 		}
 		if err := os.Rename(oldDir, newDir); err != nil {
-			_ = rollbackProjectDataMoves(moves)
+			if rollbackErr := rollbackProjectDataMoves(moves); rollbackErr != nil {
+				return nil, nil, fmt.Errorf("rename %s → %s: %w (rollback data: %v)", oldDir, newDir, err, rollbackErr)
+			}
 			return nil, nil, fmt.Errorf("rename %s → %s: %w", oldDir, newDir, err)
 		}
 		moves = append(moves, projectDataMove{from: oldDir, to: newDir, oldID: oldID, newID: newID})
 		if err := store.RewriteProjectID(newDir, oldID, newID); err != nil {
-			_ = rollbackProjectDataMoves(moves)
+			if rollbackErr := rollbackProjectDataMoves(moves); rollbackErr != nil {
+				return nil, nil, fmt.Errorf("rewrite project IDs in %s: %w (rollback data: %v)", newDir, err, rollbackErr)
+			}
 			return nil, nil, fmt.Errorf("rewrite project IDs in %s: %w", newDir, err)
 		}
 		moved = append(moved, src)
 	}
+
+	// Rewrite project_id references in the fetch log (data/log/*.jsonl).
+	// Unlike source dirs the log directory is never moved, only rewritten.
+	// We add a sentinel entry (from == to) so that rollback also undoes the
+	// rewrite if a later step fails.
+	logDir := filepath.Join(dataDir, store.LogDir)
+	if _, err := os.Stat(logDir); err == nil {
+		if err := store.RewriteProjectID(logDir, oldID, newID); err != nil {
+			// Best-effort undo of the partial log rewrite, then rollback dirs.
+			_ = store.RewriteProjectID(logDir, newID, oldID)
+			if rollbackErr := rollbackProjectDataMoves(moves); rollbackErr != nil {
+				return nil, nil, fmt.Errorf("rewrite project IDs in log: %w (rollback data: %v)", err, rollbackErr)
+			}
+			return nil, nil, fmt.Errorf("rewrite project IDs in log: %w", err)
+		}
+		// Sentinel: from == to means "rewrite only, no directory rename".
+		moves = append(moves, projectDataMove{from: logDir, to: logDir, oldID: oldID, newID: newID})
+		moved = append(moved, store.LogDir)
+	}
+
 	return moves, moved, nil
 }
 
@@ -124,6 +150,10 @@ func rollbackProjectDataMoves(moves []projectDataMove) error {
 		move := moves[i]
 		if err := store.RewriteProjectID(move.to, move.newID, move.oldID); err != nil {
 			return err
+		}
+		if move.from == move.to {
+			// Sentinel entry: log dir rewrite only, no directory rename needed.
+			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(move.from), 0755); err != nil {
 			return err
