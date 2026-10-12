@@ -2,8 +2,10 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -393,20 +395,22 @@ func FixMalformedJSON(paths map[string][]int) *FixResult {
 func FixDuplicates(paths []string) *FixResult {
 	result := &FixResult{}
 	for _, path := range paths {
-		if isEventPath(path) {
-			n, err := deduplicateEventsFile(path)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("%s: %w", path, err))
-			} else {
-				result.Fixed += n
-			}
+		var n int
+		var err error
+		switch dataCategory(path) {
+		case EventsDir:
+			n, err = deduplicateEventsFile(path)
+		case MetricsDir:
+			n, err = deduplicateRecordsFile(path)
+		case ContentDataDir:
+			n, err = deduplicateContentFile(path)
+		default:
+			err = fmt.Errorf("not a metrics, events or content file")
+		}
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("%s: %w", path, err))
 		} else {
-			n, err := deduplicateRecordsFile(path)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("%s: %w", path, err))
-			} else {
-				result.Fixed += n
-			}
+			result.Fixed += n
 		}
 	}
 	return result
@@ -415,28 +419,30 @@ func FixDuplicates(paths []string) *FixResult {
 func FixDateMismatches(paths []string) *FixResult {
 	result := &FixResult{}
 	for _, path := range paths {
-		if isEventPath(path) {
-			n, err := regroupEventsFile(path)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("%s: %w", path, err))
-			} else {
-				result.Fixed += n
-			}
+		var n int
+		var err error
+		switch dataCategory(path) {
+		case EventsDir:
+			n, err = regroupEventsFile(path)
+		case MetricsDir:
+			n, err = regroupRecordsFile(path)
+		default:
+			err = fmt.Errorf("not a metrics or events file")
+		}
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("%s: %w", path, err))
 		} else {
-			n, err := regroupRecordsFile(path)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("%s: %w", path, err))
-			} else {
-				result.Fixed += n
-			}
+			result.Fixed += n
 		}
 	}
 	return result
 }
 
-func isEventPath(path string) bool {
-	normalized := filepath.ToSlash(path)
-	return strings.Contains(normalized, "data/events/")
+// dataCategory returns the category a data file belongs to (metrics, events or
+// content), judging by its position: <data>/<category>/<source>/<project>/<file>.
+// It doesn't depend on what the data directory is called.
+func dataCategory(path string) string {
+	return filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path))))
 }
 
 func FixOrphanDirs(paths []string) *FixResult {
@@ -755,6 +761,43 @@ func deduplicateRecordsFile(path string) (int, error) {
 	return removed, nil
 }
 
+// deduplicateContentFile removes repeated content entries, keyed like the
+// upsert in WriteContent by (target, id): the last occurrence wins, at the
+// position of the first. Lines are kept verbatim, including ones that don't
+// parse; those are reported and fixed as malformed JSON.
+func deduplicateContentFile(path string) (int, error) {
+	lines, err := readFileLines(path)
+	if err != nil {
+		return 0, err
+	}
+
+	index := make(map[contentKey]int)
+	kept := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		var e source.ContentEntry
+		if err := json.Unmarshal(line, &e); err != nil || e.ID == "" {
+			kept = append(kept, line)
+			continue
+		}
+		k := contentKey{target: e.Target, id: e.ID}
+		if i, ok := index[k]; ok {
+			kept[i] = line
+			continue
+		}
+		index[k] = len(kept)
+		kept = append(kept, line)
+	}
+
+	removed := len(lines) - len(kept)
+	if removed == 0 {
+		return 0, nil
+	}
+	if err := writeLines(path, kept); err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
 func deduplicateEventsFile(path string) (int, error) {
 	events, err := ReadEvents(path)
 	if err != nil {
@@ -971,7 +1014,7 @@ func validateContentFile(path, sourceName, projectID string, result *ValidationR
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	seen := make(map[string]int)
+	seen := make(map[contentKey]int)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -1079,17 +1122,45 @@ func validateContentFile(path, sourceName, projectID string, result *ValidationR
 		}
 
 		if e.ID != "" {
-			if firstLine, exists := seen[e.ID]; exists {
+			// Same key as the upsert in WriteContent: entries from different
+			// targets may share an ID.
+			k := contentKey{target: e.Target, id: e.ID}
+			if firstLine, exists := seen[k]; exists {
 				result.Issues = append(result.Issues, Issue{
 					Type:    IssueDuplicate,
 					Path:    path,
 					Line:    lineNum,
-					Message: fmt.Sprintf("line %d: duplicate id %q (first at line %d)", lineNum, e.ID, firstLine),
+					Message: fmt.Sprintf("line %d: duplicate id %q for %s (first at line %d)", lineNum, e.ID, e.Target, firstLine),
 					Fixable: true,
 				})
 			} else {
-				seen[e.ID] = lineNum
+				seen[k] = lineNum
 			}
+		}
+	}
+}
+
+// readFileLines returns the non-empty lines of a file without a line length
+// limit.
+func readFileLines(path string) ([][]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	var lines [][]byte
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if trimmed := bytes.TrimRight(line, "\r\n"); len(trimmed) > 0 {
+			lines = append(lines, trimmed)
+		}
+		if err == io.EOF {
+			return lines, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
 }
