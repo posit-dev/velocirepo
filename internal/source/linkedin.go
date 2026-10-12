@@ -56,9 +56,10 @@ func (l *LinkedIn) Fetch(ctx context.Context, opts FetchOptions) ([]Record, erro
 
 	if strings.Contains(l.Target, "organization") {
 		followerRecords, err := l.fetchFollowerCount(ctx, opts.ProjectID, date)
-		if err == nil {
-			records = append(records, followerRecords...)
+		if err != nil {
+			return nil, fmt.Errorf("fetch follower count: %w", err)
 		}
+		records = append(records, followerRecords...)
 	}
 
 	return records, nil

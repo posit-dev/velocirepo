@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -248,6 +249,44 @@ func TestLinkedInTitleTruncation(t *testing.T) {
 	}
 	if entry.Description != long {
 		t.Error("description should be full commentary")
+	}
+}
+
+func TestLinkedInFollowerError(t *testing.T) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/rest/posts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(postsResponse{
+			Elements: []linkedinPost{},
+			Paging: struct {
+				Count int `json:"count"`
+				Start int `json:"start"`
+				Total int `json:"total"`
+			}{Count: 100, Start: 0, Total: 0},
+		})
+	})
+
+	// The follower endpoint returns 403, which must bubble up as an error.
+	mux.HandleFunc("/rest/networkSizes/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	li := &LinkedIn{
+		Client:  srv.Client(),
+		Token:   "test-token",
+		Target:  "urn:li:organization:12345678",
+		BaseURL: srv.URL,
+	}
+
+	_, err := li.Fetch(context.Background(), juneFetchOptions("proj", 1, 30))
+	if err == nil {
+		t.Fatal("expected error when follower endpoint returns 403")
+	}
+	if got := err.Error(); !strings.Contains(got, "fetch follower count") {
+		t.Errorf("error should mention fetch follower count, got: %s", got)
 	}
 }
 
