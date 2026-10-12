@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -427,5 +428,30 @@ func aggregateAndCheck(t *testing.T, dir string, now time.Time, want map[string]
 		if v, ok := want[key]; !ok || v != r.Value {
 			t.Fatalf("compaction at %s: %s = %d, want %d (present: %v)", now.Format(time.RFC3339), key, r.Value, v, ok)
 		}
+	}
+}
+
+// A project whose files can't be read is reported, and doesn't stop the other
+// projects from being compacted.
+func TestAggregateReportsErrorsAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	writeTestRaw(t, metricsPath(dir, "pypi", "broken", "2025-01-01"), []string{`{not json`})
+	storeLaterRecord(t, dir, "pypi", "broken", "2025-02-01")
+	if _, err := WriteRecords(dir, "pypi", "fine", []source.Record{
+		{Metric: "daily_downloads", ProjectID: "fine", Date: "2025-01-15", Value: 1},
+		{Metric: "daily_downloads", ProjectID: "fine", Date: "2025-02-01", Value: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Aggregate(dir, time.Date(2025, 2, 5, 0, 0, 0, 0, time.UTC))
+	if err == nil || !strings.Contains(err.Error(), filepath.Join("pypi", "broken")) {
+		t.Fatalf("Aggregate error = %v, want an error naming the broken project", err)
+	}
+	if _, err := os.Stat(metricsPath(dir, "pypi", "fine", "2025-01")); err != nil {
+		t.Errorf("the healthy project was not compacted: %v", err)
+	}
+	if _, err := os.Stat(metricsPath(dir, "pypi", "broken", "2025-01-01")); err != nil {
+		t.Errorf("the broken project's daily file should be left alone: %v", err)
 	}
 }

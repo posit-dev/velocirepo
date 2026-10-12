@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,13 +26,14 @@ func SourceCategory(sourceName string) string {
 // Aggregate concatenates daily→monthly→yearly for all projects. A period is
 // compacted once it has ended and its last day has been stored, so a day that
 // is still missing (a failed fetch, a source that publishes late) is fetched by
-// the next run instead of being treated as done. Errors for individual projects
-// are logged but not propagated; category directories that don't exist yet are
-// silently skipped.
+// the next run instead of being treated as done. A project that fails doesn't
+// stop the others; the errors are returned together. Category directories that
+// don't exist yet are skipped.
 func Aggregate(dataDir string, now time.Time) error {
-	aggregateCategory(dataDir, MetricsDir, now, recordAggregateSpec())
-	aggregateCategory(dataDir, EventsDir, now, eventAggregateSpec())
-	return nil
+	return errors.Join(
+		aggregateCategory(dataDir, MetricsDir, now, recordAggregateSpec()),
+		aggregateCategory(dataDir, EventsDir, now, eventAggregateSpec()),
+	)
 }
 
 type aggregateSpec[T any] struct {
@@ -70,13 +72,17 @@ func eventAggregateSpec() aggregateSpec[source.Event] {
 	}
 }
 
-func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggregateSpec[T]) {
+func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggregateSpec[T]) error {
 	categoryDir := filepath.Join(dataDir, category)
 	sourceDirs, err := os.ReadDir(categoryDir)
 	if err != nil {
-		return
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 
+	var errs []error
 	for _, sourceEntry := range sourceDirs {
 		if !sourceEntry.IsDir() {
 			continue
@@ -85,6 +91,7 @@ func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggr
 
 		projectDirs, err := os.ReadDir(sourcePath)
 		if err != nil {
+			errs = append(errs, err)
 			continue
 		}
 
@@ -95,10 +102,11 @@ func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggr
 			projPath := filepath.Join(sourcePath, projEntry.Name())
 			watermarkPath := WatermarkFilePath(dataDir, sourceEntry.Name(), projEntry.Name())
 			if err := aggregateProject(projPath, watermarkPath, now, spec); err != nil {
-				slog.Warn("concatenation failed", "path", projPath, "error", err)
+				errs = append(errs, fmt.Errorf("concatenate %s: %w", projPath, err))
 			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // aggregateProject compacts the complete months and years of one project
@@ -190,7 +198,9 @@ func aggregateFiles[T any](
 			return err
 		}
 
-		removeAggregateSources(files)
+		if err := removeAggregateSources(files); err != nil {
+			return err
+		}
 
 		slog.Debug("concatenated "+logLabel, logKey, group, "files", len(files))
 	}
@@ -224,12 +234,17 @@ func readAllAggregateFiles[T any](paths []string, read func(string) ([]T, error)
 	return all, nil
 }
 
-func removeAggregateSources(paths []string) {
+// removeAggregateSources deletes the inputs of a period file that has been
+// written. A failure leaves the period and its inputs side by side, which the
+// next compaction merges again, but it is reported.
+func removeAggregateSources(paths []string) error {
+	var errs []error
 	for _, f := range paths {
-		if err := os.Remove(f); err != nil {
-			slog.Warn("remove source file", "path", f, "error", err)
+		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove compacted file: %w", err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func isMonthComplete(yearMonth string, now time.Time) bool {
