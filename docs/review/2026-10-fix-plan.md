@@ -124,8 +124,9 @@ Implemented in full on `fix/correctness-review`. Every finding maps to its commi
 
 - **Event watermarks (item 2).** A successful event job records how far it fetched, using the same watermark file. Without it, quiet repositories would re-fetch the same days on every run and never compact.
 - **Reaction refresh (item 18).** The "skip known closed items" heuristic is gone. Every item updated in the window is refreshed, which also fixes counts going stale when an item is closed.
-- **Three new findings.**
+- **Four new findings.**
   - `validate-data --fix` destroyed content files (A8).
   - Twelve readers still had a 1 MB line limit (A9).
   - Missing reaction items were recorded as zero (A10).
+  - `update` ignored a failed close of the new binary (A11).
 - **Delegated work.** Four problems in it were caught in review and fixed before merging. They're listed in the review's resolution section.

@@ -433,7 +433,7 @@ By design, `go test ./...` on this branch fails in `internal/store`, `internal/f
 
 ## Resolution (branch `fix/correctness-review`)
 
-Every finding above, and three found while fixing them, is resolved on `fix/correctness-review` (plan: [2026-10-fix-plan.md](2026-10-fix-plan.md)). Each fix has a test that fails without it, and all 11 regression tests from Appendix A now pass.
+Every finding above, and four found while fixing them, is resolved on `fix/correctness-review` (plan: [2026-10-fix-plan.md](2026-10-fix-plan.md)). Each fix has a test that fails without it, and all 11 regression tests from Appendix A now pass.
 
 ### Found while fixing
 
@@ -442,6 +442,7 @@ Every finding above, and three found while fixing them, is resolved on `fix/corr
 | A8 | High | `validate-data --fix` rewrote content files as metric records whenever it found a duplicate content id: every title, id and other field was replaced by an empty metric row. The duplicate check was itself wrong (L17), so two feeds sharing an id were enough to trigger it. | `3ab13fb` |
 | A9 | Medium | Twelve readers still used a 1 MB `bufio.Scanner`. A long line (an RSS post) made `validate-data` stop reading the file and report no issues for the rest, made `rename-project` fail, and aborted migrations. | `88e4094` |
 | A10 | Low | GitHub reaction batches recorded items missing from the response (deleted or transferred) as zero reactions, which looks like a drop to zero. | `8b8c748` |
+| A11 | Low | `velocirepo update` ignored the error from closing the extracted binary, so a failed final write could install a truncated executable (from the lint run). | `cf4757b` |
 
 ### Resolution by finding
 
