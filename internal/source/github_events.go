@@ -498,13 +498,17 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 			break
 		}
 
+		older := false
 		for _, c := range comments {
 			t, err := time.Parse(time.RFC3339, c.CreatedAt)
 			if err != nil {
 				continue
 			}
 			if t.Before(opts.StartDate) {
-				continue
+				// Comments come newest first. The rest were created before the
+				// window too; they only match since= because they were edited.
+				older = true
+				break
 			}
 			if !inDateRange(t, opts.StartDate, opts.EndDate) {
 				continue
@@ -518,7 +522,7 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 			events = append(events, githubEvent(opts, g.Repo, "comment", c.CreatedAt, ref, user, nil))
 		}
 
-		if len(comments) < 100 {
+		if older || len(comments) < 100 {
 			break
 		}
 		page++
