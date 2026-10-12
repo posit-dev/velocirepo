@@ -28,7 +28,10 @@ jobs:
         uses: quarto-dev/quarto-actions/setup@v2
 
       - name: Build docs
-        run: uvx --from git+https://github.com/posit-dev/great-docs great-docs build
+        # Pinned to a specific commit to prevent silent supply-chain updates.
+        # To update: run `git ls-remote https://github.com/posit-dev/great-docs HEAD`
+        # and replace the SHA below, then update this comment.
+        run: uvx --from git+https://github.com/posit-dev/great-docs@61531325ab306e4d584920524514aa102e1d95c1 great-docs build
 
       - name: Save docs artifact
         uses: actions/upload-artifact@v7
