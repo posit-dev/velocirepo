@@ -91,9 +91,6 @@ func buildExportQuery(table string, opts ExportOptions) string {
 		if table == "projects" {
 			col = "id"
 		}
-		if table == "content" {
-			col = "target"
-		}
 		if col != "" {
 			conditions = append(conditions, fmt.Sprintf("%s = '%s'", col, escapeSQLString(opts.Project)))
 		}
