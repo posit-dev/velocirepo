@@ -1,14 +1,12 @@
 package source
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -238,13 +236,14 @@ func (g *GitHubEvents) fetchForks(ctx context.Context, owner, repo string, opts 
 func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, []ContentEntry, error) {
 	query := `query($owner: String!, $name: String!, $after: String) {
 		repository(owner: $owner, name: $name) {
-			issues(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+			issues(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
 				nodes {
 					number
 					title
 					body
 					state
 					createdAt
+					updatedAt
 					closedAt
 					url
 					author { login }
@@ -267,6 +266,7 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 							Body      string  `json:"body"`
 							State     string  `json:"state"`
 							CreatedAt string  `json:"createdAt"`
+							UpdatedAt string  `json:"updatedAt"`
 							ClosedAt  *string `json:"closedAt"`
 							URL       string  `json:"url"`
 							Author    *struct {
@@ -290,8 +290,7 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 		var events []Event
 		done := false
 		for _, node := range result.Data.Repository.Issues.Nodes {
-			include, stop := includeGitHubEventTime(node.CreatedAt, opts)
-			if stop {
+			if updatedBeforeWindow(opts, node.UpdatedAt, node.CreatedAt, node.ClosedAt) {
 				done = true
 				break
 			}
@@ -335,10 +334,7 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 			}
 			content = append(content, entry)
 
-			if !include {
-				continue
-			}
-			events = append(events, githubEvent(opts, g.Repo, "issue_open", node.CreatedAt, &ref, login, nil))
+			events = appendOptionalGitHubEvent(events, opts, g.Repo, "issue_open", node.CreatedAt, &ref, login)
 
 			if node.ClosedAt != nil {
 				events = appendOptionalGitHubEvent(events, opts, g.Repo, "issue_close", *node.ClosedAt, &ref, login)
@@ -354,13 +350,14 @@ func (g *GitHubEvents) fetchIssues(ctx context.Context, owner, repo string, opts
 func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, []ContentEntry, error) {
 	query := `query($owner: String!, $name: String!, $after: String) {
 		repository(owner: $owner, name: $name) {
-			pullRequests(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+			pullRequests(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
 				nodes {
 					number
 					title
 					body
 					state
 					createdAt
+					updatedAt
 					closedAt
 					mergedAt
 					url
@@ -384,6 +381,7 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 							Body      string  `json:"body"`
 							State     string  `json:"state"`
 							CreatedAt string  `json:"createdAt"`
+							UpdatedAt string  `json:"updatedAt"`
 							ClosedAt  *string `json:"closedAt"`
 							MergedAt  *string `json:"mergedAt"`
 							URL       string  `json:"url"`
@@ -408,8 +406,7 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 		var events []Event
 		done := false
 		for _, node := range result.Data.Repository.PullRequests.Nodes {
-			include, stop := includeGitHubEventTime(node.CreatedAt, opts)
-			if stop {
+			if updatedBeforeWindow(opts, node.UpdatedAt, node.CreatedAt, node.ClosedAt, node.MergedAt) {
 				done = true
 				break
 			}
@@ -459,10 +456,7 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 			}
 			content = append(content, entry)
 
-			if !include {
-				continue
-			}
-			events = append(events, githubEvent(opts, g.Repo, "pr_open", node.CreatedAt, &ref, login, nil))
+			events = appendOptionalGitHubEvent(events, opts, g.Repo, "pr_open", node.CreatedAt, &ref, login)
 
 			if node.MergedAt != nil {
 				events = appendOptionalGitHubEvent(events, opts, g.Repo, "pr_merge", *node.MergedAt, &ref, login)
@@ -498,13 +492,17 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 			break
 		}
 
+		older := false
 		for _, c := range comments {
 			t, err := time.Parse(time.RFC3339, c.CreatedAt)
 			if err != nil {
 				continue
 			}
 			if t.Before(opts.StartDate) {
-				continue
+				// Comments come newest first. The rest were created before the
+				// window too; they only match since= because they were edited.
+				older = true
+				break
 			}
 			if !inDateRange(t, opts.StartDate, opts.EndDate) {
 				continue
@@ -518,7 +516,7 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 			events = append(events, githubEvent(opts, g.Repo, "comment", c.CreatedAt, ref, user, nil))
 		}
 
-		if len(comments) < 100 {
+		if older || len(comments) < 100 {
 			break
 		}
 		page++
@@ -530,18 +528,13 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 const reactionCountBatchSize = 10
 
 func (g *GitHubEvents) fetchReactionCounts(ctx context.Context, owner, repo string, opts FetchOptions, content []ContentEntry) ([]Record, error) {
-	knownRefs := g.readKnownReactionRefs(opts)
-
+	// content holds the issues and pull requests updated since StartDate,
+	// closed ones included. Refresh all of their counts: a count is otherwise
+	// only refreshed the next time its item shows up as updated.
 	var numbers []int
 	for _, entry := range content {
-		if entry.Ref == nil {
-			continue
-		}
-		ref := *entry.Ref
-		state, _ := entry.Extra["state"].(string)
-		isOpen := state == "OPEN"
-		if isOpen || !knownRefs[ref] {
-			numbers = append(numbers, ref)
+		if entry.Ref != nil {
+			numbers = append(numbers, *entry.Ref)
 		}
 	}
 
@@ -588,6 +581,12 @@ func (g *GitHubEvents) fetchReactionCountBatch(ctx context.Context, owner, repo 
 	query := buildReactionCountQuery(numbers)
 	vars := map[string]interface{}{"owner": owner, "name": repo}
 	resp, err := g.doGraphQL(ctx, query, vars)
+	var gqlErr *graphQLError
+	if errors.As(err, &gqlErr) && gqlErr.onlyNotFound() {
+		// Some items were deleted or transferred after they were listed.
+		// GitHub still returns the counts of the others.
+		resp, err = gqlErr.body, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reaction counts batch: %w", err)
 	}
@@ -628,7 +627,8 @@ func (g *GitHubEvents) fetchReactionCountBatch(ctx context.Context, owner, repo 
 		alias := fmt.Sprintf("r%d", idx)
 		itemRaw, ok := repoObj[alias]
 		if !ok || string(itemRaw) == "null" {
-			results = append(results, reactionCount{number: number, count: 0})
+			// The item no longer exists. Keep its last stored count instead
+			// of recording a drop to zero.
 			continue
 		}
 
@@ -821,45 +821,6 @@ func parseCommentReactionCounts(resp []byte) (int64, pageInfo, error) {
 	return total, result.Data.Repository.IssueOrPullRequest.Comments.PageInfo, nil
 }
 
-func (g *GitHubEvents) readKnownReactionRefs(opts FetchOptions) map[int]bool {
-	known := make(map[int]bool)
-	if opts.DataDir == "" {
-		return known
-	}
-
-	dir := filepath.Join(opts.DataDir, "metrics", "github", opts.ProjectID)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return known
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		f, err := os.Open(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			var rec struct {
-				Metric string            `json:"metric"`
-				Extra  map[string]string `json:"extra"`
-			}
-			if json.Unmarshal(scanner.Bytes(), &rec) == nil && rec.Metric == "total_reactions" {
-				if ref, err := strconv.Atoi(rec.Extra["ref"]); err == nil {
-					known[ref] = true
-				}
-			}
-		}
-		f.Close()
-	}
-
-	return known
-}
-
 func (g *GitHubEvents) restBaseURL() string {
 	if g.BaseURL != "" {
 		return g.BaseURL
@@ -1001,7 +962,6 @@ func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, op
 	return []ContentEntry{entry}, nil
 }
 
-
 func includeGitHubEventTime(timestamp string, opts FetchOptions) (include bool, stop bool) {
 	t, err := time.Parse(time.RFC3339, timestamp)
 	if err != nil {
@@ -1066,13 +1026,61 @@ func (g *GitHubEvents) doGraphQL(ctx context.Context, query string, vars map[str
 	}
 
 	var errResp struct {
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
+		Errors []graphQLErrorEntry `json:"errors"`
 	}
 	if json.Unmarshal(data, &errResp) == nil && len(errResp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", errResp.Errors[0].Message)
+		return nil, &graphQLError{errors: errResp.Errors, body: data}
 	}
 
 	return data, nil
+}
+
+type graphQLErrorEntry struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// graphQLError is a GraphQL response that carries errors. GitHub can return
+// errors next to partial data; body keeps the response for callers that can
+// use it.
+type graphQLError struct {
+	errors []graphQLErrorEntry
+	body   []byte
+}
+
+func (e *graphQLError) Error() string {
+	return "graphql error: " + e.errors[0].Message
+}
+
+// onlyNotFound reports whether every error is about a node that doesn't
+// exist (anymore).
+func (e *graphQLError) onlyNotFound() bool {
+	for _, entry := range e.errors {
+		if entry.Type != "NOT_FOUND" {
+			return false
+		}
+	}
+	return true
+}
+
+// updatedBeforeWindow reports whether an issue or pull request last changed
+// before the fetch window. They are listed by last update, newest first, so
+// the listing can stop there: anything opened, closed or merged in the window
+// was updated in it. Without updatedAt, the latest of the other timestamps
+// stands in.
+func updatedBeforeWindow(opts FetchOptions, updatedAt, createdAt string, others ...*string) bool {
+	latest := updatedAt
+	if latest == "" {
+		latest = createdAt
+		for _, o := range others {
+			if o != nil && *o > latest {
+				latest = *o
+			}
+		}
+	}
+	t, err := time.Parse(time.RFC3339, latest)
+	if err != nil {
+		return false
+	}
+	return t.Before(opts.StartDate)
 }

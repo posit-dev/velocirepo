@@ -27,7 +27,25 @@ type metricWatermark struct {
 }
 
 func writeMetricWatermarks(dataDir, sourceName, projectID, date string, records []source.Record) error {
-	updates := metricWatermarks(sourceName, projectID, date, records)
+	return mergeMetricWatermarks(dataDir, sourceName, projectID, metricWatermarks(sourceName, projectID, date, records))
+}
+
+// MarkFetched records that a project's targets have been fetched through date,
+// even if the fetch found nothing to store. Event sources use it: a quiet
+// repository has no events to show how far it was fetched, so without it
+// every run would fetch the same quiet days again and its months would never
+// be compacted.
+func MarkFetched(dataDir, sourceName, projectID, date string, targets []string) error {
+	updates := make([]metricWatermark, 0, len(targets))
+	for _, target := range targets {
+		updates = append(updates, metricWatermark{Source: sourceName, ProjectID: projectID, Target: target, Date: date})
+	}
+	return mergeMetricWatermarks(dataDir, sourceName, projectID, updates)
+}
+
+// mergeMetricWatermarks moves the given targets' watermarks forward. A
+// watermark never moves backwards.
+func mergeMetricWatermarks(dataDir, sourceName, projectID string, updates []metricWatermark) error {
 	if len(updates) == 0 {
 		return nil
 	}

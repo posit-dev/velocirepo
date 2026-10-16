@@ -14,6 +14,10 @@ on:
     - cron: '0 1 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: velocirepo-fetch
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -30,13 +34,17 @@ jobs:
           # youtube-token: ${{ secrets.YOUTUBE_TOKEN }}
 
       - name: Commit and push
+        if: ${{ !cancelled() }}
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add velocirepo/
           git diff --staged --quiet || git commit -m "Update metrics - $(date -u +'%Y-%m-%d')"
+          git pull --rebase
           git push
 ```
+
+`velocirepo fetch` exits with a non-zero status when any source fails to fetch, after it has stored what the other sources returned. The `if: ${{ !cancelled() }}` line commits that data anyway, while the run still shows the failure. Without it, a single failing source (an expired token, a rate limit) keeps every source's data from being committed that day. The `concurrency` group keeps a manual run from overlapping the scheduled one.
 
 Or generate this workflow automatically (no installation required):
 

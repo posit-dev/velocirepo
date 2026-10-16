@@ -45,6 +45,9 @@ func TestHomebrewFetch(t *testing.T) {
 		if r.ProjectID != "wget" {
 			t.Errorf("expected project_id=wget, got %s", r.ProjectID)
 		}
+		if r.Date != "2025-06-01" {
+			t.Errorf("expected date=2025-06-01 (opts.EndDate), got %s", r.Date)
+		}
 	}
 
 	assertMetricValues(t, records, map[string]int64{

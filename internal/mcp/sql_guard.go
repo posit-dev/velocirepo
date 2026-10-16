@@ -63,6 +63,8 @@ var mcpForbiddenFunctions = map[string]bool{
 	"glob":            true,
 	"http_get":        true,
 	"http_post":       true,
+	"query":           true,
+	"query_table":     true,
 	"read_blob":       true,
 	"read_csv":        true,
 	"read_csv_auto":   true,
@@ -75,12 +77,19 @@ var mcpForbiddenFunctions = map[string]bool{
 
 const defaultMCPQueryLimit = 1000
 
+// maxMCPQueryLimit is the hard ceiling on the limit parameter accepted by
+// prepareMCPQuery. Callers requesting more rows are silently capped here.
+const maxMCPQueryLimit = 10000
+
 func prepareMCPQuery(query string, limit int) (string, error) {
 	if _, err := validateMCPQuery(query); err != nil {
 		return "", err
 	}
-	if limit <= 0 {
+	switch {
+	case limit <= 0:
 		limit = defaultMCPQueryLimit
+	case limit > maxMCPQueryLimit:
+		limit = maxMCPQueryLimit
 	}
 	return fmt.Sprintf("SELECT * FROM (%s) AS velocirepo_mcp_query LIMIT %d", query, limit), nil
 }

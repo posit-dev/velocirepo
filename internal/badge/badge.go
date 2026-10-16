@@ -2,6 +2,7 @@ package badge
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -220,6 +221,30 @@ func FormatNumber(n int64) string {
 		return fmt.Sprintf("%.1fk", v)
 	default:
 		return fmt.Sprintf("%d", n)
+	}
+}
+
+// FormatValue formats a badge query result. DuckDB returns COUNT as int64 and
+// SUM over BIGINT as a HUGEINT (*big.Int); both are shortened like 1.5k.
+func FormatValue(v any) string {
+	switch val := v.(type) {
+	case nil:
+		return "0"
+	case int64:
+		return FormatNumber(val)
+	case int32:
+		return FormatNumber(int64(val))
+	case float64:
+		return FormatNumber(int64(val))
+	case *big.Int:
+		if val.IsInt64() {
+			return FormatNumber(val.Int64())
+		}
+		return val.String()
+	case string:
+		return val
+	default:
+		return fmt.Sprintf("%v", v)
 	}
 }
 

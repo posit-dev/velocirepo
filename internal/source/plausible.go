@@ -70,6 +70,11 @@ func (p *Plausible) fetchMetrics(ctx context.Context, opts FetchOptions, dimensi
 				continue
 			}
 			date := row.Dimensions[0]
+			// Drop rows whose date can't be parsed or falls outside [StartDate, EndDate].
+			t, err := dateutil.ParseDate(date)
+			if err != nil || !inDateRange(t, opts.StartDate, opts.EndDate) {
+				continue
+			}
 			var extra map[string]string
 			if hasPageDim && len(row.Dimensions) >= 2 {
 				extra = map[string]string{"page": row.Dimensions[1]}

@@ -3,8 +3,59 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
+
+// writeFileAtomically writes data to path using a write-to-temp-then-rename
+// pattern so the file is never partially written. The temp file is created in
+// the same directory as path (required for an atomic rename across the same
+// filesystem). mode is the file permission bits for the final file; if 0 the
+// original file's mode is preserved when it exists. The temp file is removed
+// on failure.
+func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+
+	// If no mode provided, preserve the original file's mode.
+	if mode == 0 {
+		if info, err := os.Stat(path); err == nil {
+			mode = info.Mode()
+		} else {
+			mode = 0644
+		}
+	}
+
+	tmp, err := os.CreateTemp(dir, ".velocirepo-config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp config file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp config file: %w", err)
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp config file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename config file into place: %w", err)
+	}
+
+	ok = true
+	return nil
+}
 
 func FindSection(lines []string, header string) (start, end int, found bool) {
 	target := "[" + header + "]"
@@ -38,7 +89,7 @@ func AppendProject(path string, id string, project Project) error {
 	section := formatProjectSection(id, project)
 	content += "\n" + section
 
-	return os.WriteFile(path, []byte(content), 0644)
+	return writeFileAtomically(path, []byte(content), 0)
 }
 
 func RemoveProject(path string, id string) error {
@@ -64,7 +115,7 @@ func RemoveProject(path string, id string) error {
 	}
 
 	newLines := append(lines[:start], lines[end:]...)
-	return os.WriteFile(path, []byte(strings.Join(newLines, "\n")), 0644)
+	return writeFileAtomically(path, []byte(strings.Join(newLines, "\n")), 0)
 }
 
 func UpdateProject(path string, id string, updates map[string]string, unsets []string) error {
@@ -82,7 +133,7 @@ func UpdateProject(path string, id string, updates map[string]string, unsets []s
 
 	lines = applyProjectUpdates(lines, start, end, updates, unsets)
 
-	return os.WriteFile(path, []byte(strings.Join(collapseBlankLines(lines), "\n")), 0644)
+	return writeFileAtomically(path, []byte(strings.Join(collapseBlankLines(lines), "\n")), 0)
 }
 
 func applyProjectUpdates(lines []string, start, end int, updates map[string]string, unsets []string) []string {
@@ -183,7 +234,7 @@ func RenameSection(path string, oldID string, newID string) error {
 		return fmt.Errorf("project %q not found in config", oldID)
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
+	return writeFileAtomically(path, []byte(strings.Join(lines, "\n")), 0)
 }
 
 func formatProjectSection(id string, project Project) string {

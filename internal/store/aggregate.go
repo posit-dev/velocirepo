@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/posit-dev/velocirepo/internal/dateutil"
 	"github.com/posit-dev/velocirepo/internal/source"
 	"github.com/posit-dev/velocirepo/internal/sourceinfo"
 )
@@ -21,13 +23,17 @@ func SourceCategory(sourceName string) string {
 	return sourceinfo.CategoryDir(sourceName)
 }
 
-// Aggregate concatenates daily→monthly→yearly for all projects. Errors for
-// individual projects are logged but not propagated; category directories that
-// don't exist yet are silently skipped.
+// Aggregate concatenates daily→monthly→yearly for all projects. A period is
+// compacted once it has ended and its last day has been stored, so a day that
+// is still missing (a failed fetch, a source that publishes late) is fetched by
+// the next run instead of being treated as done. A project that fails doesn't
+// stop the others; the errors are returned together. Category directories that
+// don't exist yet are skipped.
 func Aggregate(dataDir string, now time.Time) error {
-	aggregateCategory(filepath.Join(dataDir, MetricsDir), now, recordAggregateSpec())
-	aggregateCategory(filepath.Join(dataDir, EventsDir), now, eventAggregateSpec())
-	return nil
+	return errors.Join(
+		aggregateCategory(dataDir, MetricsDir, now, recordAggregateSpec()),
+		aggregateCategory(dataDir, EventsDir, now, eventAggregateSpec()),
+	)
 }
 
 type aggregateSpec[T any] struct {
@@ -42,7 +48,9 @@ func recordAggregateSpec() aggregateSpec[source.Record] {
 	return aggregateSpec[source.Record]{
 		read:  ReadRecords,
 		write: writeFileAtomic,
-		dedup: dedup,
+		dedup: func(records []source.Record) []source.Record {
+			return dedupNewest(records, dedupKey)
+		},
 		less: func(a, b source.Record) bool {
 			return a.Date < b.Date
 		},
@@ -54,7 +62,9 @@ func eventAggregateSpec() aggregateSpec[source.Event] {
 	return aggregateSpec[source.Event]{
 		read:  ReadEvents,
 		write: writeEventsFileAtomic,
-		dedup: dedupEvents,
+		dedup: func(events []source.Event) []source.Event {
+			return dedupNewest(events, dedupEventKey)
+		},
 		less: func(a, b source.Event) bool {
 			return a.Datetime < b.Datetime
 		},
@@ -62,12 +72,17 @@ func eventAggregateSpec() aggregateSpec[source.Event] {
 	}
 }
 
-func aggregateCategory[T any](categoryDir string, now time.Time, spec aggregateSpec[T]) {
+func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggregateSpec[T]) error {
+	categoryDir := filepath.Join(dataDir, category)
 	sourceDirs, err := os.ReadDir(categoryDir)
 	if err != nil {
-		return
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 
+	var errs []error
 	for _, sourceEntry := range sourceDirs {
 		if !sourceEntry.IsDir() {
 			continue
@@ -76,6 +91,7 @@ func aggregateCategory[T any](categoryDir string, now time.Time, spec aggregateS
 
 		projectDirs, err := os.ReadDir(sourcePath)
 		if err != nil {
+			errs = append(errs, err)
 			continue
 		}
 
@@ -84,26 +100,37 @@ func aggregateCategory[T any](categoryDir string, now time.Time, spec aggregateS
 				continue
 			}
 			projPath := filepath.Join(sourcePath, projEntry.Name())
-			if err := aggregateProject(projPath, now, spec); err != nil {
-				slog.Warn("concatenation failed", "path", projPath, "error", err)
+			watermarkPath := WatermarkFilePath(dataDir, sourceEntry.Name(), projEntry.Name())
+			if err := aggregateProject(projPath, watermarkPath, now, spec); err != nil {
+				errs = append(errs, fmt.Errorf("concatenate %s: %w", projPath, err))
 			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
-func aggregateProject[T any](projDir string, now time.Time, spec aggregateSpec[T]) error {
-	if err := aggregateDailyToMonthly(projDir, now, spec); err != nil {
+// aggregateProject compacts the complete months and years of one project
+// directory. A period counts as complete once it has ended and the project's
+// data has been stored through its last day. That keeps LastDate's reading of
+// a period file as "fetched through the period's last day" true, and leaves a
+// period with a missing last day as daily files until the next fetch fills it.
+func aggregateProject[T any](projDir, watermarkPath string, now time.Time, spec aggregateSpec[T]) error {
+	through, err := latestStoredDate(projDir, watermarkPath)
+	if err != nil {
 		return err
 	}
-	return aggregateMonthlyToYearly(projDir, now, spec)
-}
 
-func aggregateDailyToMonthly[T any](projDir string, now time.Time, spec aggregateSpec[T]) error {
-	return aggregateFiles(projDir, now, spec, groupDailyFile, isMonthComplete, "month", "daily to monthly")
-}
+	monthComplete := func(month string, now time.Time) bool {
+		return isMonthComplete(month, now) && through >= dateutil.LastDayOfMonth(month)
+	}
+	if err := aggregateFiles(projDir, now, spec, groupDailyFile, monthComplete, "month", "daily to monthly"); err != nil {
+		return err
+	}
 
-func aggregateMonthlyToYearly[T any](projDir string, now time.Time, spec aggregateSpec[T]) error {
-	return aggregateFiles(projDir, now, spec, groupMonthlyFile, isYearComplete, "year", "monthly to yearly")
+	yearComplete := func(year string, now time.Time) bool {
+		return isYearComplete(year, now) && through >= year+"-12-31"
+	}
+	return aggregateFiles(projDir, now, spec, groupMonthlyFile, yearComplete, "year", "monthly to yearly")
 }
 
 func aggregateFiles[T any](
@@ -131,29 +158,49 @@ func aggregateFiles[T any](
 		}
 	}
 
-	for group, files := range groupedFiles {
+	groups := make([]string, 0, len(groupedFiles))
+	for group := range groupedFiles {
+		groups = append(groups, group)
+	}
+	sort.Strings(groups)
+
+	for _, group := range groups {
 		if !isComplete(group, now) {
 			continue
 		}
 
+		files := groupedFiles[group]
 		sort.Strings(files)
 
-		items, err := readAllAggregateFiles(files, spec.read)
+		// A period file can already exist: data for an already-compacted period
+		// arrives through backfills and repairs, and a crash can interrupt the
+		// deletion of the inputs. Merge into it rather than replacing it. It is
+		// read first so that the newer inputs win for records with the same key.
+		outPath := filepath.Join(projDir, group+".jsonl")
+		inputs := files
+		if _, err := os.Stat(outPath); err == nil {
+			inputs = append([]string{outPath}, files...)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+
+		items, err := readAllAggregateFiles(inputs, spec.read)
 		if err != nil {
 			return fmt.Errorf("read %s files for %s: %w", spec.label, group, err)
 		}
 
 		items = spec.dedup(items)
-		sort.Slice(items, func(i, j int) bool {
+		sort.SliceStable(items, func(i, j int) bool {
 			return spec.less(items[i], items[j])
 		})
 
-		outPath := filepath.Join(projDir, group+".jsonl")
 		if err := spec.write(outPath, items); err != nil {
 			return err
 		}
 
-		removeAggregateSources(files)
+		if err := removeAggregateSources(files); err != nil {
+			return err
+		}
 
 		slog.Debug("concatenated "+logLabel, logKey, group, "files", len(files))
 	}
@@ -187,12 +234,17 @@ func readAllAggregateFiles[T any](paths []string, read func(string) ([]T, error)
 	return all, nil
 }
 
-func removeAggregateSources(paths []string) {
+// removeAggregateSources deletes the inputs of a period file that has been
+// written. A failure leaves the period and its inputs side by side, which the
+// next compaction merges again, but it is reported.
+func removeAggregateSources(paths []string) error {
+	var errs []error
 	for _, f := range paths {
-		if err := os.Remove(f); err != nil {
-			slog.Warn("remove source file", "path", f, "error", err)
+		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove compacted file: %w", err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func isMonthComplete(yearMonth string, now time.Time) bool {
@@ -227,6 +279,25 @@ func dedupBy[T any](items []T, keyFor func(T) string) []T {
 			continue
 		}
 		seen[key] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
+// dedupNewest keeps one item per key like dedupBy, but takes the value of the
+// last occurrence. Compaction reads its inputs oldest first, so a re-fetched
+// value replaces the one it corrects.
+func dedupNewest[T any](items []T, keyFor func(T) string) []T {
+	index := make(map[string]int, len(items))
+	result := make([]T, 0, len(items))
+
+	for _, item := range items {
+		key := keyFor(item)
+		if i, ok := index[key]; ok {
+			result[i] = item
+			continue
+		}
+		index[key] = len(result)
 		result = append(result, item)
 	}
 	return result

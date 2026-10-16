@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/posit-dev/velocirepo/internal/dateutil"
 )
@@ -40,7 +39,7 @@ func (h *Homebrew) Fetch(ctx context.Context, opts FetchOptions) ([]Record, erro
 		return nil, err
 	}
 
-	today := dateutil.FormatDate(time.Now().UTC())
+	date := dateutil.FormatDate(opts.EndDate)
 	var records []Record
 
 	for period, variants := range result.Analytics.Install {
@@ -53,7 +52,7 @@ func (h *Homebrew) Fetch(ctx context.Context, opts FetchOptions) ([]Record, erro
 			Metric:    metric,
 			ProjectID: opts.ProjectID,
 			Target:    h.Formula,
-			Date:      today,
+			Date:      date,
 			Value:     total,
 		})
 	}

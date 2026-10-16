@@ -307,3 +307,104 @@ func TestWriteRecords_MixedDailyAndTotal(t *testing.T) {
 		t.Errorf("expected total_subscribers, got %s", got[0].Metric)
 	}
 }
+
+func TestLastRecordedTotalsBeforeDate(t *testing.T) {
+	dir := t.TempDir()
+	total := func(date string, value int64) source.Record {
+		return source.Record{Source: "openvsx", Metric: "total_downloads", Target: "ext", Date: date, Value: value}
+	}
+	key := totalKey(total("", 0))
+	keys := map[string]struct{}{key: {}}
+
+	t.Run("ignores records on or after the cutoff", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestRecords(t, filepath.Join(dir, "2025-01-01.jsonl"), total("2025-01-01", 1))
+		writeTestRecords(t, filepath.Join(dir, "2025-01-05.jsonl"), total("2025-01-05", 5))
+		got, err := lastRecordedTotalsFor(dir, keys, "2025-01-05")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[key] != 1 {
+			t.Errorf("baseline before 2025-01-05 = %d, want 1", got[key])
+		}
+	})
+
+	t.Run("a daily file wins over its period file for the same date", func(t *testing.T) {
+		// The monthly file sorts first (it can hold later dates), so the
+		// re-fetched daily value must win on the tie, not by order.
+		writeTestRecords(t, filepath.Join(dir, "2025-01.jsonl"), total("2025-01-20", 5))
+		writeTestRecords(t, filepath.Join(dir, "2025-01-20.jsonl"), total("2025-01-20", 7))
+		got, err := lastRecordedTotalsFor(dir, keys, "2025-02-01")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[key] != 7 {
+			t.Errorf("baseline = %d, want 7 from the re-fetched daily file", got[key])
+		}
+	})
+
+	t.Run("a period file spanning the cutoff only counts its earlier records", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestRecords(t, filepath.Join(dir, "2025-01.jsonl"), total("2025-01-10", 4), total("2025-01-15", 5), total("2025-01-20", 6))
+		got, err := lastRecordedTotalsFor(dir, keys, "2025-01-15")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[key] != 4 {
+			t.Errorf("baseline before 2025-01-15 = %d, want 4 from 2025-01-10", got[key])
+		}
+	})
+
+	t.Run("overlapping files don't end the search early", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestRecords(t, filepath.Join(dir, "2025-01.jsonl"), total("2025-01-10", 3))
+		writeTestRecords(t, filepath.Join(dir, "2025-01-20.jsonl"), total("2025-01-20", 4))
+		got, err := lastRecordedTotalsFor(dir, keys, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[key] != 4 {
+			t.Errorf("baseline = %d, want 4 from 2025-01-20", got[key])
+		}
+	})
+}
+
+// A total that goes down (an unstarred repo, a feed that drops items) is a
+// change point too.
+func TestWriteRecordsRecordsDecreasingTotals(t *testing.T) {
+	dir := t.TempDir()
+	for _, r := range []source.Record{
+		{Metric: "total_items", ProjectID: "site", Target: "feed", Date: "2025-01-01", Value: 10},
+		{Metric: "total_items", ProjectID: "site", Target: "feed", Date: "2025-01-02", Value: 8},
+	} {
+		if _, err := WriteRecords(dir, "rss", "site", []source.Record{r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := ReadRecords(metricsPath(dir, "rss", "site", "2025-01-02"))
+	if err != nil {
+		t.Fatalf("the decrease on 2025-01-02 was not stored: %v", err)
+	}
+	if len(got) != 1 || got[0].Value != 8 {
+		t.Errorf("2025-01-02 = %+v, want total_items 8", got)
+	}
+}
+
+// Backfilling an older day must not move the watermark backwards.
+func TestWatermarkNeverMovesBackwards(t *testing.T) {
+	dir := t.TempDir()
+	for _, date := range []string{"2025-02-02", "2025-01-15"} {
+		if _, err := WriteRecords(dir, "openvsx", "proj", []source.Record{
+			{Metric: "total_downloads", ProjectID: "proj", Target: "ext", Date: date, Value: 10},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	watermarks, err := ReadMetricWatermarks(dir, "openvsx", "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(watermarks) != 1 || watermarks[0].Date != "2025-02-02" {
+		t.Errorf("watermarks = %+v, want ext at 2025-02-02", watermarks)
+	}
+}

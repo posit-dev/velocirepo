@@ -10,12 +10,25 @@ velocirepo badge forks --project quarto -o forks.svg
 velocirepo badge downloads --project ggplot2 -o downloads.svg
 ```
 
+## Presets
+
+| Badge | Value |
+|-------|-------|
+| `stars` | Number of GitHub star events (stars received since tracking began) |
+| `forks` | Number of GitHub fork events |
+| `downloads` | All-time sum of `daily_downloads` (PyPI and CRAN) |
+| `pageviews` | All-time sum of `daily_site_pageviews` (Plausible) |
+
+With `--project`, a preset only counts that project's data. A preset with no data shows `0`. OpenVSX downloads are a `total_downloads` series (only changes are stored), so use a custom badge for those. For a single extension: `SELECT MAX(value) AS value FROM metrics WHERE metric = 'total_downloads'`.
+
+## Custom badges
+
 For custom metrics, provide a SQL query that returns a single value:
 
 ```bash
 velocirepo badge custom \
   --label "contributors" \
-  --query "SELECT COUNT(DISTINCT tags->>'user') AS value FROM events" \
+  --query "SELECT COUNT(DISTINCT \"user\") AS value FROM events" \
   --color "#ea7233" \
   -o contributors.svg
 ```

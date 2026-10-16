@@ -19,25 +19,7 @@ func fetchAllCmd() *cobra.Command {
 			ui.FetchPlan(sources, projects, sources*projects)
 
 			results, err := fetch.All(cmd.Context(), cfg, fetch.TokensFromEnv(), opts)
-			if err != nil {
-				return err
-			}
-			renderFetchResults(results)
-
-			if opts.Stats != nil {
-				ui.FetchSummary(ui.FetchStats{
-					Elapsed:      opts.Stats.Elapsed(),
-					Records:      opts.Stats.Records,
-					FilesWritten: opts.Stats.FilesWritten,
-					APICalls:     opts.Stats.APICalls,
-					Succeeded:    opts.Stats.Succeeded,
-					Skipped:      opts.Stats.Skipped,
-					Failed:       opts.Stats.Failed,
-				})
-			}
-
-			rebuildDB()
-			return nil
+			return finishFetch(opts, results, err, "fetch")
 		},
 	}
 

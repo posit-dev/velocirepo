@@ -19,10 +19,31 @@ func BuildDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDef) 
 
 	dbPath := filepath.Join(absDir, "velocirepo.duckdb")
 
-	_ = os.Remove(dbPath)
-	_ = os.Remove(dbPath + ".wal")
+	// Build into a temp file in the same directory so the final rename is
+	// atomic on the same filesystem. Any failure leaves the previous database
+	// intact.
+	tmpDB, err := os.CreateTemp(absDir, ".velocirepo-build-*.duckdb")
+	if err != nil {
+		return fmt.Errorf("create temp db file: %w", err)
+	}
+	tmpPath := tmpDB.Name()
+	// DuckDB opens the file by path; close the Go handle immediately.
+	if err := tmpDB.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temp db file: %w", err)
+	}
+	// Remove the empty placeholder so DuckDB creates a fresh database.
+	_ = os.Remove(tmpPath)
 
-	db, err := sql.Open("duckdb", dbPath)
+	buildOK := false
+	defer func() {
+		if !buildOK {
+			_ = os.Remove(tmpPath)
+			_ = os.Remove(tmpPath + ".wal")
+		}
+	}()
+
+	db, err := sql.Open("duckdb", tmpPath)
 	if err != nil {
 		return fmt.Errorf("open duckdb file: %w", err)
 	}
@@ -43,6 +64,9 @@ func BuildDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDef) 
 	if err := createContentViewRelative(db, absDir); err != nil {
 		return err
 	}
+	if err := createFetchLogView(db, absDir); err != nil {
+		return err
+	}
 	if err := createProjectsTable(db, projects); err != nil {
 		return err
 	}
@@ -50,11 +74,28 @@ func BuildDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDef) 
 		return err
 	}
 
+	// Flush and close before renaming so the DuckDB WAL is committed.
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("close temp db: %w", err)
+	}
+
+	// Replace the previous database atomically.
+	if err := os.Rename(tmpPath, dbPath); err != nil {
+		return fmt.Errorf("replace database: %w", err)
+	}
+	buildOK = true
+
+	// Remove a stale WAL from the previous database (the new file starts
+	// clean). Also clean any WAL that DuckDB may have left for the temp path
+	// before db.Close() checkpointed it.
+	_ = os.Remove(dbPath + ".wal")
+	_ = os.Remove(tmpPath + ".wal")
+
 	return nil
 }
 
 func createEventsViewRelative(db *sql.DB, absDir string) error {
-	glob := filepath.ToSlash(filepath.Join(absDir, "events", "*", "*", "*.jsonl"))
+	glob := filepath.ToSlash(filepath.Join(absDir, "events", "*", "*", dataFileGlob))
 
 	if !globHasMatches(glob) {
 		slog.Debug("no event files found, creating empty view")
@@ -92,13 +133,19 @@ func createMetricsViewRelative(db *sql.DB, absDir string) error {
 	return nil
 }
 
+// dataFileGlob matches data files in DuckDB globs. Hidden files are skipped
+// so that temp files left by an interrupted write are never read as data.
+const dataFileGlob = "[!.]*.jsonl"
+
+// globHasMatches reports whether a DuckDB glob matches any file. Go's
+// filepath.Glob writes a negated character class as [^...], DuckDB as [!...].
 func globHasMatches(pattern string) bool {
-	matches, err := filepath.Glob(pattern)
+	matches, err := filepath.Glob(strings.ReplaceAll(pattern, "[!", "[^"))
 	return err == nil && len(matches) > 0
 }
 
 func createContentViewRelative(db *sql.DB, absDir string) error {
-	glob := filepath.ToSlash(filepath.Join(absDir, ContentDataDir, "*", "*", "*.jsonl"))
+	glob := filepath.ToSlash(filepath.Join(absDir, ContentDataDir, "*", "*", dataFileGlob))
 
 	if !globHasMatches(glob) {
 		slog.Debug("no content files found, creating empty view")

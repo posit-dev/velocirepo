@@ -76,8 +76,8 @@ type feedItem struct {
 	Updated     string // normalized RFC3339
 	URL         string
 	Tags        []string
-	Type  string
-	Extra map[string]any
+	Type        string
+	Extra       map[string]any
 }
 
 func (it feedItem) toContentEntry(feedURL string) ContentEntry {
@@ -124,7 +124,7 @@ func parseFeed(body []byte) ([]feedItem, error) {
 			items = append(items, e.toFeedItem(plurals))
 		}
 		return items, nil
-	case "rss", "rdf":
+	case "rss":
 		var f rssFeed
 		if err := xml.Unmarshal(body, &f); err != nil {
 			return nil, err
@@ -136,6 +136,21 @@ func parseFeed(body []byte) ([]feedItem, error) {
 		plurals := scanPlurals(allExtras)
 		items := make([]feedItem, 0, len(f.Channel.Items))
 		for _, i := range f.Channel.Items {
+			items = append(items, i.toFeedItem(plurals))
+		}
+		return items, nil
+	case "rdf":
+		var f rdfFeed
+		if err := xml.Unmarshal(body, &f); err != nil {
+			return nil, err
+		}
+		allExtras := make([][]xmlAny, len(f.Items))
+		for i, item := range f.Items {
+			allExtras[i] = item.Extra
+		}
+		plurals := scanPlurals(allExtras)
+		items := make([]feedItem, 0, len(f.Items))
+		for _, i := range f.Items {
 			items = append(items, i.toFeedItem(plurals))
 		}
 		return items, nil
@@ -270,7 +285,7 @@ func atomAuthors(authors []atomAuthor) []any {
 	return out
 }
 
-// --- RSS 2.0 (and RDF/RSS 1.0 item shape) ---
+// --- RSS 2.0 ---
 
 type rssFeed struct {
 	XMLName xml.Name   `xml:"rss"`
@@ -279,6 +294,44 @@ type rssFeed struct {
 
 type rssChannel struct {
 	Items []rssItem `xml:"item"`
+}
+
+// --- RSS 1.0 / RDF ---
+
+// rdfFeed parses RSS 1.0 / RDF feeds. In this format <item> elements are
+// direct children of <rdf:RDF> (not nested inside <channel>).
+type rdfFeed struct {
+	XMLName xml.Name  `xml:"http://www.w3.org/1999/02/22-rdf-syntax-ns# RDF"`
+	Items   []rdfItem `xml:"http://purl.org/rss/1.0/ item"`
+}
+
+// rdfItem is a single entry in an RSS 1.0 feed. It uses the same field layout
+// as rssItem; the identity comes from the rdf:about attribute rather than a
+// <guid> child element, and dc:date is used instead of pubDate.
+type rdfItem struct {
+	About       string   `xml:"http://www.w3.org/1999/02/22-rdf-syntax-ns# about,attr"`
+	Title       string   `xml:"title"`
+	Link        string   `xml:"link"`
+	Description string   `xml:"description"`
+	Cats        []string `xml:"category"`
+	Author      string   `xml:"author"`
+	Extra       []xmlAny `xml:",any"`
+}
+
+func (i rdfItem) toFeedItem(plurals map[string]bool) feedItem {
+	// Delegate to the RSS 2.0 field mapping. rdf:about becomes the GUID so
+	// items without a <guid> child still get a stable identity. dc:date
+	// flows through Extra and is picked up by rssItem.toFeedItem as Updated.
+	proxy := rssItem{
+		Title:       i.Title,
+		Link:        i.Link,
+		GUID:        firstNonEmpty(i.About, i.Link),
+		Description: i.Description,
+		Cats:        i.Cats,
+		Author:      i.Author,
+		Extra:       i.Extra,
+	}
+	return proxy.toFeedItem(plurals)
 }
 
 type rssItem struct {

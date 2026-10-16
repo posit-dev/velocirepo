@@ -3,11 +3,11 @@ package mcp
 import (
 	"context"
 
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/sourceinfo"
 	"github.com/posit-dev/velocirepo/internal/version"
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 )
 
 type ServerOptions struct {

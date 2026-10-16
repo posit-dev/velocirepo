@@ -293,3 +293,89 @@ func TestRenameSectionNotFound(t *testing.T) {
 		t.Fatal("expected error for missing section")
 	}
 }
+
+func TestWriteFileAtomicallyContentCorrect(t *testing.T) {
+	dir := t.TempDir()
+	path := testutil.WriteTempFile(t, dir, "test.toml", "original content\n")
+
+	if err := writeFileAtomically(path, []byte("new content\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "new content\n" {
+		t.Errorf("got %q, want %q", string(data), "new content\n")
+	}
+}
+
+func TestWriteFileAtomicallyNoTempLeftover(t *testing.T) {
+	dir := t.TempDir()
+	path := testutil.WriteTempFile(t, dir, "test.toml", "original\n")
+
+	if err := writeFileAtomically(path, []byte("updated\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No .tmp files should remain in the directory.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
+	}
+}
+
+func TestWriteFileAtomicallyPreservesMode(t *testing.T) {
+	dir := t.TempDir()
+	path := testutil.WriteTempFile(t, dir, "test.toml", "original\n")
+
+	// Set an uncommon mode on the original file.
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeFileAtomically(path, []byte("updated\n"), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mode should be preserved (0640).
+	if info.Mode().Perm() != 0640 {
+		t.Errorf("mode = %o, want 0640", info.Mode().Perm())
+	}
+}
+
+func TestAppendProjectIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	initial := "[data]\ndir = \"data\"\n\n[projects.alpha]\nname = \"Alpha\"\n"
+	path := testutil.WriteTempFile(t, dir, "velocirepo.toml", initial)
+
+	if err := AppendProject(path, "beta", Project{Name: "Beta", GitHubEvents: StringList{"org/beta"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// No temp files in the directory after the call.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temp file left after AppendProject: %s", e.Name())
+		}
+	}
+
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "[projects.beta]") {
+		t.Error("beta section not written")
+	}
+}

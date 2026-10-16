@@ -152,6 +152,64 @@ func TestPlausiblePagination(t *testing.T) {
 	}
 }
 
+// TestPlausibleDateFilter verifies that rows with dates outside [StartDate,
+// EndDate] or with unparseable dates are dropped client-side.
+func TestPlausibleDateFilter(t *testing.T) {
+	// The request window is 2025-06-01..2025-06-02.
+	// The server returns: one in-range day, one before, one after, one bad date.
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var resp interface{}
+		if callCount == 1 {
+			// Site-level query: includes out-of-range and malformed dates.
+			resp = map[string]interface{}{
+				"results": []map[string]interface{}{
+					{"dimensions": []string{"2025-06-01"}, "metrics": []int64{100, 50, 60}},
+					{"dimensions": []string{"2025-05-31"}, "metrics": []int64{999, 1, 1}}, // before start
+					{"dimensions": []string{"2025-06-03"}, "metrics": []int64{888, 2, 2}}, // after end
+					{"dimensions": []string{"not-a-date"}, "metrics": []int64{777, 3, 3}}, // bad date
+				},
+				"meta": map[string]int{"total_rows": 4},
+			}
+		} else {
+			// Page-level query: only in-range row survives.
+			resp = map[string]interface{}{
+				"results": []map[string]interface{}{
+					{"dimensions": []string{"2025-06-02", "/index"}, "metrics": []int64{200, 80, 90}},
+					{"dimensions": []string{"2025-05-30", "/old"}, "metrics": []int64{500, 10, 10}}, // before start
+				},
+				"meta": map[string]int{"total_rows": 2},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := &Plausible{
+		Client:  server.Client(),
+		APIKey:  "test-key",
+		SiteID:  "example.com",
+		BaseURL: server.URL,
+	}
+
+	records, err := p.Fetch(context.Background(), juneFetchOptions("mysite", 1, 2))
+	if err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+
+	// Site: 1 in-range row * 3 metrics = 3
+	// Pages: 1 in-range row * 3 metrics = 3
+	// Total: 6
+	assertRecordCount(t, records, 6)
+
+	for _, r := range records {
+		if r.Date != "2025-06-01" && r.Date != "2025-06-02" {
+			t.Errorf("out-of-range record not filtered: date=%s metric=%s", r.Date, r.Metric)
+		}
+	}
+}
+
 func TestPlausibleAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

@@ -6,10 +6,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/posit-dev/velocirepo/internal/dateutil"
-	"github.com/posit-dev/velocirepo/internal/store"
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/tw"
+	"github.com/posit-dev/velocirepo/internal/dateutil"
+	"github.com/posit-dev/velocirepo/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -29,8 +29,8 @@ func statusCmd() *cobra.Command {
 	var staleOnly bool
 
 	cmd := &cobra.Command{
-		Use:     "status [project]",
-		Short:   "Summarize fetch state for each project, source, and target",
+		Use:   "status [project]",
+		Short: "Summarize fetch state for each project, source, and target",
 		Long: "Report the last date each source/target was successfully fetched, " +
 			"using watermarks so unchanged total_* gauges are not misreported as stale.\n\n" +
 			"Optionally filter to a single project. Rows older than --stale-days are " +

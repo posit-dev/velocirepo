@@ -8,6 +8,13 @@ import (
 	"net/http"
 )
 
+type HTTPStatusError struct {
+	Code    int
+	Message string
+}
+
+func (e *HTTPStatusError) Error() string { return e.Message }
+
 type httpJSONRequest struct {
 	Method         string
 	URL            string
@@ -66,16 +73,17 @@ func doRequest(ctx context.Context, client *http.Client, spec httpJSONRequest) (
 
 	if resp.StatusCode != expectedStatus {
 		body, _ := io.ReadAll(resp.Body)
+		var msg string
 		if len(body) > 0 && spec.StatusError != "" {
-			return nil, fmt.Errorf("%s %d: %s", spec.StatusError, resp.StatusCode, string(body))
+			msg = fmt.Sprintf("%s %d: %s", spec.StatusError, resp.StatusCode, string(body))
+		} else if spec.StatusError != "" {
+			msg = fmt.Sprintf("%s %d", spec.StatusError, resp.StatusCode)
+		} else if len(body) > 0 {
+			msg = fmt.Sprintf("%s returned %d: %s", req.URL.Path, resp.StatusCode, string(body))
+		} else {
+			msg = fmt.Sprintf("%s returned %d", req.URL.Path, resp.StatusCode)
 		}
-		if spec.StatusError != "" {
-			return nil, fmt.Errorf("%s %d", spec.StatusError, resp.StatusCode)
-		}
-		if len(body) > 0 {
-			return nil, fmt.Errorf("%s returned %d: %s", req.URL.Path, resp.StatusCode, string(body))
-		}
-		return nil, fmt.Errorf("%s returned %d", req.URL.Path, resp.StatusCode)
+		return nil, &HTTPStatusError{Code: resp.StatusCode, Message: msg}
 	}
 
 	body, err := io.ReadAll(resp.Body)

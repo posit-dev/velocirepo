@@ -1,6 +1,7 @@
 package badge
 
 import (
+	"math/big"
 	"strings"
 	"testing"
 )
@@ -192,5 +193,25 @@ func assertNotContains(t *testing.T, svg, substr string) {
 	t.Helper()
 	if strings.Contains(svg, substr) {
 		t.Errorf("SVG should not contain %q", substr)
+	}
+}
+
+func TestFormatValue(t *testing.T) {
+	tests := []struct {
+		in   any
+		want string
+	}{
+		{nil, "0"},
+		{int64(42), "42"},
+		{int64(1500), "1.5k"},
+		{float64(2500000), "2.5M"},
+		{big.NewInt(1500), "1.5k"},
+		{new(big.Int).Lsh(big.NewInt(1), 70), "1180591620717411303424"},
+		{"n/a", "n/a"},
+	}
+	for _, tt := range tests {
+		if got := FormatValue(tt.in); got != tt.want {
+			t.Errorf("FormatValue(%v) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }

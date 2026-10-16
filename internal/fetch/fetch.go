@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,18 +26,31 @@ type Options struct {
 	Quiet         bool
 	OnResult      ResultCallback
 	Stats         *Stats
+	// Now returns the current time; nil means time.Now. It decides the
+	// default end date, the GitHub traffic window and which periods
+	// compaction may close, so tests can run the orchestrator on a simulated
+	// clock.
+	Now func() time.Time
+}
+
+func (o Options) now() time.Time {
+	if o.Now != nil {
+		return o.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 type Result struct {
-	Source    string        `json:"source"`
-	ProjectID string        `json:"project_id"`
-	Records   int           `json:"records"`
-	Files     int           `json:"files,omitempty"`
-	StartDate string        `json:"start_date"`
-	EndDate   string        `json:"end_date"`
-	Duration  time.Duration `json:"duration,omitempty"`
-	Skipped   string        `json:"skipped,omitempty"`
-	Error     string        `json:"error,omitempty"`
+	Source     string        `json:"source"`
+	ProjectID  string        `json:"project_id"`
+	Records    int           `json:"records"`
+	Files      int           `json:"files,omitempty"`
+	StartDate  string        `json:"start_date"`
+	EndDate    string        `json:"end_date"`
+	Duration   time.Duration `json:"duration,omitempty"`
+	StatusCode int           `json:"status_code,omitempty"`
+	Skipped    string        `json:"skipped,omitempty"`
+	Error      string        `json:"error,omitempty"`
 }
 
 type Tokens struct {
@@ -55,17 +69,17 @@ func TokensFromEnv() Tokens {
 	}
 }
 
-func resolveEndDate(cfg *config.Config, endDateStr string) (time.Time, error) {
+func resolveEndDate(cfg *config.Config, endDateStr string, now time.Time) (time.Time, error) {
 	if endDateStr != "" {
 		return dateutil.ParseDate(endDateStr)
 	}
 	if cfg.Settings.EndDate == "yesterday" || cfg.Settings.EndDate == "" {
-		return time.Now().UTC().AddDate(0, 0, -1).Truncate(24 * time.Hour), nil
+		return now.AddDate(0, 0, -1).Truncate(24 * time.Hour), nil
 	}
 	return dateutil.ParseDate(cfg.Settings.EndDate)
 }
 
-func resolveStartDate(dataDir, sourceName, projectID, startDateStr string) (time.Time, error) {
+func resolveStartDate(dataDir, sourceName, projectID, startDateStr string, now time.Time) (time.Time, error) {
 	if startDateStr != "" {
 		return dateutil.ParseDate(startDateStr)
 	}
@@ -81,14 +95,25 @@ func resolveStartDate(dataDir, sourceName, projectID, startDateStr string) (time
 	}
 
 	if sourceName == "github-traffic" {
-		earliest := time.Now().UTC().AddDate(0, 0, -14).Truncate(24 * time.Hour)
+		earliest := now.AddDate(0, 0, -14).Truncate(24 * time.Hour)
 		if start.Before(earliest) {
+			if !last.IsZero() {
+				slog.Warn("github traffic only covers the last 14 days; earlier days can no longer be fetched",
+					"project", projectID, "from", dateutil.FormatDate(start), "to", dateutil.FormatDate(earliest.AddDate(0, 0, -1)))
+			}
 			start = earliest
 		}
 	}
 
 	return start, nil
 }
+
+// settleDays delays the default end date for sources whose days don't end at
+// UTC midnight. Plausible reports days in the site's time zone, so at the
+// 01:00 UTC run "yesterday" is still in progress for sites in the Americas and
+// a partial value would be stored for good. One more day is complete in every
+// time zone.
+var settleDays = map[string]int{"plausible": 1}
 
 func filterProjects(projects map[string]config.Project, projectID string) map[string]config.Project {
 	if projectID == "" {
@@ -106,6 +131,7 @@ type fetchJob struct {
 	projectID    string
 	sources      []source.Source
 	eventSources []source.EventSource
+	eventTargets []string
 	startDate    time.Time
 	startErr     error
 }
@@ -126,7 +152,7 @@ func addMetricJob(jobs map[jobKey]*fetchJob, order *[]jobKey, sourceName, projec
 	job.sources = append(job.sources, src)
 }
 
-func addEventJob(jobs map[jobKey]*fetchJob, order *[]jobKey, sourceName, projectID string, src source.EventSource) {
+func addEventJob(jobs map[jobKey]*fetchJob, order *[]jobKey, sourceName, projectID, target string, src source.EventSource) {
 	key := jobKey{sourceName: sourceName, projectID: projectID}
 	job := jobs[key]
 	if job == nil {
@@ -135,6 +161,7 @@ func addEventJob(jobs map[jobKey]*fetchJob, order *[]jobKey, sourceName, project
 		*order = append(*order, key)
 	}
 	job.eventSources = append(job.eventSources, src)
+	job.eventTargets = append(job.eventTargets, target)
 }
 
 func orderedJobs(jobs map[jobKey]*fetchJob, order []jobKey) []fetchJob {
@@ -165,14 +192,24 @@ func runJobs(ctx context.Context, cfg *config.Config, opts Options, jobs []fetch
 }
 
 func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, jobs []fetchJob, concurrency int, onResult ResultCallback) ([]Result, error) {
-	endDate, err := resolveEndDate(cfg, opts.EndDate)
+	endDate, err := resolveEndDate(cfg, opts.EndDate, opts.now())
 	if err != nil {
 		return nil, fmt.Errorf("parse end date: %w", err)
 	}
+	if opts.StartDate != "" {
+		startDate, err := dateutil.ParseDate(opts.StartDate)
+		if err != nil {
+			return nil, fmt.Errorf("parse start date: %w", err)
+		}
+		if startDate.After(endDate) {
+			return nil, fmt.Errorf("start date %s is after end date %s", opts.StartDate, dateutil.FormatDate(endDate))
+		}
+	}
+	defaultEnd := opts.EndDate == "" && (cfg.Settings.EndDate == "" || cfg.Settings.EndDate == "yesterday")
 
 	dataDir := cfg.DataDir()
 	for i := range jobs {
-		startDate, err := resolveStartDate(dataDir, jobs[i].sourceName, jobs[i].projectID, opts.StartDate)
+		startDate, err := resolveStartDate(dataDir, jobs[i].sourceName, jobs[i].projectID, opts.StartDate, opts.now())
 		jobs[i].startDate = startDate
 		jobs[i].startErr = err
 	}
@@ -188,8 +225,12 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 
 	for _, job := range jobs {
 		job := job
+		jobEnd := endDate
+		if defaultEnd {
+			jobEnd = endDate.AddDate(0, 0, -settleDays[job.sourceName])
+		}
 		g.Go(func() error {
-			resultsCh <- runJob(gctx, dataDir, endDate, job)
+			resultsCh <- runJob(gctx, dataDir, jobEnd, job)
 			return nil
 		})
 	}
@@ -216,7 +257,7 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	<-done
 
 	if !opts.NoConcatenate {
-		if err := store.Aggregate(dataDir, time.Now().UTC()); err != nil {
+		if err := store.Aggregate(dataDir, opts.now()); err != nil {
 			return results, fmt.Errorf("concatenation: %w", err)
 		}
 	}
@@ -280,10 +321,11 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 		fetched, err := eventSrc.FetchEvents(ctx, opts)
 		if err != nil {
 			results = append(results, Result{
-				Source:    job.sourceName,
-				ProjectID: job.projectID,
-				Duration:  time.Since(started),
-				Error:     err.Error(),
+				Source:     job.sourceName,
+				ProjectID:  job.projectID,
+				Duration:   time.Since(started),
+				StatusCode: httpStatusCode(err),
+				Error:      err.Error(),
 			})
 			continue
 		}
@@ -303,6 +345,7 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 	}
 
 	if len(events) == 0 && len(contentByFilename) == 0 && len(records) == 0 {
+		markEventsFetched(dataDir, job, opts.EndDate)
 		return []Result{{
 			Source:    job.sourceName,
 			ProjectID: job.projectID,
@@ -342,6 +385,8 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 		filesWritten += n
 	}
 
+	markEventsFetched(dataDir, job, opts.EndDate)
+
 	return append(results, Result{
 		Source:    job.sourceName,
 		ProjectID: job.projectID,
@@ -353,6 +398,14 @@ func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.
 	})
 }
 
+// markEventsFetched records that the job's repositories were fetched through
+// endDate, so that the next run resumes after it even when nothing happened.
+func markEventsFetched(dataDir string, job fetchJob, endDate time.Time) {
+	if err := store.MarkFetched(dataDir, job.sourceName, job.projectID, dateutil.FormatDate(endDate), job.eventTargets); err != nil {
+		slog.Warn("record fetched date failed", "source", job.sourceName, "project", job.projectID, "error", err)
+	}
+}
+
 func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source.FetchOptions, started time.Time) []Result {
 	var results []Result
 	var records []source.Record
@@ -362,10 +415,11 @@ func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source
 		fetched, err := src.Fetch(ctx, opts)
 		if err != nil {
 			results = append(results, Result{
-				Source:    job.sourceName,
-				ProjectID: job.projectID,
-				Duration:  time.Since(started),
-				Error:     err.Error(),
+				Source:     job.sourceName,
+				ProjectID:  job.projectID,
+				Duration:   time.Since(started),
+				StatusCode: httpStatusCode(err),
+				Error:      err.Error(),
 			})
 			continue
 		}
@@ -420,6 +474,14 @@ func runMetricJob(ctx context.Context, dataDir string, job fetchJob, opts source
 		EndDate:   dateutil.FormatDate(opts.EndDate),
 		Duration:  time.Since(started),
 	})
+}
+
+func httpStatusCode(err error) int {
+	var statusErr *source.HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.Code
+	}
+	return 0
 }
 
 type fetchSourceDescriptor struct {
@@ -558,7 +620,7 @@ func (d fetchSourceDescriptor) runBeforeFetch(ctx context.Context, tokens Tokens
 func (d fetchSourceDescriptor) addJobs(jobs map[jobKey]*fetchJob, order *[]jobKey, client *http.Client, tokens Tokens, projectID string, proj config.Project) {
 	for _, target := range proj.SourceValues(d.Name) {
 		if d.eventFactory != nil {
-			addEventJob(jobs, order, d.Name, projectID, d.eventFactory(client, tokens, target))
+			addEventJob(jobs, order, d.Name, projectID, target, d.eventFactory(client, tokens, target))
 			continue
 		}
 		addMetricJob(jobs, order, d.Name, projectID, d.metricFactory(client, tokens, target))

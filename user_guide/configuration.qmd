@@ -63,6 +63,8 @@ velocirepo uses API tokens to authenticate with external services. Tokens can be
 | **OpenVSX** | Total downloads, reviews, ratings |
 | **YouTube** | Views, likes, comments, subscribers (channel and per-video) |
 
+By default each fetch runs through yesterday (UTC). Plausible is the exception: it reports days in each site's own time zone, and at an early-morning UTC run yesterday is still in progress for sites in the Americas. So Plausible is fetched through the day before yesterday, which is complete everywhere. An explicit `--end-date` overrides both.
+
 ## Next steps
 
 - [Understand the data storage format](data-storage.qmd)

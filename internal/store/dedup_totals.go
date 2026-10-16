@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/posit-dev/velocirepo/internal/dateutil"
 	"github.com/posit-dev/velocirepo/internal/source"
 )
 
@@ -35,10 +36,16 @@ func totalKey(r source.Record) string {
 }
 
 func lastRecordedTotals(dir string) (map[string]int64, error) {
-	return lastRecordedTotalsFor(dir, nil)
+	return lastRecordedTotalsFor(dir, nil, "")
 }
 
-func lastRecordedTotalsFor(dir string, wantedKeys map[string]struct{}) (map[string]int64, error) {
+// lastRecordedTotalsFor returns the latest recorded value of each wanted
+// total_* series (every series if wantedKeys is empty), counting only records
+// dated before `before` ("" counts everything). Comparing a day's values with
+// records of that same day would drop its change points when the day is
+// fetched again. For the same date, a daily file wins over a period file: it
+// was written later.
+func lastRecordedTotalsFor(dir string, wantedKeys map[string]struct{}, before string) (map[string]int64, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -47,47 +54,75 @@ func lastRecordedTotalsFor(dir string, wantedKeys map[string]struct{}) (map[stri
 		return nil, err
 	}
 
-	var files []string
+	type fileSpan struct {
+		name        string
+		first, last string
+		daily       bool
+	}
+	var files []fileSpan
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() {
 			continue
 		}
-		files = append(files, e.Name())
+		first, last, daily, ok := periodSpan(e.Name())
+		if !ok || (before != "" && first >= before) {
+			continue
+		}
+		files = append(files, fileSpan{name: e.Name(), first: first, last: last, daily: daily})
 	}
 	if len(files) == 0 {
 		return nil, nil
 	}
 
-	sort.Strings(files)
+	// Newest period first, so the search can stop early.
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].last != files[j].last {
+			return files[i].last > files[j].last
+		}
+		return files[i].daily && !files[j].daily
+	})
 
 	type totalState struct {
 		value int64
 		date  string
+		daily bool
 	}
 
 	totals := make(map[string]totalState)
-	for i := len(files) - 1; i >= 0; i-- {
-		path := filepath.Join(dir, files[i])
-		records, err := ReadRecords(path)
+	for _, f := range files {
+		if len(wantedKeys) > 0 && len(totals) == len(wantedKeys) {
+			// Every wanted series has a value newer than anything this file
+			// (and every file after it) can hold.
+			done := true
+			for _, total := range totals {
+				if total.date <= f.last {
+					done = false
+					break
+				}
+			}
+			if done {
+				break
+			}
+		}
+
+		records, err := ReadRecords(filepath.Join(dir, f.name))
 		if err != nil {
 			continue
 		}
 		for _, r := range records {
-			if isTotalMetric(r.Metric) {
-				key := totalKey(r)
-				if len(wantedKeys) > 0 {
-					if _, ok := wantedKeys[key]; !ok {
-						continue
-					}
-				}
-				prev, exists := totals[key]
-				if !exists || r.Date > prev.date {
-					totals[key] = totalState{value: r.Value, date: r.Date}
+			if !isTotalMetric(r.Metric) || (before != "" && r.Date >= before) {
+				continue
+			}
+			key := totalKey(r)
+			if len(wantedKeys) > 0 {
+				if _, ok := wantedKeys[key]; !ok {
+					continue
 				}
 			}
-		}
-		if len(wantedKeys) > 0 && len(totals) == len(wantedKeys) {
-			break
+			prev, exists := totals[key]
+			if !exists || r.Date > prev.date || (r.Date == prev.date && f.daily && !prev.daily) {
+				totals[key] = totalState{value: r.Value, date: r.Date, daily: f.daily}
+			}
 		}
 	}
 
@@ -100,6 +135,21 @@ func lastRecordedTotalsFor(dir string, wantedKeys map[string]struct{}) (map[stri
 		values[key] = total.value
 	}
 	return values, nil
+}
+
+// periodSpan returns the first and last date a data file can hold, judging by
+// its name, and whether it is a daily file.
+func periodSpan(name string) (first, last string, daily, ok bool) {
+	if m := dailyPattern.FindStringSubmatch(name); m != nil {
+		return m[1], m[1], true, true
+	}
+	if m := monthlyPattern.FindStringSubmatch(name); m != nil {
+		return m[1] + "-01", dateutil.LastDayOfMonth(m[1]), false, true
+	}
+	if m := yearlyPattern.FindStringSubmatch(name); m != nil {
+		return m[1] + "-01-01", m[1] + "-12-31", false, true
+	}
+	return "", "", false, false
 }
 
 func filterUnchangedTotals(records []source.Record, lastValues map[string]int64) []source.Record {

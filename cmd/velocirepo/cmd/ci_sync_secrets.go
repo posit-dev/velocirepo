@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/posit-dev/velocirepo/internal/auth"
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/nacl/box"
@@ -153,8 +154,10 @@ func parseEnvFile(path string) (map[string]string, error) {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		value = strings.Trim(value, `"'`)
+		// Use the same unquoting logic that auth.UpsertEnvFile writes so
+		// that values with special characters ($, ", `, !, \) and embedded
+		// newlines or carriage returns round-trip correctly.
+		value := auth.UnquoteEnvValue(strings.TrimSpace(parts[1]))
 		secrets[key] = value
 	}
 	return secrets, nil

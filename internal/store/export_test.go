@@ -152,6 +152,56 @@ func TestExportWithProjectFilter(t *testing.T) {
 	}
 }
 
+func TestExportContentProjectFilter(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+
+	entriesA := []source.ContentEntry{
+		{Source: "youtube", Target: "@ChannelA", ID: "vid-a1", Title: "Video A1", ProjectID: "proj-a"},
+		{Source: "youtube", Target: "@ChannelA", ID: "vid-a2", Title: "Video A2", ProjectID: "proj-a"},
+	}
+	entriesB := []source.ContentEntry{
+		{Source: "youtube", Target: "@ChannelB", ID: "vid-b1", Title: "Video B1", ProjectID: "proj-b"},
+	}
+	if err := WriteContent(dataDir, "youtube", "proj-a", "videos.jsonl", entriesA); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteContent(dataDir, "youtube", "proj-b", "videos.jsonl", entriesB); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := filepath.Join(dir, "out")
+	_, err := Export(ExportOptions{
+		DataDir: dataDir,
+		OutDir:  outDir,
+		Format:  "parquet",
+		Project: "proj-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, _, err := QueryLive(dataDir, nil, nil,
+		"SELECT COUNT(*) AS cnt FROM '"+filepath.Join(outDir, "content.parquet")+"'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cnt := results[0]["cnt"].(int64)
+	if cnt != 2 {
+		t.Fatalf("export --project proj-a: expected 2 content rows, got %d", cnt)
+	}
+
+	// proj-b's video must be absent from the export.
+	results, _, err = QueryLive(dataDir, nil, nil,
+		"SELECT COUNT(*) AS cnt FROM '"+filepath.Join(outDir, "content.parquet")+"' WHERE project = 'proj-b'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0]["cnt"].(int64) != 0 {
+		t.Fatalf("export --project proj-a: proj-b content leaked into export")
+	}
+}
+
 func TestExportEmptyData(t *testing.T) {
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")

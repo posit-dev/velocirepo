@@ -22,7 +22,7 @@ import (
 type InstallMethod int
 
 const (
-	MethodDirect    InstallMethod = iota
+	MethodDirect InstallMethod = iota
 	MethodHomebrew
 	MethodUV
 	MethodPip
@@ -395,9 +395,14 @@ func extractBinary(tgzPath, dest string) error {
 			if err != nil {
 				return err
 			}
-			defer out.Close()
 			if _, err := io.Copy(out, tr); err != nil {
+				_ = out.Close()
 				return fmt.Errorf("extract binary: %w", err)
+			}
+			// A failed close can mean the last writes never reached the disk;
+			// installing that binary would leave a truncated executable.
+			if err := out.Close(); err != nil {
+				return fmt.Errorf("write binary: %w", err)
 			}
 			return nil
 		}

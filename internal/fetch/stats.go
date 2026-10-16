@@ -8,14 +8,14 @@ import (
 )
 
 type Stats struct {
-	mu          sync.Mutex
-	StartTime   time.Time
-	APICalls    map[string]int // host -> count
-	TotalJobs   int
-	Succeeded   int
-	Skipped     int
-	Failed      int
-	Records     int
+	mu           sync.Mutex
+	StartTime    time.Time
+	APICalls     map[string]int // host -> count
+	TotalJobs    int
+	Succeeded    int
+	Skipped      int
+	Failed       int
+	Records      int
 	FilesWritten int
 }
 

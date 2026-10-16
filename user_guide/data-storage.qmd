@@ -19,6 +19,8 @@ Sources like PyPI, CRAN, Homebrew, Plausible, OpenVSX, GitHub Traffic, YouTube, 
 
 Metric names are prefixed with `daily_` (for deltas — values that reset each day) or `total_` (for snapshots — cumulative totals at a point in time). Homebrew metrics use their own naming (`downloads_30d`, `downloads_365d`, etc.).
 
+`total_*` series are stored only on the days their value changes. Each project's `_watermark.json` records the last day each target was checked, and the `metrics_filled` view fills in the days in between.
+
 Fields:
 
 | Field | Description |
@@ -29,15 +31,15 @@ Fields:
 | `target` | Specific package, repo, site, or extension being tracked |
 | `date` | Date of the measurement (YYYY-MM-DD) |
 | `value` | Integer value |
-| `tags` | Optional key-value metadata (e.g., `{"video_id": "..."}` for YouTube) |
+| `extra` | Optional key-value metadata (e.g., `{"video_id": "..."}` for YouTube) |
 
 ## Events
 
 Event sources store individual events rather than pre-computed counts, giving you full historical detail including who performed each action and when. Currently, GitHub is the only event source.
 
 ```json
-{"source":"github","type":"star","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T14:23:01Z","tags":{"user":"alice"}}
-{"source":"github","type":"fork","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T09:11:44Z","tags":{"user":"bob"}}
+{"source":"github","type":"star","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T14:23:01Z","user":"alice"}
+{"source":"github","type":"issue_close","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T09:11:44Z","ref":1234,"user":"bob"}
 ```
 
 Fields:
@@ -48,8 +50,10 @@ Fields:
 | `type` | Event type (e.g., star, fork, issue_open, issue_close, pr_open, pr_merge) |
 | `project_id` | Project ID from your config |
 | `target` | Specific repo or resource being tracked (e.g., `owner/repo`) |
-| `datetime` | Full timestamp of the event (ISO 8601) |
-| `tags` | Optional key-value metadata (e.g., `{"user": "alice"}`) |
+| `datetime` | Full timestamp of the event (ISO 8601, UTC) |
+| `ref` | Issue or pull request number, for events about one |
+| `user` | Who performed the action, if known |
+| `extra` | Optional key-value metadata |
 
 These events are automatically aggregated into daily counts in the `metrics` DuckDB view (as `daily_stars`, `daily_forks`, etc.) so you can [query them](querying.qmd) alongside other sources.
 
@@ -57,7 +61,7 @@ These events are automatically aggregated into daily counts in the `metrics` Duc
 
 Sources that implement the `ContentProvider` interface also write entity data to `data/content/<source>/<project-id>/<name>.jsonl`. These files use upsert-by-id (new entries are merged with existing ones) rather than date-partitioned concatenation.
 
-Currently, YouTube and LinkedIn are content sources. YouTube writes video metadata to `velocirepo/data/content/youtube/<project-id>/videos.jsonl`:
+YouTube (videos), LinkedIn (posts), RSS (feed items) and GitHub (issues, pull requests and repositories) are content sources. Entries are identified by their target and `id`. YouTube, for example, writes video metadata to `velocirepo/data/content/youtube/<project-id>/videos.jsonl`:
 
 ```json
 {"source":"youtube","target":"@Fireship","id":"ML3q7Ok4hJg","title":"God-Tier Developer Roadmap","published_at":"2024-03-15T16:00:00Z","duration":423,"tags":["programming","roadmap"]}
@@ -67,7 +71,25 @@ LinkedIn writes post metadata to `velocirepo/data/content/linkedin/<project-id>/
 
 ## Concatenation
 
-Daily JSONL files are automatically concatenated into monthly and yearly files once a period is complete. For example, once all days in January 2026 have been fetched, they're concatenated into `2026-01.jsonl`. This keeps the file count manageable for long-running histories. The original daily files are removed after concatenation.
+After every fetch, daily files are concatenated into monthly files, and monthly files into yearly files, to keep the file count manageable for long-running histories. A month is concatenated once it has ended *and* its last day has been stored. For example, `2026-01.jsonl` is written once data for 31 January 2026 (or a later day) is in place; a year needs 31 December. If the last day is still missing — the fetch failed that night, or the source publishes its data a day late, as CRAN does — the month stays as daily files and the next fetch fills the gap first. The original files are removed after concatenation.
+
+The next fetch resumes the day after the latest stored date, and a monthly or yearly file counts as stored through the last day of its period.
+
+### Backfilling and repairing
+
+Use `--start-date` and `--end-date` to fetch a past range again, for example to backfill a target you just added or to fill a gap:
+
+```bash
+velocirepo fetch-cran --start-date 2026-07-31 --end-date 2026-07-31
+```
+
+Data for a period that has already been concatenated is merged into its monthly or yearly file. When the same record (same metric, target, date and `extra`) exists twice, the more recently written one wins, so a re-fetch corrects earlier values.
+
+::: {.callout-warning}
+Versions of velocirepo before this one replaced a monthly or yearly file with whatever daily files were present. They also concatenated months whose last day was missing, which then never got fetched. Upgrade before backfilling into past months. If a monthly or yearly file shrank after a backfill, restore it from git history.
+:::
+
+`velocirepo validate-data` reports daily files next to their month's file, monthly files next to their year's file, and temp files left by interrupted writes. Queries count overlapping data twice until it's merged; `--fix` merges or removes them.
 
 ## Migrating data
 
@@ -83,13 +105,13 @@ To migrate your data to the latest schema:
 velocirepo migrate
 ```
 
-If you've copied in data from an older schema (e.g., merged data from another repository), some files may be at a different version than what `.schema-version` claims. Use `--force` to re-run all migrations from scratch:
+Use `--force` to re-run all migrations from scratch:
 
 ```bash
 velocirepo migrate --force
 ```
 
-This is safe to run repeatedly — all migrations are idempotent.
+This is safe to run repeatedly — all migrations are idempotent. To merge data from an older schema into a current data directory (e.g., data from another repository), first migrate it in a data directory of its own, then copy the migrated files in. The migrations that move files only look at the old layout, and refuse to merge into directories that already exist.
 
 ## Repository layout
 

@@ -43,8 +43,42 @@ runs:
           echo "::error::Could not resolve a valid velocirepo version." >&2
           exit 1
         fi
-        URL="https://github.com/posit-dev/velocirepo/releases/download/v${VERSION}/velocirepo_${VERSION}_linux_amd64.tar.gz"
-        curl -sSL "$URL" | tar xz -C /usr/local/bin velocirepo
+
+        ARTIFACT="velocirepo_${VERSION}_linux_amd64.tar.gz"
+        URL="https://github.com/posit-dev/velocirepo/releases/download/v${VERSION}/${ARTIFACT}"
+        SUMS_URL="https://github.com/posit-dev/velocirepo/releases/download/v${VERSION}/SHA256SUMS"
+
+        WORKDIR=$(mktemp -d)
+        trap "rm -rf '$WORKDIR'" EXIT
+
+        ARCHIVE="${WORKDIR}/${ARTIFACT}"
+        SUMSFILE="${WORKDIR}/SHA256SUMS"
+
+        if ! curl -sSfL "$URL" -o "$ARCHIVE"; then
+          echo "::error::Download failed: ${URL}" >&2
+          exit 1
+        fi
+
+        if ! curl -sSfL "$SUMS_URL" -o "$SUMSFILE"; then
+          echo "::error::Could not download SHA256SUMS from ${SUMS_URL}" >&2
+          exit 1
+        fi
+
+        EXPECTED=$(awk -v a="$ARTIFACT" '$2 == a {print $1}' "$SUMSFILE")
+        if [ -z "$EXPECTED" ]; then
+          echo "::error::No checksum found for ${ARTIFACT} in SHA256SUMS" >&2
+          exit 1
+        fi
+
+        ACTUAL=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+        if [ "$ACTUAL" != "$EXPECTED" ]; then
+          echo "::error::Checksum mismatch for ${ARTIFACT}" >&2
+          echo "  expected: ${EXPECTED}" >&2
+          echo "  actual:   ${ACTUAL}" >&2
+          exit 1
+        fi
+
+        tar xz -C /usr/local/bin -f "$ARCHIVE" velocirepo
 
     - name: Print version
       shell: bash

@@ -217,6 +217,38 @@ var dataFixHandlers = []dataFixHandler{
 		},
 	},
 	{
+		issueType: store.IssuePeriodOverlap,
+		prepare: func(issues []store.Issue) *dataFixAction {
+			paths := collectUniquePaths(issues)
+			if len(paths) == 0 {
+				return nil
+			}
+			return &dataFixAction{
+				confirmMessage: fmt.Sprintf("Merge overlapping files into %d period file(s)?", len(paths)),
+				successFormat:  "  Merged %d file(s)\n",
+				fix: func() *store.FixResult {
+					return store.FixPeriodOverlaps(paths)
+				},
+			}
+		},
+	},
+	{
+		issueType: store.IssueLeftoverTempFile,
+		prepare: func(issues []store.Issue) *dataFixAction {
+			paths := collectUniquePaths(issues)
+			if len(paths) == 0 {
+				return nil
+			}
+			return &dataFixAction{
+				confirmMessage: fmt.Sprintf("Remove %d leftover temp file(s)?", len(paths)),
+				successFormat:  "  Removed %d file(s)\n",
+				fix: func() *store.FixResult {
+					return store.FixLeftoverTempFiles(paths)
+				},
+			}
+		},
+	},
+	{
 		issueType: store.IssueOrphanDir,
 		prepare: func(issues []store.Issue) *dataFixAction {
 			paths := collectOrphanPaths(issues)

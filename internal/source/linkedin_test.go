@@ -3,8 +3,10 @@ package source
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -124,6 +126,13 @@ func TestLinkedInFetchOrganization(t *testing.T) {
 	if entries[1].Extra["article_url"] != "https://example.com/blog" {
 		t.Errorf("unexpected metadata: %v", entries[1].Extra)
 	}
+
+	// Snapshot sources must date every record with opts.EndDate.
+	for _, r := range records {
+		if r.Date != "2025-06-30" {
+			t.Errorf("expected date=2025-06-30 (opts.EndDate), got %s for metric %s", r.Date, r.Metric)
+		}
+	}
 }
 
 func TestLinkedInFetchPagination(t *testing.T) {
@@ -189,6 +198,77 @@ func TestLinkedInFetchPagination(t *testing.T) {
 	}
 }
 
+// TestLinkedInPaginationNoTotalNoCount verifies that pagination terminates
+// correctly when both paging.total and paging.count are absent (zero): two
+// full pages of 100 followed by a partial page should all be fetched.
+func TestLinkedInPaginationNoTotalNoCount(t *testing.T) {
+	pageItems := func(n int, startID int) []linkedinPost {
+		posts := make([]linkedinPost, n)
+		for i := range posts {
+			posts[i] = linkedinPost{
+				ID:         fmt.Sprintf("urn:li:share:%d", startID+i),
+				CreatedAt:  1719792000000,
+				Commentary: "post",
+			}
+		}
+		return posts
+	}
+
+	callCount := 0
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/rest/posts", func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		start := r.URL.Query().Get("start")
+		var elements []linkedinPost
+		switch start {
+		case "", "0":
+			elements = pageItems(100, 0)
+		case "100":
+			elements = pageItems(100, 100)
+		default:
+			elements = pageItems(50, 200) // partial last page
+		}
+		// Total and Count are both zero — the broken path.
+		_ = json.NewEncoder(w).Encode(postsResponse{
+			Elements: elements,
+			Paging: struct {
+				Count int `json:"count"`
+				Start int `json:"start"`
+				Total int `json:"total"`
+			}{},
+		})
+	})
+
+	mux.HandleFunc("/rest/organizationalEntityShareStatistics", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(statsResponse{Elements: []statsElement{}})
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	li := &LinkedIn{
+		Client:  srv.Client(),
+		Token:   "test-token",
+		Target:  "urn:li:person:abc",
+		BaseURL: srv.URL,
+	}
+
+	_, err := li.Fetch(context.Background(), juneFetchOptions("proj", 1, 30))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if callCount != 3 {
+		t.Errorf("expected 3 page requests (2 full + 1 partial), got %d", callCount)
+	}
+
+	entries := li.ContentEntries()
+	if len(entries) != 250 {
+		t.Fatalf("expected 250 content entries (100+100+50), got %d", len(entries))
+	}
+}
+
 func TestLinkedInPersonalNoFollowers(t *testing.T) {
 	mux := http.NewServeMux()
 
@@ -248,6 +328,44 @@ func TestLinkedInTitleTruncation(t *testing.T) {
 	}
 	if entry.Description != long {
 		t.Error("description should be full commentary")
+	}
+}
+
+func TestLinkedInFollowerError(t *testing.T) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/rest/posts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(postsResponse{
+			Elements: []linkedinPost{},
+			Paging: struct {
+				Count int `json:"count"`
+				Start int `json:"start"`
+				Total int `json:"total"`
+			}{Count: 100, Start: 0, Total: 0},
+		})
+	})
+
+	// The follower endpoint returns 403, which must bubble up as an error.
+	mux.HandleFunc("/rest/networkSizes/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	li := &LinkedIn{
+		Client:  srv.Client(),
+		Token:   "test-token",
+		Target:  "urn:li:organization:12345678",
+		BaseURL: srv.URL,
+	}
+
+	_, err := li.Fetch(context.Background(), juneFetchOptions("proj", 1, 30))
+	if err == nil {
+		t.Fatal("expected error when follower endpoint returns 403")
+	}
+	if got := err.Error(); !strings.Contains(got, "fetch follower count") {
+		t.Errorf("error should mention fetch follower count, got: %s", got)
 	}
 }
 

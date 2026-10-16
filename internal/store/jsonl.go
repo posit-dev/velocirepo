@@ -27,14 +27,6 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 	dir := MetricsProjectDir(dataDir, sourceName, projectID)
 
 	wantedTotalKeys := totalKeys(records)
-	var lastValues map[string]int64
-	if len(wantedTotalKeys) > 0 {
-		var err error
-		lastValues, err = lastRecordedTotalsFor(dir, wantedTotalKeys)
-		if err != nil {
-			return 0, fmt.Errorf("read last recorded totals: %w", err)
-		}
-	}
 
 	grouped := groupByDate(records)
 	dates := make([]string, 0, len(grouped))
@@ -45,6 +37,16 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 
 	var filesWritten int
 	for _, date := range dates {
+		// total_* series only store changes. Compare with the latest value
+		// before this date; earlier dates of this batch are already written.
+		var lastValues map[string]int64
+		if len(wantedTotalKeys) > 0 {
+			var err error
+			lastValues, err = lastRecordedTotalsFor(dir, wantedTotalKeys, date)
+			if err != nil {
+				return filesWritten, fmt.Errorf("read last recorded totals: %w", err)
+			}
+		}
 		dateRecords := filterUnchangedTotals(grouped[date], lastValues)
 
 		if len(dateRecords) > 0 {
@@ -57,15 +59,6 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 				return filesWritten, err
 			}
 			filesWritten++
-
-			for _, r := range dateRecords {
-				if isTotalMetric(r.Metric) {
-					if lastValues == nil {
-						lastValues = make(map[string]int64)
-					}
-					lastValues[totalKey(r)] = r.Value
-				}
-			}
 		}
 
 		if err := writeMetricWatermarks(dataDir, sourceName, projectID, date, grouped[date]); err != nil {
@@ -85,15 +78,34 @@ func ReadRecords(path string) ([]source.Record, error) {
 	return readJSONL[source.Record](path, readJSONLOptions{wrapErrors: true})
 }
 
+// LastDate returns the latest date stored for a source and project, which the
+// next fetch resumes after. A monthly or yearly file counts as stored through
+// the last day of its period; compaction only creates one once that day is
+// stored (see aggregateProject).
 func LastDate(dataDir, sourceName, projectID string) (time.Time, error) {
-	dates, err := dateStringsInDir(SourceProjectDir(dataDir, sourceName, projectID))
-	if err != nil {
+	latest, err := latestStoredDate(SourceProjectDir(dataDir, sourceName, projectID), WatermarkFilePath(dataDir, sourceName, projectID))
+	if err != nil || latest == "" {
 		return time.Time{}, err
 	}
 
-	watermarks, err := readMetricWatermarks(WatermarkFilePath(dataDir, sourceName, projectID))
+	t, err := dateutil.ParseDate(latest)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("parse date %s: %w", latest, err)
+	}
+	return t, nil
+}
+
+// latestStoredDate returns the latest date among dir's data file names and the
+// watermark file, or "" if there is none.
+func latestStoredDate(dir, watermarkPath string) (string, error) {
+	dates, err := dateStringsInDir(dir)
+	if err != nil {
+		return "", err
+	}
+
+	watermarks, err := readMetricWatermarks(watermarkPath)
+	if err != nil {
+		return "", err
 	}
 	for _, w := range watermarks {
 		if w.Date != "" {
@@ -102,17 +114,10 @@ func LastDate(dataDir, sourceName, projectID string) (time.Time, error) {
 	}
 
 	if len(dates) == 0 {
-		return time.Time{}, nil
+		return "", nil
 	}
-
 	sort.Strings(dates)
-	latest := dates[len(dates)-1]
-
-	t, err := dateutil.ParseDate(latest)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse date %s: %w", latest, err)
-	}
-	return t, nil
+	return dates[len(dates)-1], nil
 }
 
 func dateStringsInDir(dir string) ([]string, error) {
@@ -201,7 +206,7 @@ func ScanProjectDir(dir string) DirStats {
 
 	var stats DirStats
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())

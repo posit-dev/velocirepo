@@ -19,6 +19,12 @@ on:
     - cron: '{{.Cron}}'
   workflow_dispatch:
 
+# Prevent concurrent fetches from racing over the same data files. A run that
+# is already in progress is allowed to finish (cancel-in-progress: false).
+concurrency:
+  group: velocirepo-fetch
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -39,11 +45,15 @@ jobs:
 {{- end}}
 
       - name: Commit and push
+        # Run even when fetch exits non-zero (some jobs failed) so that data
+        # from successful jobs is persisted while the workflow still shows red.
+        if: ${{"{{"}} !cancelled() {{"}}"}}
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add velocirepo/
           git diff --staged --quiet || git commit -m "Update metrics - $(date -u +'%Y-%m-%d')"
+          git pull --rebase
           git push
 `
 

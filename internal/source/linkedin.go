@@ -56,9 +56,10 @@ func (l *LinkedIn) Fetch(ctx context.Context, opts FetchOptions) ([]Record, erro
 
 	if strings.Contains(l.Target, "organization") {
 		followerRecords, err := l.fetchFollowerCount(ctx, opts.ProjectID, date)
-		if err == nil {
-			records = append(records, followerRecords...)
+		if err != nil {
+			return nil, fmt.Errorf("fetch follower count: %w", err)
 		}
+		records = append(records, followerRecords...)
 	}
 
 	return records, nil
@@ -79,10 +80,27 @@ func (l *LinkedIn) fetchPosts(ctx context.Context) ([]linkedinPost, error) {
 
 		allPosts = append(allPosts, resp.Elements...)
 
-		if len(resp.Elements) == 0 || len(resp.Elements) < resp.Paging.Count || start+len(resp.Elements) >= resp.Paging.Total {
+		got := len(resp.Elements)
+		if got == 0 {
 			break
 		}
-		start += len(resp.Elements)
+		if resp.Paging.Total > 0 {
+			// total is known: stop when we have received all items
+			if start+got >= resp.Paging.Total {
+				break
+			}
+		} else if resp.Paging.Count > 0 {
+			// total absent; count is the page size: a short page means last page
+			if got < resp.Paging.Count {
+				break
+			}
+		} else {
+			// neither total nor count: stop on a page shorter than the request size
+			if got < 100 {
+				break
+			}
+		}
+		start += got
 	}
 
 	return allPosts, nil
@@ -162,12 +180,17 @@ func (l *LinkedIn) fetchFollowerCount(ctx context.Context, projectID, date strin
 	}, nil
 }
 
+// linkedInAPIVersion is the API version sent in the LinkedIn-Version header.
+// LinkedIn retires older versions after their support window; bumping this
+// value must be verified with real credentials before deploying.
+const linkedInAPIVersion = "202406"
+
 func (l *LinkedIn) get(ctx context.Context, u string, result interface{}) error {
 	return doJSONInto(ctx, l.Client, httpJSONRequest{
 		URL: u,
 		Headers: map[string]string{
 			"Authorization":             "Bearer " + l.Token,
-			"LinkedIn-Version":          "202406",
+			"LinkedIn-Version":          linkedInAPIVersion,
 			"X-Restli-Protocol-Version": "2.0.0",
 		},
 		RequestError: "request",
