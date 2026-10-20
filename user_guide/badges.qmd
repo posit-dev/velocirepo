@@ -14,7 +14,7 @@ velocirepo badge downloads --project ggplot2 -o downloads.svg
 
 | Badge | Value |
 |-------|-------|
-| `stars` | Number of GitHub star events (stars received since tracking began) |
+| `stars` | Latest `total_stars` of each GitHub repository |
 | `forks` | Number of GitHub fork events |
 | `downloads` | All-time sum of `daily_downloads` (PyPI and CRAN) |
 | `pageviews` | All-time sum of `daily_site_pageviews` (Plausible) |

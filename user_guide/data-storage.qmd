@@ -57,6 +57,8 @@ Fields:
 
 These events are automatically aggregated into daily counts in the `metrics` DuckDB view (as `daily_stars`, `daily_forks`, etc.) so you can [query them](querying.qmd) alongside other sources.
 
+GitHub only lists the stargazers of repositories your token can administer. For other repositories, the fetch logs a warning and records no star events. Their stars are still counted by the `total_stars` metric, which holds the star count GitHub reports on each fetch.
+
 ## Content
 
 Sources that implement the `ContentProvider` interface also write entity data to `data/content/<source>/<project-id>/<name>.jsonl`. These files use upsert-by-id (new entries are merged with existing ones) rather than date-partitioned concatenation.

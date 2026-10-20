@@ -73,6 +73,7 @@ Notes:
 - events.type: star, fork, issue_open, issue_close, pr_open, pr_merge, comment
 - events.ref: issue/PR number (NULL for stars, forks); join to content for title/details
 - events.user: login of the user who performed the action
+- metrics.metric total_stars: the star count of a GitHub repository, stored when it changes (take the latest value per target); daily_stars only covers repositories whose stargazers GitHub lists
 - metrics.metric total_reactions: sum of body + comment reactions per issue/PR (extra.ref identifies the number); updated on each fetch for open items, fetched once for closed items
 - content.ref: issue/PR number for GitHub content (join: events.ref = content.ref AND events.target = content.target)
 - content.type: entity type (issue, pr, repo, video, post)

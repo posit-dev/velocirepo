@@ -40,28 +40,22 @@ velocirepo query "
 
 ### Total stars per project
 
+GitHub only lists the stargazers of repositories your token can administer, so `daily_stars` misses the stars of most other repositories. For totals, use `total_stars`, the star count GitHub reports on each fetch. Like other `total_*` metrics it's stored only when it changes, so take the latest value of each repository:
+
 ```bash
 velocirepo query "
-  SELECT p.name, SUM(value) AS stars
-  FROM metrics m
+  SELECT p.name, SUM(arg_max_value) AS stars
+  FROM (
+    SELECT project, target, arg_max(value, date) AS arg_max_value
+    FROM metrics
+    WHERE source = 'github' AND metric = 'total_stars'
+    GROUP BY project, target
+  ) m
   JOIN projects p ON m.project = p.id
-  WHERE m.source = 'github' AND m.metric = 'daily_stars'
   GROUP BY p.name
   ORDER BY stars DESC
   LIMIT 5
 "
-```
-
-```
-┌─────────────┬───────┐
-│    name     │ stars │
-├─────────────┼───────┤
-│ ggplot2     │ 6877  │
-│ cheatsheets │ 6360  │
-│ shiny       │ 5655  │
-│ Shiny for R │ 5600  │
-│ Quarto      │ 5274  │
-└─────────────┴───────┘
 ```
 
 ### Monthly star activity using raw events
