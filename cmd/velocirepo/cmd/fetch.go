@@ -173,7 +173,7 @@ type fetchSourceDef struct {
 
 var fetchSources = []fetchSourceDef{
 	{"fetch-cran", "Fetch CRAN download statistics", fetch.CRAN},
-	{"fetch-github", "Fetch GitHub events (stars, forks, issues, PRs)", fetch.GitHub},
+	{"fetch-github", "Fetch GitHub events (forks, issues, PRs, comments) and stars", fetch.GitHub},
 	{"fetch-traffic", "Fetch GitHub traffic data (views and clones)", fetch.Traffic},
 	{"fetch-homebrew", "Fetch Homebrew install counts", fetch.Homebrew},
 	{"fetch-openvsx", "Fetch Open VSX extension metrics", fetch.OpenVSX},

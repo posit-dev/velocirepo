@@ -38,7 +38,7 @@ Fields:
 Event sources store individual events rather than pre-computed counts, giving you full historical detail including who performed each action and when. Currently, GitHub is the only event source.
 
 ```json
-{"source":"github","type":"star","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T14:23:01Z","user":"alice"}
+{"source":"github","type":"fork","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T14:23:01Z","user":"alice"}
 {"source":"github","type":"issue_close","project_id":"quarto","target":"quarto-dev/quarto-cli","datetime":"2026-06-15T09:11:44Z","ref":1234,"user":"bob"}
 ```
 
@@ -47,7 +47,7 @@ Fields:
 | Field | Description |
 |-------|-------------|
 | `source` | Source name (e.g., `github`) |
-| `type` | Event type (e.g., star, fork, issue_open, issue_close, pr_open, pr_merge) |
+| `type` | Event type (e.g., fork, issue_open, issue_close, pr_open, pr_merge, comment) |
 | `project_id` | Project ID from your config |
 | `target` | Specific repo or resource being tracked (e.g., `owner/repo`) |
 | `datetime` | Full timestamp of the event (ISO 8601, UTC) |
@@ -55,9 +55,11 @@ Fields:
 | `user` | Who performed the action, if known |
 | `extra` | Optional key-value metadata |
 
-These events are automatically aggregated into daily counts in the `metrics` DuckDB view (as `daily_stars`, `daily_forks`, etc.) so you can [query them](querying.qmd) alongside other sources.
+These events are automatically aggregated into daily counts in the `metrics` DuckDB view (as `daily_forks`, `daily_issues_opened`, etc.) so you can [query them](querying.qmd) alongside other sources.
 
-GitHub only lists the stargazers of repositories your token can administer. For other repositories, the fetch logs a warning and records no star events. Their stars are still counted by the `total_stars` metric, which holds the star count GitHub reports on each fetch.
+Stars aren't events. GitHub only lists the stargazers of repositories your token can administer, so velocirepo reads GitHub's star history instead, which gives the number of stars per day for any repository. It's stored as the `daily_stars` metric. Its days end in US Pacific time, and each fetch re-reads the last 7 days, since stars that are removed again lower the count of their day. The `total_stars` metric holds the star count GitHub reports on each fetch. Star events stored by earlier versions stay in the `events` view, but aren't counted in `daily_stars`.
+
+The star history covers a repository's whole life. To fill in `daily_stars` for data fetched with an earlier version, run `velocirepo fetch-github` once with a `--start-date` before the first star.
 
 ## Content
 
