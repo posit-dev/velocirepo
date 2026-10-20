@@ -1,6 +1,9 @@
 package store
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -151,5 +154,65 @@ func TestLastDateMixed(t *testing.T) {
 	want := time.Date(2025, 2, 15, 0, 0, 0, 0, time.UTC)
 	if !got.Equal(want) {
 		t.Errorf("LastDate = %v, want %v", got, want)
+	}
+}
+
+// Writing records for a day that already has a daily file merges them into it:
+// records of other series stay, and the new record of a series replaces the
+// stored one. The star history writes past days that other metrics of the
+// same source were stored on.
+func TestWriteRecordsMergesIntoExistingDailyFile(t *testing.T) {
+	dataDir := t.TempDir()
+	first := []source.Record{
+		{Metric: "total_reactions", ProjectID: "proj", Target: "org/repo", Date: "2025-06-10", Value: 5, Extra: map[string]string{"ref": "1"}},
+		{Metric: "daily_stars", ProjectID: "proj", Target: "org/repo", Date: "2025-06-10", Value: 2},
+	}
+	if _, err := WriteRecords(dataDir, "github", "proj", first); err != nil {
+		t.Fatal(err)
+	}
+	second := []source.Record{
+		{Metric: "daily_stars", ProjectID: "proj", Target: "org/repo", Date: "2025-06-10", Value: 1},
+	}
+	if _, err := WriteRecords(dataDir, "github", "proj", second); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadRecords(filepath.Join(MetricsProjectDir(dataDir, "github", "proj"), "2025-06-10.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]int64)
+	for _, r := range got {
+		values[r.Metric] = r.Value
+	}
+	if len(got) != 2 || values["total_reactions"] != 5 || values["daily_stars"] != 1 {
+		t.Errorf("records = %+v, want total_reactions 5 kept and daily_stars replaced by 1", got)
+	}
+}
+
+// A total fetched again on the same day replaces the value stored for that
+// day, even when it's back at the value of the day before and so isn't stored
+// itself.
+func TestWriteRecordsReplacesTotalThatReturnsToItsPreviousValue(t *testing.T) {
+	dataDir := t.TempDir()
+	write := func(date string, value int64) {
+		t.Helper()
+		r := []source.Record{{Metric: "total_stars", ProjectID: "proj", Target: "org/repo", Date: date, Value: value}}
+		if _, err := WriteRecords(dataDir, "github", "proj", r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("2025-06-09", 5)
+	write("2025-06-10", 6)
+	write("2025-06-10", 5)
+
+	got, err := ReadRecords(filepath.Join(MetricsProjectDir(dataDir, "github", "proj"), "2025-06-10.jsonl"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	for _, r := range got {
+		if r.Value == 6 {
+			t.Errorf("2025-06-10 still holds the replaced total: %+v", got)
+		}
 	}
 }

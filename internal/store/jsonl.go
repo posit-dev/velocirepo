@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,16 +50,32 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 		}
 		dateRecords := filterUnchangedTotals(grouped[date], lastValues)
 
-		if len(dateRecords) > 0 {
+		// A fetch doesn't always cover every series of a day: the star history
+		// writes past days whose other metrics it doesn't fetch. Merge with
+		// what's stored, so the fetched series replace their stored records and
+		// other series stay. A total that's back at its previous value is
+		// filtered out above, but still replaces a value stored for this day.
+		path := filepath.Join(dir, date+".jsonl")
+		existing, err := ReadRecords(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return filesWritten, fmt.Errorf("read %s: %w", path, err)
+		}
+		kept := keepUnreplaced(existing, grouped[date])
+		if len(dateRecords) > 0 || len(kept) < len(existing) {
 			if err := os.MkdirAll(dir, 0755); err != nil {
 				return filesWritten, fmt.Errorf("create directory %s: %w", dir, err)
 			}
-
-			path := filepath.Join(dir, date+".jsonl")
-			if err := writeFileAtomic(path, dateRecords); err != nil {
-				return filesWritten, err
+			merged := append(kept, dateRecords...)
+			if len(merged) == 0 {
+				if err := os.Remove(path); err != nil {
+					return filesWritten, fmt.Errorf("remove %s: %w", path, err)
+				}
+			} else {
+				if err := writeFileAtomic(path, merged); err != nil {
+					return filesWritten, err
+				}
+				filesWritten++
 			}
-			filesWritten++
 		}
 
 		if err := writeMetricWatermarks(dataDir, sourceName, projectID, date, grouped[date]); err != nil {
@@ -68,6 +85,21 @@ func WriteRecords(dataDir, sourceName, projectID string, records []source.Record
 
 	ensureSchemaVersion(dataDir)
 	return filesWritten, nil
+}
+
+// keepUnreplaced returns the stored records whose series isn't in records.
+func keepUnreplaced(stored, records []source.Record) []source.Record {
+	replaced := make(map[string]bool, len(records))
+	for _, r := range records {
+		replaced[dedupKey(r)] = true
+	}
+	var kept []source.Record
+	for _, r := range stored {
+		if !replaced[dedupKey(r)] {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 func writeFileAtomic(path string, records []source.Record) error {
