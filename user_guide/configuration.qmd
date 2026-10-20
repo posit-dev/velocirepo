@@ -54,7 +54,7 @@ velocirepo uses API tokens to authenticate with external services. Tokens can be
 
 | Source | What it tracks |
 |--------|----------------|
-| **GitHub Events** | Individual events (stars, forks, issues, PRs) with user and timestamp |
+| **GitHub Events** | Individual events (forks, issues, PRs, comments) with user and timestamp, plus daily and total stars |
 | **GitHub Traffic** | Daily page views and git clones (requires admin access) |
 | **PyPI** | Daily download counts |
 | **CRAN** | Daily download counts |

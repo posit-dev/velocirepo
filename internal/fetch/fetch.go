@@ -286,11 +286,21 @@ func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob
 	}
 
 	if len(job.eventSources) > 0 {
+		backfill, err := starHistoryBackfill(dataDir, job)
+		if err != nil {
+			return []Result{{
+				Source:    job.sourceName,
+				ProjectID: job.projectID,
+				Duration:  time.Since(started),
+				Error:     fmt.Sprintf("read stored stars: %v", err),
+			}}
+		}
 		return runEventJob(ctx, dataDir, job, source.FetchOptions{
-			ProjectID: job.projectID,
-			StartDate: job.startDate,
-			EndDate:   endDate,
-			DataDir:   dataDir,
+			ProjectID:           job.projectID,
+			StartDate:           job.startDate,
+			EndDate:             endDate,
+			DataDir:             dataDir,
+			StarHistoryBackfill: backfill,
 		}, started)
 	}
 
@@ -309,6 +319,26 @@ func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob
 		EndDate:   endDate,
 		DataDir:   dataDir,
 	}, started)
+}
+
+// starHistoryBackfill returns the job's repositories that have no daily_stars
+// stored yet. Their whole star history is read, so stars are complete without
+// re-fetching every issue and comment.
+func starHistoryBackfill(dataDir string, job fetchJob) (map[string]bool, error) {
+	if job.sourceName != "github" {
+		return nil, nil
+	}
+	stored, err := store.TargetsWithMetric(dataDir, job.sourceName, job.projectID, "daily_stars")
+	if err != nil {
+		return nil, err
+	}
+	backfill := make(map[string]bool)
+	for _, target := range job.eventTargets {
+		if !stored[target] {
+			backfill[target] = true
+		}
+	}
+	return backfill, nil
 }
 
 func runEventJob(ctx context.Context, dataDir string, job fetchJob, opts source.FetchOptions, started time.Time) []Result {

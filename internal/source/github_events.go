@@ -49,12 +49,6 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 
 	var events []Event
 
-	stars, err := g.fetchStargazers(ctx, owner, repo, opts)
-	if err != nil {
-		return nil, fmt.Errorf("stargazers: %w", err)
-	}
-	events = append(events, stars...)
-
 	forks, err := g.fetchForks(ctx, owner, repo, opts)
 	if err != nil {
 		return nil, fmt.Errorf("forks: %w", err)
@@ -92,13 +86,26 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 	}
 	g.records = reactionRecords
 
-	repoContent, err := g.fetchRepoInfo(ctx, owner, repo, opts)
+	starRecords, err := g.fetchStarHistory(ctx, owner, repo, opts)
+	if err != nil {
+		return nil, fmt.Errorf("star history: %w", err)
+	}
+	g.records = append(g.records, starRecords...)
+
+	repoContent, starCount, err := g.fetchRepoInfo(ctx, owner, repo, opts)
 	if err != nil {
 		return nil, fmt.Errorf("repo info: %w", err)
 	}
 	if len(repoContent) > 0 {
 		g.contentEntries["repos.jsonl"] = repoContent
 	}
+	g.records = append(g.records, Record{
+		Metric:    "total_stars",
+		ProjectID: opts.ProjectID,
+		Target:    g.Repo,
+		Date:      opts.EndDate.Format("2006-01-02"),
+		Value:     starCount,
+	})
 
 	return events, nil
 }
@@ -131,55 +138,67 @@ func (g *GitHubEvents) fetchPaginatedEvents(ctx context.Context, owner, repo, qu
 	return events, nil
 }
 
-func (g *GitHubEvents) fetchStargazers(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, error) {
-	query := `query($owner: String!, $name: String!, $after: String) {
-		repository(owner: $owner, name: $name) {
-			stargazers(first: 100, after: $after, orderBy: {field: STARRED_AT, direction: DESC}) {
-				edges {
-					starredAt
-					node { login }
+// starHistoryRereadDays is how many days before the end date each fetch
+// reads again. GitHub's star history uses US Pacific days, so the latest day
+// may still have been in progress during the previous run, and stars that are
+// removed again lower the count of the day they were given.
+const starHistoryRereadDays = 7
+
+// fetchStarHistory returns daily_stars records from the star history
+// endpoint. Unlike the stargazer list, GitHub provides it for every
+// repository. Days without stars are only stored within the reread window,
+// where they may replace an earlier count.
+func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string, opts FetchOptions) ([]Record, error) {
+	reread := opts.EndDate.AddDate(0, 0, -starHistoryRereadDays)
+	from := opts.StartDate
+	if opts.StarHistoryBackfill[g.Repo] {
+		from = time.Time{}
+	} else if reread.Before(from) {
+		from = reread
+	}
+
+	var records []Record
+	// GitHub serves at most 100 pages of 30 weeks.
+	for page := 1; page <= 100; page++ {
+		url := fmt.Sprintf("%s/repos/%s/%s/stargazers/history?per_page=30&page=%d", g.restBaseURL(), owner, repo, page)
+		var weeks []struct {
+			Week int64   `json:"week"`
+			Days []int64 `json:"days"`
+		}
+		if err := g.getREST(ctx, url, &weeks); err != nil {
+			return nil, err
+		}
+		if len(weeks) == 0 {
+			break
+		}
+
+		older := false
+		for _, w := range weeks {
+			sunday := time.Unix(w.Week, 0).UTC()
+			for i, n := range w.Days {
+				day := sunday.AddDate(0, 0, i)
+				if !inDateRange(day, from, opts.EndDate) || (n == 0 && day.Before(reread)) {
+					continue
 				}
-				pageInfo { hasNextPage endCursor }
+				records = append(records, Record{
+					Metric:    "daily_stars",
+					ProjectID: opts.ProjectID,
+					Target:    g.Repo,
+					Date:      day.Format("2006-01-02"),
+					Value:     n,
+				})
+			}
+			// Weeks come newest first, so the rest are older still.
+			if sunday.Before(from) {
+				older = true
 			}
 		}
-	}`
-
-	return g.fetchPaginatedEvents(ctx, owner, repo, query, func(resp []byte) ([]Event, pageInfo, bool, error) {
-		var result struct {
-			Data struct {
-				Repository struct {
-					Stargazers struct {
-						Edges []struct {
-							StarredAt string `json:"starredAt"`
-							Node      struct {
-								Login string `json:"login"`
-							} `json:"node"`
-						} `json:"edges"`
-						PageInfo pageInfo `json:"pageInfo"`
-					} `json:"stargazers"`
-				} `json:"repository"`
-			} `json:"data"`
+		if older {
+			break
 		}
-		if err := json.Unmarshal(resp, &result); err != nil {
-			return nil, pageInfo{}, false, fmt.Errorf("unmarshal stargazers: %w", err)
-		}
+	}
 
-		var events []Event
-		done := false
-		for _, edge := range result.Data.Repository.Stargazers.Edges {
-			include, stop := includeGitHubEventTime(edge.StarredAt, opts)
-			if stop {
-				done = true
-				break
-			}
-			if !include {
-				continue
-			}
-			events = append(events, githubEvent(opts, g.Repo, "star", edge.StarredAt, nil, edge.Node.Login, nil))
-		}
-
-		return events, result.Data.Repository.Stargazers.PageInfo, done, nil
-	})
+	return records, nil
 }
 
 func (g *GitHubEvents) fetchForks(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, error) {
@@ -469,16 +488,27 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 	return events, content, err
 }
 
+// commentPageLimit is the deepest page of a repository's issue comments that
+// GitHub serves: 300 pages of 100.
+var commentPageLimit = 300
+
+// fetchComments lists the comments updated since the start date, oldest update
+// first, and returns those created in the window. Sorted by update, a listing
+// that reaches the page limit can continue from the last update it saw.
 func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, error) {
 	var events []Event
+	since := opts.StartDate
+	seen := make(map[int64]bool)
 	page := 1
 
 	for {
-		url := fmt.Sprintf("%s/repos/%s/%s/issues/comments?since=%s&sort=created&direction=desc&per_page=100&page=%d",
-			g.restBaseURL(), owner, repo, opts.StartDate.Format("2006-01-02T15:04:05Z"), page)
+		url := fmt.Sprintf("%s/repos/%s/%s/issues/comments?since=%s&sort=updated&direction=asc&per_page=100&page=%d",
+			g.restBaseURL(), owner, repo, since.UTC().Format("2006-01-02T15:04:05Z"), page)
 
 		var comments []struct {
+			ID        int64  `json:"id"`
 			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
 			IssueURL  string `json:"issue_url"`
 			User      *struct {
 				Login string `json:"login"`
@@ -488,23 +518,22 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 			return nil, err
 		}
 
-		if len(comments) == 0 {
-			break
-		}
-
-		older := false
+		var lastUpdated time.Time
 		for _, c := range comments {
-			t, err := time.Parse(time.RFC3339, c.CreatedAt)
-			if err != nil {
+			if u, err := time.Parse(time.RFC3339, c.UpdatedAt); err == nil {
+				lastUpdated = u
+			}
+			// After continuing from an update time, the comments updated at
+			// that moment are listed again.
+			if seen[c.ID] {
 				continue
 			}
-			if t.Before(opts.StartDate) {
-				// Comments come newest first. The rest were created before the
-				// window too; they only match since= because they were edited.
-				older = true
-				break
-			}
-			if !inDateRange(t, opts.StartDate, opts.EndDate) {
+			seen[c.ID] = true
+
+			t, err := time.Parse(time.RFC3339, c.CreatedAt)
+			if err != nil || !inDateRange(t, opts.StartDate, opts.EndDate) {
+				// Created before the window and edited in it, or created
+				// after the end date.
 				continue
 			}
 
@@ -516,10 +545,18 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 			events = append(events, githubEvent(opts, g.Repo, "comment", c.CreatedAt, ref, user, nil))
 		}
 
-		if older || len(comments) < 100 {
+		if len(comments) < 100 {
 			break
 		}
-		page++
+		if page < commentPageLimit {
+			page++
+			continue
+		}
+		if !lastUpdated.After(since) {
+			return nil, fmt.Errorf("more than %d comments were updated at %s", commentPageLimit*100, since.Format(time.RFC3339))
+		}
+		since = lastUpdated
+		page = 1
 	}
 
 	return events, nil
@@ -861,7 +898,9 @@ func extractIssueNumber(issueURL string) *int {
 	return nil
 }
 
-func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, opts FetchOptions) ([]ContentEntry, error) {
+// fetchRepoInfo returns the repository's content entry and its current
+// number of stars.
+func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, opts FetchOptions) ([]ContentEntry, int64, error) {
 	query := `query($owner: String!, $name: String!) {
 		repository(owner: $owner, name: $name) {
 			name
@@ -875,13 +914,14 @@ func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, op
 			repositoryTopics(first: 20) { nodes { topic { name } } }
 			defaultBranchRef { name }
 			isArchived
+			stargazerCount
 		}
 	}`
 
 	vars := map[string]interface{}{"owner": owner, "name": repo}
 	resp, err := g.doGraphQL(ctx, query, vars)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var result struct {
@@ -909,12 +949,13 @@ func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, op
 				DefaultBranchRef *struct {
 					Name string `json:"name"`
 				} `json:"defaultBranchRef"`
-				IsArchived bool `json:"isArchived"`
+				IsArchived     bool  `json:"isArchived"`
+				StargazerCount int64 `json:"stargazerCount"`
 			} `json:"repository"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal repo info: %w", err)
+		return nil, 0, fmt.Errorf("unmarshal repo info: %w", err)
 	}
 
 	r := result.Data.Repository
@@ -959,7 +1000,7 @@ func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, op
 		entry.Extra = extra
 	}
 
-	return []ContentEntry{entry}, nil
+	return []ContentEntry{entry}, r.StargazerCount, nil
 }
 
 func includeGitHubEventTime(timestamp string, opts FetchOptions) (include bool, stop bool) {

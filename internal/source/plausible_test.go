@@ -3,8 +3,11 @@ package source
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -149,6 +152,77 @@ func TestPlausiblePagination(t *testing.T) {
 
 	if callCount != 2 {
 		t.Errorf("expected 2 paginated API calls, got %d", callCount)
+	}
+}
+
+// TestPlausiblePaginationIsStable verifies that paging through a breakdown
+// returns every row exactly once. Without an explicit order, Plausible may sort
+// each page differently, so rows repeat on one page and are missing from
+// another.
+func TestPlausiblePaginationIsStable(t *testing.T) {
+	type row struct{ day, page string }
+	var rows []row
+	for _, day := range []string{"2025-06-01", "2025-06-02"} {
+		for i := 0; i < 7500; i++ {
+			rows = append(rows, row{day, fmt.Sprintf("/page%04d", i)})
+		}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Dimensions []string       `json:"dimensions"`
+			OrderBy    [][]string     `json:"order_by"`
+			Pagination map[string]int `json:"pagination"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+
+		if len(body.Dimensions) == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"results": []map[string]interface{}{
+					{"dimensions": []string{"2025-06-01"}, "metrics": []int64{1, 1, 1}},
+					{"dimensions": []string{"2025-06-02"}, "metrics": []int64{1, 1, 1}},
+				},
+				"meta": map[string]int{"total_rows": 2},
+			})
+			return
+		}
+
+		offset, limit := body.Pagination["offset"], body.Pagination["limit"]
+		sorted := append([]row(nil), rows...)
+		wantOrder := [][]string{{"time:day", "asc"}, {"event:page", "asc"}}
+		if !reflect.DeepEqual(body.OrderBy, wantOrder) && offset > 0 {
+			// Unordered: later pages come from a differently sorted result.
+			sort.Slice(sorted, func(i, j int) bool { return sorted[i].page > sorted[j].page })
+		}
+		end := offset + limit
+		if end > len(sorted) {
+			end = len(sorted)
+		}
+		var results []map[string]interface{}
+		for _, r := range sorted[offset:end] {
+			results = append(results, map[string]interface{}{"dimensions": []string{r.day, r.page}, "metrics": []int64{1, 1, 1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": results,
+			"meta":    map[string]int{"total_rows": len(rows)},
+		})
+	}))
+	defer server.Close()
+
+	p := &Plausible{Client: server.Client(), APIKey: "test-key", SiteID: "example.com", BaseURL: server.URL}
+	records, err := p.Fetch(context.Background(), juneFetchOptions("mysite", 1, 2))
+	if err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+
+	seen := make(map[string]int)
+	for _, rec := range filterByMetric(records, "daily_pageviews") {
+		seen[rec.Date+" "+rec.Extra["page"]]++
+	}
+	for _, r := range rows {
+		if n := seen[r.day+" "+r.page]; n != 1 {
+			t.Fatalf("%s %s fetched %d times, want 1", r.day, r.page, n)
+		}
 	}
 }
 

@@ -57,6 +57,10 @@ type FetchOptions struct {
 	StartDate time.Time
 	EndDate   time.Time
 	DataDir   string
+	// StarHistoryBackfill lists the GitHub repositories whose whole star
+	// history is read, regardless of StartDate, because none of it is stored
+	// yet.
+	StarHistoryBackfill map[string]bool
 }
 
 type Source interface {

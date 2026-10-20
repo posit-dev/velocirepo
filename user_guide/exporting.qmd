@@ -63,7 +63,7 @@ velocirepo build-db
 
 ```bash
 cd velocirepo/data
-duckdb velocirepo.duckdb "SELECT project, SUM(value) AS stars FROM metrics WHERE metric = 'daily_stars' GROUP BY project ORDER BY stars DESC"
+duckdb velocirepo.duckdb "SELECT project, target, arg_max(value, date) AS stars FROM metrics WHERE metric = 'total_stars' GROUP BY ALL ORDER BY stars DESC"
 ```
 
 **Python (`duckdb`):**
@@ -83,7 +83,12 @@ df = con.sql("SELECT * FROM metrics WHERE source = 'pypi' ORDER BY date DESC LIM
 import polars as pl
 
 metrics = pl.read_parquet("out/metrics.parquet")
-stars = metrics.filter(pl.col("metric") == "daily_stars").group_by("project").agg(pl.col("value").sum())
+stars = (
+    metrics.filter(pl.col("metric") == "total_stars")
+    .sort("date")
+    .group_by("project", "target")
+    .agg(pl.col("value").last())
+)
 ```
 
 ## Next steps
