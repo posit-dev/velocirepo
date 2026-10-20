@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The daily schedule fetches yesterday only, so almost every issue close and
@@ -132,9 +134,9 @@ func TestGitHubEventsReactionBatchToleratesMissingItems(t *testing.T) {
 	}
 }
 
-// Comments come newest first. Once one predates the window, the rest do too,
-// so paging stops instead of walking every edited old comment.
-func TestGitHubEventsCommentPagingStopsAtTheWindow(t *testing.T) {
+// Comments are listed by last update, so old comments that were edited in the
+// window are listed too. Only comments created in the window are events.
+func TestGitHubEventsSkipsCommentsCreatedBeforeTheWindow(t *testing.T) {
 	var commentPages int
 	base := graphqlHandler(map[string]string{
 		"stargazers":       `{"data":{"repository":{"stargazers":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
@@ -159,7 +161,7 @@ func TestGitHubEventsCommentPagingStopsAtTheWindow(t *testing.T) {
 			if commentPages > 1 || i >= 40 {
 				created = "2025-05-01T12:00:00Z" // edited recently, created long ago
 			}
-			page = append(page, fmt.Sprintf(`{"created_at":%q,"issue_url":"https://api.github.com/repos/owner/repo/issues/%d","user":{"login":"u"}}`, created, i))
+			page = append(page, fmt.Sprintf(`{"id":%d,"created_at":%q,"issue_url":"https://api.github.com/repos/owner/repo/issues/%d","user":{"login":"u"}}`, commentPages*100+i, created, i))
 		}
 		_, _ = w.Write([]byte("[" + strings.Join(page, ",") + "]"))
 	}))
@@ -170,10 +172,91 @@ func TestGitHubEventsCommentPagingStopsAtTheWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchEvents failed: %v", err)
 	}
-	if commentPages != 1 {
-		t.Errorf("requested %d comment pages, want 1", commentPages)
-	}
 	if len(events) != 40 {
 		t.Errorf("got %d comment events, want 40", len(events))
+	}
+}
+
+// GitHub serves at most 300 pages of a repository's issue comments. Larger
+// backfills continue from the last update seen, skipping the comments that
+// were already read.
+func TestGitHubEventsCommentsContinuePastThePageLimit(t *testing.T) {
+	previous := commentPageLimit
+	commentPageLimit = 2
+	t.Cleanup(func() { commentPageLimit = previous })
+
+	type comment struct {
+		id      int
+		updated time.Time
+	}
+	base := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
+	var comments []comment
+	for id := 1; id <= 450; id++ {
+		updated := base.Add(time.Duration(id) * time.Second)
+		if id == 201 {
+			// The first comment past the page limit shares its update time
+			// with the last one that was read.
+			updated = base.Add(200 * time.Second)
+		}
+		comments = append(comments, comment{id, updated})
+	}
+
+	graphql := graphqlHandler(map[string]string{
+		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"issues":           `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"pullRequests":     `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		"repositoryTopics": repoInfoResponse,
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !contains(r.URL.Path, "issues/comments") {
+			graphql.ServeHTTP(w, r)
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("sort") != "updated" || q.Get("direction") != "asc" {
+			t.Errorf("comments requested with sort=%s direction=%s, want updated asc", q.Get("sort"), q.Get("direction"))
+		}
+		page, _ := strconv.Atoi(q.Get("page"))
+		if page > commentPageLimit {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"message":"In order to keep the API fast for everyone, pagination is limited for this resource."}`))
+			return
+		}
+		since, _ := time.Parse(time.RFC3339, q.Get("since"))
+		var matching []string
+		for _, c := range comments {
+			if c.updated.Before(since) {
+				continue
+			}
+			ts := c.updated.Format(time.RFC3339)
+			matching = append(matching, fmt.Sprintf(`{"id":%d,"created_at":%q,"updated_at":%q,"issue_url":"https://api.github.com/repos/owner/repo/issues/%d","user":{"login":"u"}}`, c.id, ts, ts, c.id))
+		}
+		from, to := (page-1)*100, page*100
+		if from > len(matching) {
+			from = len(matching)
+		}
+		if to > len(matching) {
+			to = len(matching)
+		}
+		_, _ = w.Write([]byte("[" + strings.Join(matching[from:to], ",") + "]"))
+	}))
+	defer srv.Close()
+
+	g := &GitHubEvents{Client: srv.Client(), Token: "test-token", Repo: "owner/repo", BaseURL: srv.URL}
+	events, err := g.FetchEvents(context.Background(), juneFetchOptions("proj", 10, 10))
+	if err != nil {
+		t.Fatalf("FetchEvents failed: %v", err)
+	}
+
+	seen := make(map[int]int)
+	for _, e := range events {
+		if e.Type == "comment" && e.Ref != nil {
+			seen[*e.Ref]++
+		}
+	}
+	for _, c := range comments {
+		if seen[c.id] != 1 {
+			t.Errorf("comment %d recorded %d times, want 1", c.id, seen[c.id])
+		}
 	}
 }

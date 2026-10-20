@@ -472,9 +472,9 @@ func TestGitHubEventsComments(t *testing.T) {
 		}
 		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
 			_, _ = w.Write([]byte(`[
-				{"created_at":"2025-06-10T09:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/42","user":{"login":"alice"}},
-				{"created_at":"2025-06-10T10:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/7","user":{"login":"bob"}},
-				{"created_at":"2025-06-10T11:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/99","user":null}
+				{"id":1,"created_at":"2025-06-10T09:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/42","user":{"login":"alice"}},
+				{"id":2,"created_at":"2025-06-10T10:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/7","user":{"login":"bob"}},
+				{"id":3,"created_at":"2025-06-10T11:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/99","user":null}
 			]`))
 			return
 		}

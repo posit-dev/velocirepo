@@ -486,16 +486,27 @@ func (g *GitHubEvents) fetchPullRequests(ctx context.Context, owner, repo string
 	return events, content, err
 }
 
+// commentPageLimit is the deepest page of a repository's issue comments that
+// GitHub serves: 300 pages of 100.
+var commentPageLimit = 300
+
+// fetchComments lists the comments updated since the start date, oldest update
+// first, and returns those created in the window. Sorted by update, a listing
+// that reaches the page limit can continue from the last update it saw.
 func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, error) {
 	var events []Event
+	since := opts.StartDate
+	seen := make(map[int64]bool)
 	page := 1
 
 	for {
-		url := fmt.Sprintf("%s/repos/%s/%s/issues/comments?since=%s&sort=created&direction=desc&per_page=100&page=%d",
-			g.restBaseURL(), owner, repo, opts.StartDate.Format("2006-01-02T15:04:05Z"), page)
+		url := fmt.Sprintf("%s/repos/%s/%s/issues/comments?since=%s&sort=updated&direction=asc&per_page=100&page=%d",
+			g.restBaseURL(), owner, repo, since.UTC().Format("2006-01-02T15:04:05Z"), page)
 
 		var comments []struct {
+			ID        int64  `json:"id"`
 			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
 			IssueURL  string `json:"issue_url"`
 			User      *struct {
 				Login string `json:"login"`
@@ -505,23 +516,22 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 			return nil, err
 		}
 
-		if len(comments) == 0 {
-			break
-		}
-
-		older := false
+		var lastUpdated time.Time
 		for _, c := range comments {
-			t, err := time.Parse(time.RFC3339, c.CreatedAt)
-			if err != nil {
+			if u, err := time.Parse(time.RFC3339, c.UpdatedAt); err == nil {
+				lastUpdated = u
+			}
+			// After continuing from an update time, the comments updated at
+			// that moment are listed again.
+			if seen[c.ID] {
 				continue
 			}
-			if t.Before(opts.StartDate) {
-				// Comments come newest first. The rest were created before the
-				// window too; they only match since= because they were edited.
-				older = true
-				break
-			}
-			if !inDateRange(t, opts.StartDate, opts.EndDate) {
+			seen[c.ID] = true
+
+			t, err := time.Parse(time.RFC3339, c.CreatedAt)
+			if err != nil || !inDateRange(t, opts.StartDate, opts.EndDate) {
+				// Created before the window and edited in it, or created
+				// after the end date.
 				continue
 			}
 
@@ -533,10 +543,18 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 			events = append(events, githubEvent(opts, g.Repo, "comment", c.CreatedAt, ref, user, nil))
 		}
 
-		if older || len(comments) < 100 {
+		if len(comments) < 100 {
 			break
 		}
-		page++
+		if page < commentPageLimit {
+			page++
+			continue
+		}
+		if !lastUpdated.After(since) {
+			return nil, fmt.Errorf("more than %d comments were updated at %s", commentPageLimit*100, since.Format(time.RFC3339))
+		}
+		since = lastUpdated
+		page = 1
 	}
 
 	return events, nil
