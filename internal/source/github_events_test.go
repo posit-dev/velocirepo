@@ -22,6 +22,14 @@ func graphqlHandler(responses map[string]string) http.Handler {
 			_, _ = w.Write([]byte(`[]`))
 			return
 		}
+		if r.Method == http.MethodGet && contains(r.URL.Path, "stargazers/history") {
+			if resp, ok := responses["starHistory:"+r.URL.Query().Get("page")]; ok {
+				_, _ = w.Write([]byte(resp))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
+			return
+		}
 
 		body, _ := io.ReadAll(r.Body)
 		var req struct {
@@ -63,44 +71,6 @@ func searchString(s, sub string) bool {
 	return false
 }
 
-func TestGitHubEventsFetchStargazers(t *testing.T) {
-	resp := `{"data":{"repository":{"stargazers":{"edges":[
-		{"starredAt":"2025-06-10T10:00:00Z","node":{"login":"alice"}},
-		{"starredAt":"2025-06-10T11:00:00Z","node":{"login":"bob"}}
-	],"pageInfo":{"hasNextPage":false,"endCursor":"c1"}}}}}`
-
-	srv := httptest.NewServer(graphqlHandler(map[string]string{
-		"stargazers":       resp,
-		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"issues":           `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"pullRequests":     `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"repositoryTopics": repoInfoResponse,
-	}))
-	defer srv.Close()
-
-	g := &GitHubEvents{
-		Client:  srv.Client(),
-		Token:   "test-token",
-		Repo:    "owner/repo",
-		BaseURL: srv.URL,
-	}
-
-	events, err := g.FetchEvents(context.Background(), juneFetchOptions("my-project", 10, 10))
-	if err != nil {
-		t.Fatalf("FetchEvents failed: %v", err)
-	}
-
-	if len(events) != 2 {
-		t.Fatalf("got %d events, want 2", len(events))
-	}
-	if events[0].Type != "star" || events[0].User != "alice" {
-		t.Errorf("events[0] = %+v, want star/alice", events[0])
-	}
-	if events[1].Type != "star" || events[1].User != "bob" {
-		t.Errorf("events[1] = %+v, want star/bob", events[1])
-	}
-}
-
 func TestGitHubEventsFetchAllTypes(t *testing.T) {
 	responses := map[string]string{
 		"stargazers": `{"data":{"repository":{"stargazers":{"edges":[
@@ -139,7 +109,6 @@ func TestGitHubEventsFetchAllTypes(t *testing.T) {
 		user      string
 		ref       *int
 	}{
-		{"star", "alice", nil},
 		{"fork", "bob", nil},
 		{"issue_open", "carol", intPtr(42)},
 		{"issue_close", "carol", intPtr(42)},
@@ -178,12 +147,11 @@ func TestGitHubEventsFetchAllTypes(t *testing.T) {
 
 func TestGitHubEventsDateFiltering(t *testing.T) {
 	responses := map[string]string{
-		"stargazers": `{"data":{"repository":{"stargazers":{"edges":[
-			{"starredAt":"2025-06-12T10:00:00Z","node":{"login":"alice"}},
-			{"starredAt":"2025-06-10T10:00:00Z","node":{"login":"bob"}},
-			{"starredAt":"2025-06-08T10:00:00Z","node":{"login":"carol"}}
+		"forks": `{"data":{"repository":{"forks":{"nodes":[
+			{"createdAt":"2025-06-12T10:00:00Z","owner":{"login":"alice"}},
+			{"createdAt":"2025-06-10T10:00:00Z","owner":{"login":"bob"}},
+			{"createdAt":"2025-06-08T10:00:00Z","owner":{"login":"carol"}}
 		],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-		"forks":            `{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"issues":           `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"pullRequests":     `{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
 		"repositoryTopics": repoInfoResponse,
@@ -214,7 +182,7 @@ func TestGitHubEventsDateFiltering(t *testing.T) {
 func TestGitHubEventsPagination(t *testing.T) {
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
+		if r.Method == http.MethodGet && (contains(r.URL.Path, "comments") || contains(r.URL.Path, "stargazers/history")) {
 			_, _ = w.Write([]byte(`[]`))
 			return
 		}
@@ -231,10 +199,8 @@ func TestGitHubEventsPagination(t *testing.T) {
 			return
 		}
 
-		if !contains(req.Query, "stargazers") {
-			if contains(req.Query, "forks") {
-				_, _ = w.Write([]byte(`{"data":{"repository":{"forks":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
-			} else if contains(req.Query, "issues") {
+		if !contains(req.Query, "forks") {
+			if contains(req.Query, "issues") {
 				_, _ = w.Write([]byte(`{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
 			} else {
 				_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`))
@@ -244,12 +210,12 @@ func TestGitHubEventsPagination(t *testing.T) {
 
 		callCount++
 		if callCount == 1 {
-			_, _ = w.Write([]byte(`{"data":{"repository":{"stargazers":{"edges":[
-				{"starredAt":"2025-06-10T12:00:00Z","node":{"login":"alice"}}
+			_, _ = w.Write([]byte(`{"data":{"repository":{"forks":{"nodes":[
+				{"createdAt":"2025-06-10T12:00:00Z","owner":{"login":"alice"}}
 			],"pageInfo":{"hasNextPage":true,"endCursor":"cursor1"}}}}}`))
 		} else {
-			_, _ = w.Write([]byte(`{"data":{"repository":{"stargazers":{"edges":[
-				{"starredAt":"2025-06-10T11:00:00Z","node":{"login":"bob"}}
+			_, _ = w.Write([]byte(`{"data":{"repository":{"forks":{"nodes":[
+				{"createdAt":"2025-06-10T11:00:00Z","owner":{"login":"bob"}}
 			],"pageInfo":{"hasNextPage":false,"endCursor":"cursor2"}}}}}`))
 		}
 	}))
@@ -291,7 +257,7 @@ func TestGitHubEventsAuthHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called.Store(true)
 		assertBearerToken(t, r, "my-secret-token")
-		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
+		if r.Method == http.MethodGet && (contains(r.URL.Path, "comments") || contains(r.URL.Path, "stargazers/history")) {
 			_, _ = w.Write([]byte(`[]`))
 			return
 		}
@@ -500,6 +466,10 @@ func TestGitHubEventsContent(t *testing.T) {
 
 func TestGitHubEventsComments(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && contains(r.URL.Path, "stargazers/history") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		if r.Method == http.MethodGet && contains(r.URL.Path, "comments") {
 			_, _ = w.Write([]byte(`[
 				{"created_at":"2025-06-10T09:00:00Z","issue_url":"https://api.github.com/repos/owner/repo/issues/42","user":{"login":"alice"}},

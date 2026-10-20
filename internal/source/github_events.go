@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,12 +49,6 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 
 	var events []Event
 
-	stars, err := g.fetchStargazers(ctx, owner, repo, opts)
-	if err != nil {
-		return nil, fmt.Errorf("stargazers: %w", err)
-	}
-	events = append(events, stars...)
-
 	forks, err := g.fetchForks(ctx, owner, repo, opts)
 	if err != nil {
 		return nil, fmt.Errorf("forks: %w", err)
@@ -92,6 +85,12 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 		return nil, fmt.Errorf("reaction counts: %w", err)
 	}
 	g.records = reactionRecords
+
+	starRecords, err := g.fetchStarHistory(ctx, owner, repo, opts)
+	if err != nil {
+		return nil, fmt.Errorf("star history: %w", err)
+	}
+	g.records = append(g.records, starRecords...)
 
 	repoContent, starCount, err := g.fetchRepoInfo(ctx, owner, repo, opts)
 	if err != nil {
@@ -139,69 +138,65 @@ func (g *GitHubEvents) fetchPaginatedEvents(ctx context.Context, owner, repo, qu
 	return events, nil
 }
 
-func (g *GitHubEvents) fetchStargazers(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, error) {
-	query := `query($owner: String!, $name: String!, $after: String) {
-		repository(owner: $owner, name: $name) {
-			stargazerCount
-			stargazers(first: 100, after: $after, orderBy: {field: STARRED_AT, direction: DESC}) {
-				totalCount
-				edges {
-					starredAt
-					node { login }
+// starHistoryRereadDays is how many days before the end date each fetch
+// reads again. GitHub's star history uses US Pacific days, so the latest day
+// may still have been in progress during the previous run, and stars that are
+// removed again lower the count of the day they were given.
+const starHistoryRereadDays = 7
+
+// fetchStarHistory returns daily_stars records from the star history
+// endpoint. Unlike the stargazer list, GitHub provides it for every
+// repository. Days without stars are only stored within the reread window,
+// where they may replace an earlier count.
+func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string, opts FetchOptions) ([]Record, error) {
+	reread := opts.EndDate.AddDate(0, 0, -starHistoryRereadDays)
+	from := opts.StartDate
+	if reread.Before(from) {
+		from = reread
+	}
+
+	var records []Record
+	// GitHub serves at most 100 pages of 30 weeks.
+	for page := 1; page <= 100; page++ {
+		url := fmt.Sprintf("%s/repos/%s/%s/stargazers/history?per_page=30&page=%d", g.restBaseURL(), owner, repo, page)
+		var weeks []struct {
+			Week int64   `json:"week"`
+			Days []int64 `json:"days"`
+		}
+		if err := g.getREST(ctx, url, &weeks); err != nil {
+			return nil, err
+		}
+		if len(weeks) == 0 {
+			break
+		}
+
+		older := false
+		for _, w := range weeks {
+			sunday := time.Unix(w.Week, 0).UTC()
+			for i, n := range w.Days {
+				day := sunday.AddDate(0, 0, i)
+				if !inDateRange(day, from, opts.EndDate) || (n == 0 && day.Before(reread)) {
+					continue
 				}
-				pageInfo { hasNextPage endCursor }
+				records = append(records, Record{
+					Metric:    "daily_stars",
+					ProjectID: opts.ProjectID,
+					Target:    g.Repo,
+					Date:      day.Format("2006-01-02"),
+					Value:     n,
+				})
+			}
+			// Weeks come newest first, so the rest are older still.
+			if sunday.Before(from) {
+				older = true
 			}
 		}
-	}`
-
-	return g.fetchPaginatedEvents(ctx, owner, repo, query, func(resp []byte) ([]Event, pageInfo, bool, error) {
-		var result struct {
-			Data struct {
-				Repository struct {
-					StargazerCount int `json:"stargazerCount"`
-					Stargazers     struct {
-						TotalCount int `json:"totalCount"`
-						Edges      []struct {
-							StarredAt string `json:"starredAt"`
-							Node      struct {
-								Login string `json:"login"`
-							} `json:"node"`
-						} `json:"edges"`
-						PageInfo pageInfo `json:"pageInfo"`
-					} `json:"stargazers"`
-				} `json:"repository"`
-			} `json:"data"`
+		if older {
+			break
 		}
-		if err := json.Unmarshal(resp, &result); err != nil {
-			return nil, pageInfo{}, false, fmt.Errorf("unmarshal stargazers: %w", err)
-		}
+	}
 
-		// GitHub hides the stargazer list of repos the token can't
-		// administer: the list is empty while the repo has stars. Their stars
-		// are only counted by the total_stars snapshot.
-		r := result.Data.Repository
-		if r.StargazerCount > 0 && r.Stargazers.TotalCount == 0 {
-			slog.Warn("github hides the stargazers of this repository; star events are not recorded, total_stars still is",
-				"repo", g.Repo, "stars", r.StargazerCount)
-			return nil, pageInfo{}, true, nil
-		}
-
-		var events []Event
-		done := false
-		for _, edge := range result.Data.Repository.Stargazers.Edges {
-			include, stop := includeGitHubEventTime(edge.StarredAt, opts)
-			if stop {
-				done = true
-				break
-			}
-			if !include {
-				continue
-			}
-			events = append(events, githubEvent(opts, g.Repo, "star", edge.StarredAt, nil, edge.Node.Login, nil))
-		}
-
-		return events, result.Data.Repository.Stargazers.PageInfo, done, nil
-	})
+	return records, nil
 }
 
 func (g *GitHubEvents) fetchForks(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, error) {

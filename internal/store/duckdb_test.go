@@ -284,7 +284,7 @@ func TestMetricsViewIncludesGitHubAggregated(t *testing.T) {
 	}
 
 	events := []source.Event{
-		{Type: "star", ProjectID: "test", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
+		{Type: "fork", ProjectID: "test", Target: "owner/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
 	}
 	if _, err := WriteEvents(dataDir, "github", "test", events); err != nil {
 		t.Fatal(err)
@@ -300,6 +300,8 @@ func TestMetricsViewIncludesGitHubAggregated(t *testing.T) {
 	}
 }
 
+// Daily stars come from the star history records. Star events, which only
+// exist for repositories whose stargazers GitHub lists, aren't counted again.
 func TestQueryLiveGitHubView(t *testing.T) {
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")
@@ -312,6 +314,12 @@ func TestQueryLiveGitHubView(t *testing.T) {
 	if _, err := WriteEvents(dataDir, "github", "my-proj", events); err != nil {
 		t.Fatal(err)
 	}
+	records := []source.Record{
+		{Metric: "daily_stars", ProjectID: "my-proj", Target: "owner/repo", Date: "2025-06-01", Value: 2},
+	}
+	if _, err := WriteRecords(dataDir, "github", "my-proj", records); err != nil {
+		t.Fatal(err)
+	}
 
 	results, _, err := QueryLive(dataDir, nil, nil,
 		"SELECT metric, value FROM metrics WHERE project = 'my-proj' AND source = 'github' AND date = '2025-06-01' ORDER BY metric")
@@ -319,7 +327,7 @@ func TestQueryLiveGitHubView(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(results) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(results))
+		t.Fatalf("expected 2 rows, got %d: %v", len(results), results)
 	}
 	if results[0]["metric"] != "daily_forks" || results[0]["value"].(int64) != 1 {
 		t.Errorf("unexpected fork row: %v", results[0])

@@ -183,12 +183,14 @@ func createMetricsView(db *sql.DB, absDir string) error {
 func metricsViewSQL(absDir string) string {
 	glob := filepath.ToSlash(filepath.Join(absDir, "metrics", "*", "*", dataFileGlob))
 
+	// Star events aren't aggregated: daily_stars comes from the star history,
+	// which covers every repository. Star events only exist where GitHub
+	// lists the stargazers, so counting them too would count stars twice.
 	const eventsAgg = `SELECT
 			project,
 			source,
 			target,
 			CASE type
-				WHEN 'star' THEN 'daily_stars'
 				WHEN 'fork' THEN 'daily_forks'
 				WHEN 'issue_open' THEN 'daily_issues_opened'
 				WHEN 'issue_close' THEN 'daily_issues_closed'
@@ -201,6 +203,7 @@ func metricsViewSQL(absDir string) string {
 			COUNT(*) AS value,
 			NULL::JSON AS extra
 		FROM events
+		WHERE type <> 'star'
 		GROUP BY project, source, target, type, CAST(datetime AS DATE)`
 
 	if !globHasMatches(glob) {
