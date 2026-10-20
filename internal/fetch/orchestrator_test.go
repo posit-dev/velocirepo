@@ -206,3 +206,33 @@ func TestEventJobWritesEventsContentAndRecords(t *testing.T) {
 		t.Errorf("LastDate = %v (%v), want 2025-03-09", last, err)
 	}
 }
+
+// optsEvents records the options the orchestrator passes to an event source.
+type optsEvents struct{ got *source.FetchOptions }
+
+func (optsEvents) Name() string { return "github" }
+
+func (s optsEvents) FetchEvents(_ context.Context, opts source.FetchOptions) ([]source.Event, error) {
+	*s.got = opts
+	return nil, nil
+}
+
+// Repositories without stored daily stars get their whole star history read
+// once; the others only the fetch window.
+func TestEventJobBackfillsStarHistoryOfNewRepositories(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := &config.Config{Data: config.DataConfig{Dir: dataDir}}
+	stored := []source.Record{{Metric: "daily_stars", ProjectID: "proj", Target: "org/a", Date: "2025-02-01", Value: 1}}
+	if _, err := store.WriteRecords(dataDir, "github", "proj", stored); err != nil {
+		t.Fatal(err)
+	}
+
+	var got source.FetchOptions
+	if _, err := runJobs(context.Background(), cfg, Options{StartDate: "2025-03-01", EndDate: "2025-03-09"},
+		eventJob([]string{"org/a", "org/b"}, optsEvents{&got}), 1); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]bool{"org/b": true}; len(got.StarHistoryBackfill) != 1 || !got.StarHistoryBackfill["org/b"] {
+		t.Errorf("StarHistoryBackfill = %v, want %v", got.StarHistoryBackfill, want)
+	}
+}

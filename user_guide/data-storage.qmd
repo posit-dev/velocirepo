@@ -59,7 +59,7 @@ These events are automatically aggregated into daily counts in the `metrics` Duc
 
 Stars aren't events. GitHub only lists the stargazers of repositories your token can administer, so velocirepo reads GitHub's star history instead, which gives the number of stars per day for any repository. It's stored as the `daily_stars` metric. Its days end in US Pacific time, and each fetch re-reads the last 7 days, since stars that are removed again lower the count of their day. The `total_stars` metric holds the star count GitHub reports on each fetch. Star events stored by earlier versions stay in the `events` view, but aren't counted in `daily_stars`.
 
-The star history covers a repository's whole life. To fill in `daily_stars` for data fetched with an earlier version, run `velocirepo fetch-github` once with a `--start-date` before the first star.
+The star history covers a repository's whole life. The first fetch of a repository without `daily_stars` reads all of it, so data from earlier versions gets complete star counts without re-fetching any events.
 
 ## Content
 

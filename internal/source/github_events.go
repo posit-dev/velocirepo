@@ -151,7 +151,9 @@ const starHistoryRereadDays = 7
 func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string, opts FetchOptions) ([]Record, error) {
 	reread := opts.EndDate.AddDate(0, 0, -starHistoryRereadDays)
 	from := opts.StartDate
-	if reread.Before(from) {
+	if opts.StarHistoryBackfill[g.Repo] {
+		from = time.Time{}
+	} else if reread.Before(from) {
 		from = reread
 	}
 

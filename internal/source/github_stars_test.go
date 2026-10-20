@@ -141,3 +141,33 @@ func TestGitHubEventsStarHistoryRereadsLastWeek(t *testing.T) {
 		}
 	}
 }
+
+// A repository without stored daily stars gets its whole star history, so
+// upgrading doesn't need a full re-fetch of every issue and comment.
+func TestGitHubEventsBackfillsStarHistory(t *testing.T) {
+	responses := emptyGitHubResponses()
+	responses["starHistory:1"] = "[" + starWeek(15, 1, 0, 0, 0, 0, 0, 0) + "]"
+	responses["starHistory:2"] = "[" + starWeek(8, 2, 0, 0, 0, 0, 0, 0) + "]"
+	responses["starHistory:3"] = "[" + starWeek(1, 3, 0, 0, 0, 0, 0, 0) + "]"
+
+	srv := httptest.NewServer(graphqlHandler(responses))
+	defer srv.Close()
+
+	g := &GitHubEvents{Client: srv.Client(), Repo: "owner/repo", BaseURL: srv.URL}
+	opts := juneFetchOptions("proj", 20, 20)
+	opts.StarHistoryBackfill = map[string]bool{"owner/repo": true}
+	if _, err := g.FetchEvents(context.Background(), opts); err != nil {
+		t.Fatalf("FetchEvents failed: %v", err)
+	}
+
+	got := starsByDate(g.Records())
+	for date, n := range map[string]int64{"2025-06-01": 3, "2025-06-08": 2, "2025-06-15": 1} {
+		if got[date] != n {
+			t.Errorf("daily_stars on %s = %d, want %d (got %v)", date, got[date], n, got)
+		}
+	}
+	// Days without stars before the reread window aren't stored.
+	if _, ok := got["2025-06-02"]; ok {
+		t.Errorf("stored a zero for 2025-06-02: %v", got)
+	}
+}
