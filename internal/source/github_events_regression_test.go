@@ -123,7 +123,7 @@ func TestGitHubEventsReactionBatchToleratesMissingItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchEvents failed on a NOT_FOUND item: %v", err)
 	}
-	if records := g.Records(); len(records) != 1 || records[0].Extra["ref"] != "1" || records[0].Value != 3 {
+	if records := filterByMetric(g.Records(), "total_reactions"); len(records) != 1 || records[0].Extra["ref"] != "1" || records[0].Value != 3 {
 		t.Errorf("records = %+v, want only #1 with 3 reactions", records)
 	}
 

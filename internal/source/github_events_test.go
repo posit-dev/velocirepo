@@ -592,7 +592,7 @@ func TestGitHubEventsReactionCounts(t *testing.T) {
 		t.Fatalf("FetchEvents failed: %v", err)
 	}
 
-	records := g.Records()
+	records := filterByMetric(g.Records(), "total_reactions")
 	if len(records) != 2 {
 		t.Fatalf("got %d records, want 2", len(records))
 	}
@@ -654,7 +654,7 @@ func TestGitHubEventsReactionCountsRefreshUpdatedClosedItems(t *testing.T) {
 		t.Fatalf("FetchEvents failed: %v", err)
 	}
 
-	records := g.Records()
+	records := filterByMetric(g.Records(), "total_reactions")
 	if len(records) != 1 || records[0].Value != 4 || records[0].Extra["ref"] != "5" {
 		t.Fatalf("records = %+v, want total_reactions 4 for #5", records)
 	}

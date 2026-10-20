@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -92,13 +93,20 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 	}
 	g.records = reactionRecords
 
-	repoContent, err := g.fetchRepoInfo(ctx, owner, repo, opts)
+	repoContent, starCount, err := g.fetchRepoInfo(ctx, owner, repo, opts)
 	if err != nil {
 		return nil, fmt.Errorf("repo info: %w", err)
 	}
 	if len(repoContent) > 0 {
 		g.contentEntries["repos.jsonl"] = repoContent
 	}
+	g.records = append(g.records, Record{
+		Metric:    "total_stars",
+		ProjectID: opts.ProjectID,
+		Target:    g.Repo,
+		Date:      opts.EndDate.Format("2006-01-02"),
+		Value:     starCount,
+	})
 
 	return events, nil
 }
@@ -134,7 +142,9 @@ func (g *GitHubEvents) fetchPaginatedEvents(ctx context.Context, owner, repo, qu
 func (g *GitHubEvents) fetchStargazers(ctx context.Context, owner, repo string, opts FetchOptions) ([]Event, error) {
 	query := `query($owner: String!, $name: String!, $after: String) {
 		repository(owner: $owner, name: $name) {
+			stargazerCount
 			stargazers(first: 100, after: $after, orderBy: {field: STARRED_AT, direction: DESC}) {
+				totalCount
 				edges {
 					starredAt
 					node { login }
@@ -148,8 +158,10 @@ func (g *GitHubEvents) fetchStargazers(ctx context.Context, owner, repo string, 
 		var result struct {
 			Data struct {
 				Repository struct {
-					Stargazers struct {
-						Edges []struct {
+					StargazerCount int `json:"stargazerCount"`
+					Stargazers     struct {
+						TotalCount int `json:"totalCount"`
+						Edges      []struct {
 							StarredAt string `json:"starredAt"`
 							Node      struct {
 								Login string `json:"login"`
@@ -162,6 +174,16 @@ func (g *GitHubEvents) fetchStargazers(ctx context.Context, owner, repo string, 
 		}
 		if err := json.Unmarshal(resp, &result); err != nil {
 			return nil, pageInfo{}, false, fmt.Errorf("unmarshal stargazers: %w", err)
+		}
+
+		// GitHub hides the stargazer list of repos the token can't
+		// administer: the list is empty while the repo has stars. Their stars
+		// are only counted by the total_stars snapshot.
+		r := result.Data.Repository
+		if r.StargazerCount > 0 && r.Stargazers.TotalCount == 0 {
+			slog.Warn("github hides the stargazers of this repository; star events are not recorded, total_stars still is",
+				"repo", g.Repo, "stars", r.StargazerCount)
+			return nil, pageInfo{}, true, nil
 		}
 
 		var events []Event
@@ -861,7 +883,9 @@ func extractIssueNumber(issueURL string) *int {
 	return nil
 }
 
-func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, opts FetchOptions) ([]ContentEntry, error) {
+// fetchRepoInfo returns the repository's content entry and its current
+// number of stars.
+func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, opts FetchOptions) ([]ContentEntry, int64, error) {
 	query := `query($owner: String!, $name: String!) {
 		repository(owner: $owner, name: $name) {
 			name
@@ -875,13 +899,14 @@ func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, op
 			repositoryTopics(first: 20) { nodes { topic { name } } }
 			defaultBranchRef { name }
 			isArchived
+			stargazerCount
 		}
 	}`
 
 	vars := map[string]interface{}{"owner": owner, "name": repo}
 	resp, err := g.doGraphQL(ctx, query, vars)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var result struct {
@@ -909,12 +934,13 @@ func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, op
 				DefaultBranchRef *struct {
 					Name string `json:"name"`
 				} `json:"defaultBranchRef"`
-				IsArchived bool `json:"isArchived"`
+				IsArchived     bool  `json:"isArchived"`
+				StargazerCount int64 `json:"stargazerCount"`
 			} `json:"repository"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal repo info: %w", err)
+		return nil, 0, fmt.Errorf("unmarshal repo info: %w", err)
 	}
 
 	r := result.Data.Repository
@@ -959,7 +985,7 @@ func (g *GitHubEvents) fetchRepoInfo(ctx context.Context, owner, repo string, op
 		entry.Extra = extra
 	}
 
-	return []ContentEntry{entry}, nil
+	return []ContentEntry{entry}, r.StargazerCount, nil
 }
 
 func includeGitHubEventTime(timestamp string, opts FetchOptions) (include bool, stop bool) {
