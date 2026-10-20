@@ -27,11 +27,14 @@ func (p Preset) BuildQuery(projectLiteral string) string {
 }
 
 var Presets = map[string]Preset{
+	// stars: the latest total_stars of each repository. Star events can't be
+	// counted, since GitHub no longer lists most repositories' stargazers.
 	"stars": {
-		Label:     "stars",
-		Table:     "events",
-		Condition: "type = 'star'",
-		Aggregate: "COUNT(*)",
+		Label: "stars",
+		Table: "metrics",
+		Condition: "metric = 'total_stars' AND date = (SELECT MAX(m.date) FROM metrics m " +
+			"WHERE m.metric = 'total_stars' AND m.project = metrics.project AND m.target = metrics.target)",
+		Aggregate: "SUM(value)",
 		Color:     "#007ec6",
 	},
 	"forks": {

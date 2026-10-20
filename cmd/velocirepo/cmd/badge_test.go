@@ -118,10 +118,18 @@ func TestBadgeDownloadsProjectFilter(t *testing.T) {
 func TestBadgeStarsPreset(t *testing.T) {
 	cfgPath, dataDir := setupBadgeConfig(t)
 
+	// The badge shows the latest total_stars of each repository: 1200 + 30.
+	// Star events are ignored, since GitHub no longer lists most stargazers.
+	records := []source.Record{
+		{Metric: "total_stars", ProjectID: "proj-a", Target: "org/repo", Date: "2025-06-01", Value: 1000},
+		{Metric: "total_stars", ProjectID: "proj-a", Target: "org/repo", Date: "2025-06-03", Value: 1200},
+		{Metric: "total_stars", ProjectID: "proj-a", Target: "org/other", Date: "2025-06-02", Value: 30},
+	}
+	if _, err := store.WriteRecords(dataDir, "github", "proj-a", records); err != nil {
+		t.Fatal(err)
+	}
 	events := []source.Event{
 		{Type: "star", ProjectID: "proj-a", Target: "org/repo", Datetime: "2025-06-01T10:00:00Z", User: "alice"},
-		{Type: "star", ProjectID: "proj-a", Target: "org/repo", Datetime: "2025-06-02T10:00:00Z", User: "bob"},
-		{Type: "fork", ProjectID: "proj-a", Target: "org/repo", Datetime: "2025-06-01T10:00:00Z", User: "carol"},
 	}
 	if _, err := store.WriteEvents(dataDir, "github", "proj-a", events); err != nil {
 		t.Fatal(err)
@@ -131,5 +139,5 @@ func TestBadgeStarsPreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("badge stars: %v\n%s", err, buf.String())
 	}
-	assertContains(t, buf.String(), "2")
+	assertContains(t, buf.String(), "1.2k")
 }

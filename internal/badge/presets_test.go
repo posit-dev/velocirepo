@@ -110,6 +110,9 @@ var emittedMetrics = []string{
 	"total_likes",
 	"total_comments",
 	"total_subscribers",
+	// GitHub
+	"total_reactions",
+	"total_stars",
 }
 
 // emittedEventTypes lists the event types that sources emit today.
