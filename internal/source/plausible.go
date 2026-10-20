@@ -47,6 +47,14 @@ func (p *Plausible) fetchMetrics(ctx context.Context, opts FetchOptions, dimensi
 	var records []Record
 	offset := 0
 
+	// Without an explicit order, pages can be sorted differently, so rows
+	// repeat on one page and go missing from another. Sorting by every
+	// dimension makes the order total.
+	orderBy := make([][]string, len(dimensions))
+	for i, d := range dimensions {
+		orderBy[i] = []string{d, "asc"}
+	}
+
 	for {
 		payload := map[string]interface{}{
 			"site_id": p.SiteID,
@@ -56,6 +64,7 @@ func (p *Plausible) fetchMetrics(ctx context.Context, opts FetchOptions, dimensi
 				dateutil.FormatDate(opts.EndDate),
 			},
 			"dimensions": dimensions,
+			"order_by":   orderBy,
 			"pagination": map[string]int{"limit": pageSize, "offset": offset},
 			"include":    map[string]bool{"total_rows": true},
 		}
