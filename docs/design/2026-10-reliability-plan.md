@@ -532,3 +532,26 @@ One worktree per source, all in parallel: `reliability/reconcile-<source>`. Size
 - Notifications outside GitHub, other than the optional Healthchecks escalation.
 
 The design explains why for each.
+
+## Deviations during implementation
+
+What was built differs from this plan in these places, mostly because the data showed something the plan didn't expect:
+
+- **Replay** has a runner of its own (`fetch.Replay`) that runs each job of a manifest with its recorded options, instead of per-job overrides in `fetch.Options`. GitHub is replayed through its snapshot unit only.
+- **Deprecation notices** go into `fetch --results`, not the fetch log.
+- **GitHub's archived requests** are GraphQL responses, which only contain the requested fields, so no visibility detection was needed.
+- **The 44,619 `total_reactions`** were never in a commit: the buggy write dropped them within the run that fetched them, and the October repair added them back. The diff checks can't see a loss like that; reconciliation and replay can. A unit test covers the case where such a loss does cross commits.
+- **Schema migrations** are compared by running the real migrations on a copy of the base's files, instead of mapping old metric names, which also covers renamed fields.
+- **GitHub's fork total** is `forks.totalCount`, the direct forks velocirepo stores; `forkCount` is the whole fork network. Deleted forks stay stored, so only missing forks are reported.
+- **All-time totals include today,** which isn't fetched yet, so their tolerance adds two of the target's busiest recent days. On devrel-io, the remaining differences were exactly the pull requests opened that day.
+- **CRAN and Plausible** are reconciled per month, on the same weekly rotation as GitHub's searches, since their totals are over ranges: cranlogs' and Plausible's (pageviews and visits; visitors don't add up over days) matched devrel-io's stored data exactly. **PyPI** declares no reference totals: pypistats' recent week and month totals don't match its daily data.
+- **The rotation** spreads targets over the nights by their place in the sorted list rather than a hash, so every night gets an equal share and stays within the search budget.
+- **Blocking errors:** the only error about the night's new records that the checks produce today is a duplicate added that night (`data.integrity`, from the diff checks' multiplicities). A duplicate that was stored already isn't the night's.
+- **Held-back data** is kept as the night's new records and events, whole changed content files, and the watermark maps, and overlaid through the store, rather than as copies of files.
+- **A repair** is a manual run of its own: it replaces the nightly fetch and doesn't concatenate.
+- **The commit message** lists how far each source is stored, without the "published through" note.
+- **The heartbeat** reads the nightly workflow's schedule from its file, and needs no config, so its workflow only checks out `.github/workflows`.
+- **The digest** marks a source and project as stopped when it had data in at least four of the six earlier weeks and none in the last two; quieter projects with the odd active week aren't marked.
+- **Changelog monitoring** follows Plausible through its GitHub releases feed, which is where it announces API changes.
+- **In `fetch` mode,** the action only archives with `archive: true`; the gate archives by default.
+- **Concatenation and stale targets:** on a copy of devrel-io where every watermark lagged by weeks, the stale targets' months were concatenated without their last days. That's the rule as designed, and harmless, since late data goes into the period file, but it means the data condition only holds back months for targets within their freshness limits.
