@@ -2,12 +2,17 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
+	"github.com/posit-dev/velocirepo/internal/config"
+	"github.com/posit-dev/velocirepo/internal/source"
 	"github.com/posit-dev/velocirepo/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -70,8 +75,8 @@ func installCICmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			reader := bufio.NewReader(os.Stdin)
 
-			defaultCron := "0 1 * * *"
-			cron, err := prompt(out, reader, "Cron schedule", defaultCron, "daily at 1am UTC")
+			defaultCron, reason := suggestSchedule(cfg, plausibleZoneLookup(cmd.Context(), cfg))
+			cron, err := prompt(out, reader, "Cron schedule", defaultCron, reason)
 			if err != nil {
 				return err
 			}
@@ -176,4 +181,64 @@ func actionRef(ver, binaryVersion string) string {
 		return defaultActionMajor
 	}
 	return "v" + major
+}
+
+// suggestSchedule returns a cron schedule for the nightly run: an hour after
+// yesterday has ended in the latest time zone among the configured sources,
+// at half past. Days are fetched once they've ended in their source's time
+// zone, so at that time every source is fetched through the same day. zoneOf
+// returns a Plausible site's time zone.
+func suggestSchedule(cfg *config.Config, zoneOf func(site string) *time.Location) (string, string) {
+	latestOffset := 0
+	latestName := "UTC"
+	consider := func(loc *time.Location, name string) {
+		// The winter and summer offsets differ; the latest wins.
+		for _, month := range []time.Month{time.January, time.July} {
+			_, offset := time.Date(2026, month, 15, 12, 0, 0, 0, loc).Zone()
+			if offset < latestOffset {
+				latestOffset, latestName = offset, name
+			}
+		}
+	}
+
+	stars, _ := time.LoadLocation("America/Los_Angeles")
+	for _, p := range cfg.Projects {
+		if !p.GitHubEvents.IsEmpty() {
+			consider(stars, "US Pacific time, for the star history")
+		}
+		for _, site := range p.Plausible {
+			if zone, ok := cfg.Settings.Timezones[site]; ok {
+				if loc, err := time.LoadLocation(zone); err == nil {
+					consider(loc, zone+", for "+site)
+					continue
+				}
+			}
+			loc := zoneOf(site)
+			consider(loc, loc.String()+", for "+site)
+		}
+	}
+
+	hour := -latestOffset/3600 + 1
+	reason := fmt.Sprintf("daily at %02d:30 UTC, an hour after yesterday has ended in %s", hour, latestName)
+	return fmt.Sprintf("30 %d * * *", hour), reason
+}
+
+// plausibleZoneLookup returns a function that looks up a Plausible site's
+// time zone, using PLAUSIBLE_TOKEN when it's set. Without it, sites are
+// treated as being in UTC-12, which schedules the run later than needed;
+// setting [settings.timezones] avoids that.
+func plausibleZoneLookup(ctx context.Context, cfg *config.Config) func(string) *time.Location {
+	token := os.Getenv("PLAUSIBLE_TOKEN")
+	client := &http.Client{Timeout: 10 * time.Second}
+	return func(site string) *time.Location {
+		p := &source.Plausible{Client: client, APIKey: token, SiteID: site, TimeZone: cfg.Settings.Timezones[site]}
+		if token == "" && p.TimeZone == "" {
+			return time.FixedZone("UTC-12", -12*3600)
+		}
+		loc, err := p.DayZone(ctx, "")
+		if err != nil {
+			return time.FixedZone("UTC-12", -12*3600)
+		}
+		return loc
+	}
 }
