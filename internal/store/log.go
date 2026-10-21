@@ -46,3 +46,8 @@ func WriteLog(dataDir string, entries []LogEntry) error {
 	ensureSchemaVersion(dataDir)
 	return nil
 }
+
+// ReadLog reads the fetch log of a day (YYYY-MM-DD).
+func ReadLog(dataDir, date string) ([]LogEntry, error) {
+	return readJSONL[LogEntry](LogFilePath(dataDir, date), readJSONLOptions{wrapErrors: true})
+}
