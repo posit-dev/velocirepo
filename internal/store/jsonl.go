@@ -1,7 +1,6 @@
 package store
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,73 +18,6 @@ var (
 	monthlyPattern = regexp.MustCompile(`^(\d{4}-\d{2})\.jsonl$`)
 	yearlyPattern  = regexp.MustCompile(`^(\d{4})\.jsonl$`)
 )
-
-func WriteRecords(dataDir, sourceName, projectID string, records []source.Record) (int, error) {
-	for i := range records {
-		records[i].Source = sourceName
-	}
-
-	dir := MetricsProjectDir(dataDir, sourceName, projectID)
-
-	wantedTotalKeys := totalKeys(records)
-
-	grouped := groupByDate(records)
-	dates := make([]string, 0, len(grouped))
-	for d := range grouped {
-		dates = append(dates, d)
-	}
-	sort.Strings(dates)
-
-	var filesWritten int
-	for _, date := range dates {
-		// total_* series only store changes. Compare with the latest value
-		// before this date; earlier dates of this batch are already written.
-		var lastValues map[string]int64
-		if len(wantedTotalKeys) > 0 {
-			var err error
-			lastValues, err = lastRecordedTotalsFor(dir, wantedTotalKeys, date)
-			if err != nil {
-				return filesWritten, fmt.Errorf("read last recorded totals: %w", err)
-			}
-		}
-		dateRecords := filterUnchangedTotals(grouped[date], lastValues)
-
-		// A fetch doesn't always cover every series of a day: the star history
-		// writes past days whose other metrics it doesn't fetch. Merge with
-		// what's stored, so the fetched series replace their stored records and
-		// other series stay. A total that's back at its previous value is
-		// filtered out above, but still replaces a value stored for this day.
-		path := filepath.Join(dir, date+".jsonl")
-		existing, err := ReadRecords(path)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return filesWritten, fmt.Errorf("read %s: %w", path, err)
-		}
-		kept := keepUnreplaced(existing, grouped[date])
-		if len(dateRecords) > 0 || len(kept) < len(existing) {
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return filesWritten, fmt.Errorf("create directory %s: %w", dir, err)
-			}
-			merged := append(kept, dateRecords...)
-			if len(merged) == 0 {
-				if err := os.Remove(path); err != nil {
-					return filesWritten, fmt.Errorf("remove %s: %w", path, err)
-				}
-			} else {
-				if err := writeFileAtomic(path, merged); err != nil {
-					return filesWritten, err
-				}
-				filesWritten++
-			}
-		}
-
-		if err := writeMetricWatermarks(dataDir, sourceName, projectID, date, grouped[date]); err != nil {
-			return filesWritten, err
-		}
-	}
-
-	ensureSchemaVersion(dataDir)
-	return filesWritten, nil
-}
 
 // keepUnreplaced returns the stored records whose series isn't in records.
 func keepUnreplaced(stored, records []source.Record) []source.Record {

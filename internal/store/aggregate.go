@@ -24,16 +24,49 @@ func SourceCategory(sourceName string) string {
 }
 
 // Aggregate concatenates daily→monthly→yearly for all projects. A period is
-// compacted once it has ended and its last day has been stored, so a day that
-// is still missing (a failed fetch, a source that publishes late) is fetched by
-// the next run instead of being treated as done. A project that fails doesn't
-// stop the others; the errors are returned together. Category directories that
-// don't exist yet are skipped.
+// concatenated once it has ended and its last day has been stored, so a day
+// that is still missing (a failed fetch, a source that publishes late) is
+// fetched by the next run instead of being treated as done. A project that
+// fails doesn't stop the others; the errors are returned together. Category
+// directories that don't exist yet are skipped.
 func Aggregate(dataDir string, now time.Time) error {
+	return AggregateWithPolicy(dataDir, now, Policy{})
+}
+
+// Policy says when a period is concatenated, on top of it having ended.
+type Policy struct {
+	// Day is the day of the following month from which a month is
+	// concatenated, so that late corrections of its last days still go into
+	// daily files. A year is concatenated with its December. Zero means as
+	// soon as the period has ended.
+	Day int
+	// Ready reports whether a project's data is complete through lastDay,
+	// the period's last day. Nil means it's complete once data has been
+	// stored through that day.
+	Ready func(category, sourceName, projectID, lastDay string) bool
+}
+
+// AggregateWithPolicy is Aggregate with a policy for when periods are
+// concatenated.
+func AggregateWithPolicy(dataDir string, now time.Time, policy Policy) error {
 	return errors.Join(
-		aggregateCategory(dataDir, MetricsDir, now, recordAggregateSpec()),
-		aggregateCategory(dataDir, EventsDir, now, eventAggregateSpec()),
+		aggregateCategory(dataDir, MetricsDir, now, policy, recordAggregateSpec()),
+		aggregateCategory(dataDir, EventsDir, now, policy, eventAggregateSpec()),
 	)
+}
+
+// onCalendar reports whether the month following yearMonth has reached the
+// policy's day.
+func (p Policy) onCalendar(yearMonth string, now time.Time) bool {
+	if p.Day <= 1 {
+		return true
+	}
+	t, err := time.Parse("2006-01", yearMonth)
+	if err != nil {
+		return false
+	}
+	from := t.AddDate(0, 1, p.Day-1)
+	return !now.Before(from)
 }
 
 type aggregateSpec[T any] struct {
@@ -72,7 +105,7 @@ func eventAggregateSpec() aggregateSpec[source.Event] {
 	}
 }
 
-func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggregateSpec[T]) error {
+func aggregateCategory[T any](dataDir, category string, now time.Time, policy Policy, spec aggregateSpec[T]) error {
 	categoryDir := filepath.Join(dataDir, category)
 	sourceDirs, err := os.ReadDir(categoryDir)
 	if err != nil {
@@ -101,7 +134,12 @@ func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggr
 			}
 			projPath := filepath.Join(sourcePath, projEntry.Name())
 			watermarkPath := WatermarkFilePath(dataDir, sourceEntry.Name(), projEntry.Name())
-			if err := aggregateProject(projPath, watermarkPath, now, spec); err != nil {
+			var ready func(string) bool
+			if policy.Ready != nil {
+				sourceName, projectID := sourceEntry.Name(), projEntry.Name()
+				ready = func(lastDay string) bool { return policy.Ready(category, sourceName, projectID, lastDay) }
+			}
+			if err := aggregateProject(projPath, watermarkPath, now, policy, ready, spec); err != nil {
 				errs = append(errs, fmt.Errorf("concatenate %s: %w", projPath, err))
 			}
 		}
@@ -109,26 +147,31 @@ func aggregateCategory[T any](dataDir, category string, now time.Time, spec aggr
 	return errors.Join(errs...)
 }
 
-// aggregateProject compacts the complete months and years of one project
-// directory. A period counts as complete once it has ended and the project's
-// data has been stored through its last day. That keeps LastDate's reading of
-// a period file as "fetched through the period's last day" true, and leaves a
-// period with a missing last day as daily files until the next fetch fills it.
-func aggregateProject[T any](projDir, watermarkPath string, now time.Time, spec aggregateSpec[T]) error {
-	through, err := latestStoredDate(projDir, watermarkPath)
-	if err != nil {
-		return err
+// aggregateProject concatenates the complete months and years of one
+// project directory. A period counts as complete once it has ended, the
+// policy's day has come, and the project's data is complete through its last
+// day. That keeps LastDate's reading of a period file as "fetched through the
+// period's last day" true, and leaves a period with a missing last day as
+// daily files until the next fetch fills it.
+func aggregateProject[T any](projDir, watermarkPath string, now time.Time, policy Policy, ready func(string) bool, spec aggregateSpec[T]) error {
+	complete := ready
+	if complete == nil {
+		through, err := latestStoredDate(projDir, watermarkPath)
+		if err != nil {
+			return err
+		}
+		complete = func(lastDay string) bool { return through >= lastDay }
 	}
 
 	monthComplete := func(month string, now time.Time) bool {
-		return isMonthComplete(month, now) && through >= dateutil.LastDayOfMonth(month)
+		return isMonthComplete(month, now) && policy.onCalendar(month, now) && complete(dateutil.LastDayOfMonth(month))
 	}
 	if err := aggregateFiles(projDir, now, spec, groupDailyFile, monthComplete, "month", "daily to monthly"); err != nil {
 		return err
 	}
 
 	yearComplete := func(year string, now time.Time) bool {
-		return isYearComplete(year, now) && through >= year+"-12-31"
+		return isYearComplete(year, now) && policy.onCalendar(year+"-12", now) && complete(year+"-12-31")
 	}
 	return aggregateFiles(projDir, now, spec, groupMonthlyFile, yearComplete, "year", "monthly to yearly")
 }
