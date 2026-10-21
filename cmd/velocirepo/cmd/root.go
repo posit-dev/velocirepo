@@ -122,6 +122,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(buildDBCmd())
 	rootCmd.AddCommand(validateDataCmd())
 	rootCmd.AddCommand(checkCmd())
+	rootCmd.AddCommand(replayCmd())
 
 	// MCP
 	mcp := mcpCmd()
