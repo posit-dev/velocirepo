@@ -40,22 +40,24 @@ Eight measures. This document designs the first two in detail, because they chan
 1. **Raw response archive:** every API response is kept, so any processing error can be repaired by replaying it.
 2. **Data gate:** the nightly run checks its own output and only pushes what passes to `main`. What fails is held back in a pull request, and a tracking issue says why.
 3. **Reconciliation** against totals the APIs compute themselves.
-4. **Re-fetch windows** for every source, within a quota budget.
+4. **Settle days** instead of re-fetch windows, and a quota budget.
 5. **Live API tests and upstream change monitoring.**
-6. **External heartbeat** with escalation.
+6. **Heartbeat** with escalation.
 7. **Weekly digest** for a human.
 8. **Tests for the checks themselves.**
 
 ```
-fetch ──► raw archive (2) ──► stored data
+fetch ──► raw archive (1) ──► stored data
                │                   │
                ▼                   ▼
-            replay         velocirepo check (2, 3, 4) ──► findings
-                                                             │
-                              ┌──────────────────────────────┤
-                              ▼                              ▼
-                     pass: push to main          fail: hold back in PR,
-                                                 update tracking issue ──► heartbeat (6)
+            replay         velocirepo check (2, 3) ──► findings
+                                                          │
+                              ┌───────────────────────────┤
+                              ▼                           ▼
+                pass: data commit to main      fail: hold back in PR,
+                              │                update tracking issue ──► heartbeat (6)
+                              ▼
+               on the 8th: compaction commit
 ```
 
 ## 1. Raw response archive
@@ -88,19 +90,19 @@ Every source sends its requests through `doRequest` (`internal/source/http_json.
 
 The nightly devrel-io run on 2026-10-20 made 4,321 requests (4,191 to GitHub). Response sizes vary widely: GraphQL pages with issue bodies are large, star history and CRAN responses small. Assuming an average of 30 KB, that's about 130 MB a night, or 10–20 MB compressed, so 4–7 GB a year. **This is an estimate.** The first rollout step measures it.
 
-That rules out the data repository: its pack is already 522 MB, and every clone would pay for the archive.
+That rules out storing it as files in the data repository: its pack is already 522 MB, and every clone would pay for the archive.
 
 ### Where it's stored
 
 | Option | Free | Retention | Notes |
 |---|---|---|---|
-| The data repository | yes | forever | Too big; every clone downloads it. |
-| A separate Git repository | yes | forever | Git handles gigabytes of binary history badly. |
+| Files in the data repository | yes | forever | Too big; every clone downloads it. |
+| A separate Git repository | yes | forever | Git handles gigabytes of binary history badly, and the workflow's token can't write to another repository. |
 | GitHub Actions artifacts | yes | at most 90 days | Already part of the workflow; good for recent runs. |
-| Release assets in a separate archive repository | yes | forever | One release per month, one asset per run and source; files up to 2 GB. Relies on GitHub keeping release storage free. |
+| Release assets in the data repository | yes | forever | Not part of clones or the Git history. The workflow's `GITHUB_TOKEN` can create releases in its own repository, so nothing has to be set up. One release per month, one asset per run and source; files up to 2 GB. Relies on GitHub keeping release storage free. |
 | Self-hosted S3-compatible storage (Garage, SeaweedFS) | yes, with your own machine | forever | Independent of GitHub, but needs a server. |
 
-**Recommendation:** upload every run as an Actions artifact (90 days), and add the long-term part to release assets in a separate archive repository with the same visibility as the data repository. The storage backend sits behind a small interface, so moving to self-hosted S3 storage later only changes configuration.
+**Recommendation:** upload every run as an Actions artifact (90 days), and add the long-term part as release assets in the data repository itself. The releases are named `raw-YYYY-MM`, so they're easy to tell apart from anything else in the repository. The storage backend sits behind a small interface, so moving to self-hosted S3 storage later only changes configuration.
 
 ### Retention
 
@@ -130,7 +132,7 @@ Sources must not depend on the clock beyond `FetchOptions`, so that a replay is 
 
 ### Privacy
 
-devrel-io is public, and so is its data. Raw responses can contain more than the stored data does, for example full issue bodies, or fields of private analytics APIs (YouTube, LinkedIn) that velocirepo doesn't store. The archive gets the same visibility as the data repository at most. For private analytics sources, there's an option to keep only the fields that velocirepo reads. Which sources need it is an open question.
+devrel-io is public, and so is its data. Raw responses can contain more than the stored data does, for example full issue bodies, or fields of private analytics APIs (YouTube, LinkedIn) that velocirepo doesn't store. Release assets have the visibility of their repository, so the archive is exactly as public as the data. For private analytics sources, there's an option to keep only the fields that velocirepo reads. Which sources need it is an open question.
 
 ## 2. Data gate
 
@@ -143,13 +145,16 @@ The nightly run fetches, commits everything, and pushes to `main`, even when job
 All in the nightly job:
 
 1. Check out `main`.
-2. Fetch, as now. The raw archive is written alongside the data.
+2. Fetch, without compacting (`--no-concatenate`). The raw archive is written alongside the data.
 3. Upload the archive, also when the fetch failed.
 4. Run `velocirepo check`. It compares the working tree with `HEAD` and the stored data with its rules, then writes `check.json` and a Markdown summary.
 5. Decide, for each source and project:
-   - If it has no blocking findings, its changes are committed and pushed to `main`.
+   - If it has no blocking findings, its changes go into the **data commit** on `main`.
    - If it has blocking findings, its changes go into a commit on the `velocirepo/held-back` branch. A pull request from that branch to `main` lists the reasons.
-6. Update the tracking issue and write the job summary.
+6. On the compaction day, run `velocirepo compact` and make a separate **compaction commit** (see [Compaction](#compaction)).
+7. Push `main`, update the tracking issue and write the job summary.
+
+Keeping new data and compaction in separate commits gives each a check that fits it. The data commit should only add records, so the diff guard can be strict. The compaction commit should only move records between files, so the set of records before and after it must be identical.
 
 The gate runs in the same job rather than as required status checks on a pull request. The reason: pushes and pull requests made with the workflow's `GITHUB_TOKEN` don't start other workflows. Required checks on a bot's pull request would never run without a personal token or a GitHub App. In the same job, the gate also has the fetch results and the archive at hand.
 
@@ -163,6 +168,29 @@ One broken repository shouldn't hold back everything. Findings refer to a source
 - **If the next run passes,** the data lands on `main`, and the gate closes the pull request and deletes the branch.
 - **If the findings are wrong,** merge the pull request by hand, and accept the findings (see below) so they don't come back.
 - **For sources that can't be re-fetched,** the held-back commits and the raw archive keep the data until it's released.
+
+### Compaction
+
+Today a month is compacted in the same run that stores its last day, as part of `fetch`. Instead, compaction becomes its own command, `velocirepo compact`, and its own commit, once a month.
+
+A project's month is compacted when all of these hold:
+
+1. **The calendar:** it's the compaction day, the 8th of the following month by default (`[settings] compact_on_day`).
+2. **The data:** a day after the month's last day has been stored, so every daily file of the month has been committed at least once. For CRAN, PyPI and GitHub that's on the 2nd; for Plausible and stars, with their settle day, on the 3rd.
+3. **The gate:** the project has no open findings and no held-back data for that month.
+
+A year is compacted when December is, and in the same run: December's daily files become `YYYY-12.jsonl`, and then the twelve monthly files become `YYYY.jsonl`. Yearly files are kept as they are.
+
+Why one week after the month ends:
+
+- **Corrections stay small.** Most problems surface in the first days: a held-back pull request, a failed night, a source running behind. Fixed before compaction, a correction only touches daily files. After compaction, it rewrites a monthly or yearly file.
+- **It covers every source delay.** A source that's still behind on the 8th has a freshness problem, which `data.freshness` reports long before then.
+- **It's predictable.** One compaction commit per month, "Compact October 2026", on a known day. January's also compacts the previous year.
+- **It's cheap.** At most about 38 daily files per project at a time, and every record still moves into a period file exactly once, and into a yearly file once more.
+
+A month that misses its compaction day, because one of the conditions doesn't hold yet, is compacted on the first run where all three hold.
+
+The resume point and `LastDate` work as they do now: a monthly or yearly file still counts as stored through the last day of its period.
 
 ### Findings
 
@@ -184,9 +212,10 @@ Each check produces findings of this shape:
 |---|---|---|
 | `fetch.failed` | a job failed | the four failed nights |
 | `diff.records-removed` | stored records disappear, compared by key over each changed project (not by file, since compaction moves records between files) | the July deletion; the 44,619 `total_reactions` |
-| `diff.values-changed` | `daily_*` values change outside the source's re-read window (warning) | — |
+| `diff.values-changed` | a stored value changes. Nightly runs don't re-read stored days (see [Settle days instead of re-fetch windows](#4-settle-days-instead-of-re-fetch-windows)), so a changed value is either a repair, which goes through a pull request, or a bug. Records dated within the run's own window, such as a second run on the same day, are exempt. | the Plausible duplicates, which changed stored values |
+| `compact.records-moved` | the compaction commit changes the set of records instead of only moving them between files | the CRAN month ends and the overwritten months (A1) |
 | `data.integrity` | `validate-data` finds duplicates, overlapping period files or temp files | Plausible duplicates |
-| `data.freshness` | a target's latest stored day is older than the source allows (CRAN 2 days, Plausible 3, GitHub 1, traffic 1) | stalled sources |
+| `data.freshness` | a target's latest stored day is further behind today than the source allows: CRAN and PyPI 2 days, Plausible and the star history 3 (they have a settle day), GitHub events 1, GitHub traffic 1 | stalled sources |
 | `data.volume` | a series that usually has data has none for several days, or drops far below its 28-day median | positron's missing events |
 | `data.completeness` | a day is missing inside a stored range (month ends) | CRAN month ends |
 | `reconcile.*` | stored totals differ from the API's own totals (measure 3) | stars, positron, Plausible, CRAN |
@@ -217,9 +246,25 @@ Errors and warnings also become `::error::` and `::warning::` annotations, so th
 
 ### Where it lives
 
-- **Gate logic:** in velocirepo. That's `velocirepo check`, plus `velocirepo gate`, which does steps 5 and 6 using `gh`.
-- **Workflow:** the action runs them, and `install-ci` generates the new workflow, so every user gets the gate, not just devrel-io.
-- **Permissions:** the workflow needs `contents: write`, `pull-requests: write` and `issues: write`.
+- **Gate logic:** in velocirepo. That's `velocirepo check` and `velocirepo compact`, plus `velocirepo gate`, which does steps 5 to 7 using `gh`.
+- **Workflow:** the action runs them, and `install-ci` generates the new workflows, so every user gets the gate, not just devrel-io.
+- **Permissions:** the workflow needs `contents: write` (commits and the archive releases), `pull-requests: write` and `issues: write`.
+
+## For other velocirepo users
+
+Everything in this design ships with velocirepo, so it works for any project that uses it, not just devrel-io. What a user has to do:
+
+| Measure | Setup |
+|---|---|
+| Raw archive | None. Capture is part of `fetch`, and the archive is stored as artifacts and release assets in the user's own data repository. |
+| Data gate, compaction and tracking issue | Regenerate the workflow with `install-ci` once, for the new steps and permissions. Optionally, list owners in `velocirepo.toml` to be assigned to the tracking issue. |
+| Reconciliation and other checks | None. They're part of `velocirepo check`. |
+| Settle days, quota budget | None. |
+| Live API tests, changelog monitoring | None. They run in velocirepo's own CI, and protect users through releases. |
+| Heartbeat workflow | None; `install-ci` generates it. The external heartbeat is optional and needs a Healthchecks instance. |
+| Weekly digest | None; `install-ci` generates it. |
+
+The upgrade notes of the release that introduces the gate say that the workflow must be regenerated. Until it is, the old workflow keeps working without the gate.
 
 ## Further measures
 
@@ -241,14 +286,25 @@ Each source can provide reference totals that the API computes independently of 
 
 Tolerances belong to each source: stars, for example, differ by the stars given since the end date.
 
-### 4. Re-fetch windows
+### 4. Settle days instead of re-fetch windows
 
-Every source re-reads its last days on each run, like the star history does now, so late or corrected data repairs itself:
-- CRAN, Plausible and PyPI: 7 days;
-- GitHub events: 2 days;
-- traffic: the full 14 days.
+An earlier version of this design re-read every source's last days on each run. That's dropped, because the problems it would fix are already handled better:
 
-The fetch reads rate-limit headers and keeps a budget per API. When a run would exceed it, the re-read windows shrink first, and the run reports a `quota.low` warning.
+| Problem | Handled by |
+|---|---|
+| A failed night | The resume point. A failed job doesn't move it, so the next run fetches the missing days. |
+| Data that's published late | The same: a day that isn't available yet isn't stored, so it's fetched the next night. |
+| A day that's still in progress when it's fetched | Settle days: the source is only fetched through a day that's complete in every time zone. |
+
+Stored values don't change once their day is complete. In the October repair, re-fetched CRAN month ends were identical to the stored ones, and 206,477 of about 210,000 re-fetched Plausible records were. The rest were partial days and sampled values. Re-reading would also cost API quota and rewrite compacted files, which grows the data repository's history.
+
+**Settle days.** `settleDays` (`internal/fetch/fetch.go`) moves a source's default end date back, so that the day before yesterday is the last one fetched. Plausible has one, because its days end in each site's time zone. The star history gets one too, inside the GitHub source, because its days end in US Pacific time. It replaces the current 7-day re-read. Issues, pull requests and comments stay in UTC and aren't delayed.
+
+**Accepted drift.** GitHub lowers a past day of the star history when a star given that day is removed. Those corrections aren't fetched, so summed `daily_stars` slowly drifts above `total_stars`, by a few stars a year for a large repository. `total_stars` stays exact, and `reconcile.stars` allows for the drift.
+
+**Quota.** The fetch reads rate-limit headers and keeps a budget per API. When a run would exceed it, reconciliation (measure 3) gives way first, and the run reports a `quota.low` warning.
+
+**GitHub traffic.** GitHub's traffic API only keeps the last 14 days of views and clones. A missed day is fetched by the resume point as long as it's within those 14 days, and lost for good after that. That's why its freshness limit in `data.freshness` is the strictest: one day.
 
 ### 5. Live API tests and upstream changes
 
@@ -256,12 +312,12 @@ The fetch reads rate-limit headers and keeps a budget per API. When a run would 
 - **Deprecation headers:** they're archived (measure 1), and `check` reports them as warnings.
 - **Changelogs:** a configuration in the velocirepo repository fetches the GitHub and Plausible changelogs with `fetch-rss`, and flags entries that mention an endpoint velocirepo uses. GitHub announced both the stargazer restriction and the star history endpoint in its changelog.
 
-### 6. External heartbeat
+### 6. Heartbeat
 
-A self-hosted [Healthchecks](https://github.com/healthchecks/healthchecks) (BSD-3) instance, running somewhere other than GitHub:
-- The workflow pings it when it starts, and again when it finishes, with success or failure.
-- A missing ping means the run didn't happen. That covers a disabled schedule, an Actions outage or an expired token, none of which an in-GitHub check can report.
-- It also escalates open tracking issues to ntfy or email.
+The nightly job can't report that it didn't run at all, for example because GitHub disabled the schedule or a token expired. Two levels:
+
+- **Heartbeat workflow (default).** `install-ci` also generates a second scheduled workflow, `velocirepo-heartbeat.yml`, that runs at noon. It fails and opens the tracking issue if the latest data commit is more than 30 hours old, or if the issue has been open for more than a day. It needs no setup. It does share GitHub Actions with the nightly job, so it can't report an Actions outage.
+- **External heartbeat (optional).** For independence from GitHub, a self-hosted [Healthchecks](https://github.com/healthchecks/healthchecks) (BSD-3) instance on other infrastructure. The workflow pings it when it starts and when it finishes, with success or failure, and Healthchecks alerts on a missing ping and escalates to ntfy or email. It's enabled by setting a ping URL as a secret.
 
 ### 7. Weekly digest
 
@@ -284,16 +340,17 @@ Mutation testing of the checks themselves (removing a check must fail a test) is
 
 ## Rollout
 
-1. **Measure:** archive capture behind a flag, uploaded as an artifact only. Measure size and redaction for a week.
-2. **Replay:** add `velocirepo replay`, and test it against the measured archives. It must rebuild the stored records exactly.
-3. **Report-only gate:** `check` and the tracking issue, with the gate reporting findings but holding nothing back. Thresholds are tuned for two weeks, and false positives are accepted or fixed.
-4. **Enforcing gate:** holding back per project, with the held-back branch and its pull request.
-5. **Further measures:** reconciliation, re-fetch windows, live tests, heartbeat and digest, each with its tests from the table above.
+1. **Star history settle day:** replace the 7-day re-read with a settle day. It's independent of everything else and stops stored star days from changing.
+2. **Measure:** archive capture behind a flag, uploaded as an artifact only. Measure size and redaction for a week.
+3. **Replay:** add `velocirepo replay`, and test it against the measured archives. It must rebuild the stored records exactly.
+4. **Compaction:** `velocirepo compact` with the three conditions, and the compaction commit with its `compact.records-moved` check.
+5. **Report-only gate:** `check` and the tracking issue, with the gate reporting findings but holding nothing back. Thresholds are tuned for two weeks, and false positives are accepted or fixed.
+6. **Enforcing gate:** holding back per project, with the held-back branch and its pull request.
+7. **Further measures:** reconciliation, the quota budget, live tests, the heartbeat workflow and the digest, each with its tests from the table above.
 
 ## Open questions
 
-1. **Long-term storage:** release assets in an archive repository, or self-hosted S3 storage from the start?
-2. **Private analytics:** which sources should keep only the fields velocirepo reads in the archive (YouTube, LinkedIn)?
-3. **Hold-back granularity:** per source and project, as proposed, or everything for simplicity?
-4. **Who gets notified:** only the owners listed in the config, or also the repository's watchers?
-5. **Quota:** how much of the GitHub quota may reconciliation use? The nightly run already uses about 4,200 of 5,000 requests an hour.
+1. **Private analytics:** which sources should keep only the fields velocirepo reads in the archive (YouTube, LinkedIn)?
+2. **Hold-back granularity:** per source and project, as proposed, or everything for simplicity?
+3. **Who gets notified:** only the owners listed in the config, or also the repository's watchers?
+4. **Quota:** how much of the GitHub quota may reconciliation use? The nightly run already uses about 4,200 of 5,000 requests an hour.
