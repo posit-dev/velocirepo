@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/posit-dev/velocirepo/internal/dateutil"
 )
@@ -75,4 +76,25 @@ func init() {
 		Archive:           NotArchived,
 		NoReferenceTotals: "not implemented yet",
 	})
+}
+
+// PublishedThrough returns the latest day cranlogs has published. CRAN's
+// downloads are published two days late, and days without downloads are left
+// out, so this is the only way to tell an unpublished day from a quiet one.
+// It's the same for every package.
+func (c *CRAN) PublishedThrough(ctx context.Context) (time.Time, error) {
+	result, err := doJSON[[]struct {
+		End string `json:"end"`
+	}](ctx, c.Client, httpJSONRequest{
+		URL:          fmt.Sprintf("%s/downloads/total/last-day/%s", c.baseURL(), c.Package),
+		RequestError: "request cranlogs",
+		StatusError:  "cranlogs returned",
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	if len(result) == 0 || result[0].End == "" {
+		return time.Time{}, fmt.Errorf("cranlogs returned no last day")
+	}
+	return dateutil.ParseDate(result[0].End)
 }

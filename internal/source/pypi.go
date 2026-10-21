@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/posit-dev/velocirepo/internal/dateutil"
 )
@@ -73,4 +74,37 @@ func init() {
 		Archive:           ArchiveFull,
 		NoReferenceTotals: "not implemented yet",
 	})
+}
+
+// pypiReferencePackage has downloads every day, so the latest day pypistats
+// reports for it is the latest day it has published.
+const pypiReferencePackage = "pip"
+
+// PublishedThrough returns the latest day pypistats has published. Days
+// without downloads are left out, so a quiet package's own latest day says
+// nothing about it; the reference package's does.
+func (p *PyPI) PublishedThrough(ctx context.Context) (time.Time, error) {
+	result, err := doJSON[struct {
+		Data []struct {
+			Category string `json:"category"`
+			Date     string `json:"date"`
+		} `json:"data"`
+	}](ctx, p.Client, httpJSONRequest{
+		URL:          fmt.Sprintf("%s/api/packages/%s/overall?mirrors=false", p.baseURL(), pypiReferencePackage),
+		RequestError: "request pypistats",
+		StatusError:  "pypistats returned",
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	latest := ""
+	for _, entry := range result.Data {
+		if entry.Category == "without_mirrors" && entry.Date > latest {
+			latest = entry.Date
+		}
+	}
+	if latest == "" {
+		return time.Time{}, fmt.Errorf("pypistats returned no days for %s", pypiReferencePackage)
+	}
+	return dateutil.ParseDate(latest)
 }
