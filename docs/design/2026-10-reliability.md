@@ -78,6 +78,8 @@ Each source declares, for every request it makes, whether its data can be re-fet
 
 Traffic and PyPI are archived in full, not just their older days: their requests are few and small, and it keeps the rule simple.
 
+**Archived requests have to be replayable on their own.** Replay serves only archived responses, so a job whose archived requests depend on requests that aren't archived can't be replayed. GitHub is such a job: its reaction counts are requested for the issues and pull requests it has just listed, and that listing isn't archived. So the GitHub source fetches its snapshots as a separate unit: repository info first, then the reaction counts, for issue and pull request numbers that the manifest records. Replaying GitHub replays only that unit.
+
 ### What's captured
 
 One record per HTTP exchange:
@@ -93,7 +95,7 @@ Request headers aren't captured, so `Authorization` and cookies never reach the 
 
 ### Where it's captured
 
-Every source sends its requests through `doRequest` (`internal/source/http_json.go`), using the HTTP client from `fetch.CountingClient` (`internal/fetch/stats.go`). The capture is an `http.RoundTripper` next to `countingTransport`, so no source has to change. It buffers each archived response body, records it, and hands the source an equivalent body.
+Every source sends its requests through `doRequest` (`internal/source/http_json.go`), using the HTTP client from `fetch.CountingClient` (`internal/fetch/stats.go`). The capture is an `http.RoundTripper` next to `countingTransport`, so most sources don't have to change. The exceptions are GitHub, whose snapshots become a unit of their own (see above), and LinkedIn, whose responses are filtered before they're archived. The capture buffers each archived response body, records it, and hands the source an equivalent body.
 
 ### Format and size
 
@@ -103,21 +105,26 @@ Every source sends its requests through `doRequest` (`internal/source/http_json.
 
 ### Where it's stored
 
-As release assets in the data repository itself, one release per month (`raw-YYYY-MM`), one asset per run and source, kept forever.
+As release assets in the data repository itself, one release per month (`raw-YYYY-MM`), one asset per run and source, kept forever. The releases are created as pre-releases and never marked as the latest release (`prerelease: true`, `make_latest: false`), so they don't notify people who watch releases, and don't change what `releases/latest` points to. That matters when the data lives in a project's own code repository. `[settings] archive = false` turns the archive off.
 
 - **Not in the Git history:** release assets aren't part of clones or the history, so the data repository doesn't grow.
 - **No setup:** the workflow token can create releases in its own repository.
 - **No storage limits to worry about:** release assets don't count toward GitHub's artifact storage, which is limited for private repositories.
 - **Replaceable:** the storage sits behind a small interface, so self-hosted S3-compatible storage (Garage, SeaweedFS) can replace it by configuration.
 
-A failed upload is a warning, not a reason to hold data back: the data itself is fine, and the next run uploads it.
+A failed upload doesn't hold data back: the data itself is fine. But on GitHub's hosted runners, the workspace is deleted when the job ends, so the archive has to survive until it can be uploaded:
+
+- **The gate retries** the upload within the run.
+- **If it still fails,** the archive is saved as a workflow artifact instead, and the gate reports a warning.
+- **The next run** finds pending artifacts through the Actions API and uploads them as release assets.
+- **An archive that's still pending after seven days** becomes an error, since artifacts expire and the data in it can't be re-fetched.
 
 ### Privacy
 
 devrel-io is public, and so is its data. Release assets have the visibility of their repository, so the archive is exactly as public as the data. Raw responses can contain more than velocirepo stores, though:
 
 - **Public responses** about public targets are archived in full.
-- **Responses about targets that aren't public,** such as a private repository tracked with the personal access token, are archived with only the fields velocirepo reads.
+- **Responses about targets that aren't public,** such as a private repository tracked with the personal access token, are archived with only the fields velocirepo reads. A target's visibility has to be known before its responses are captured: for GitHub, the repository info, which comes first in the snapshot unit, says so. A target whose visibility isn't known yet is archived with only the read fields.
 - **LinkedIn** is archived with only the fields velocirepo reads, after the same filter as the stored data: its posts endpoint also returns drafts and non-public posts, and its statistics have more fields than the six velocirepo stores.
 
 Every source declares its archive policy. A source without one isn't archived at all, and a test requires a declaration from every source.
@@ -130,7 +137,7 @@ Every source declares its archive policy. A source without one isn't archived at
 - Requests are matched by method, redacted URL and a hash of the redacted body. A request that isn't in the archive is an error, not a network call.
 - Replayed records are written like fetched ones (see [Writing records](#writing-records)).
 
-Replay repairs bugs in how archived responses are processed. Its test fixture is the `total_reactions` bug from October, where a write replaced daily files. Sources must not depend on the clock beyond `FetchOptions`, so that a replay is deterministic.
+Replay repairs bugs in how archived responses are processed. Its test fixture is the `total_reactions` bug from October, where a write replaced daily files, replayed through GitHub's snapshot unit. Sources must not depend on the clock beyond `FetchOptions`, so that a replay is deterministic. A repair of a date range (see [Repairs](#repairs)) replays every run whose manifest's end dates fall in that range, oldest first.
 
 ## 2. Data gate
 
@@ -163,7 +170,7 @@ The gate runs in the same job rather than as required status checks on a pull re
 
 ### Which findings block
 
-- **Only findings about the night's new records hold data back,** and only their project's. With 465 projects, one broken repository or one false positive shouldn't stop all data.
+- **Only error findings about the night's new records hold data back,** and only for their source and project: a GitHub error doesn't hold back the same project's Plausible data. With 465 projects, one broken repository or one false positive shouldn't stop all data. A finding is about the night's new records when its keys were added that night. Each check's severity and scope are in [Checks in the gate](#checks-in-the-gate).
 - **Findings about data already stored** don't hold anything back, since holding new data back doesn't fix old data. They're reported until they're resolved, for example by a repair. Reconciliation differences and stale targets are such findings.
 - **Error findings that don't belong to a project,** such as an unreadable config, hold back the whole run. Warnings never hold anything back.
 
@@ -171,10 +178,12 @@ The gate runs in the same job rather than as required status checks on a pull re
 
 Held-back records are stored on `main`, outside the data, in `velocirepo/held-back/<source>/<project>/`, in the same file format as the data. Queries, views and `build-db` only read `velocirepo/data/`, so held-back records are invisible to them.
 
+What's held back is everything the night changed for that source and project: its new records, its watermark entries and its content changes. Its paths in `velocirepo/data/` stay as they are on `HEAD`. So the stored watermarks never move past data that isn't stored, and discarding held-back data can't leave a gap.
+
 - **A held-back project is fetched and checked as a whole.** Before the fetch, the gate overlays the project's held-back records on its stored data, so the resume points, watermarks and the filter for unchanged totals see "stored plus held-back". The fetch then continues from the held-back data instead of re-fetching it, and a total that changes and changes back is filtered correctly.
 - **After the fetch,** the project's new records, both the held-back ones and the night's, are checked against the stored data. If they pass, they all land in the data commit, merged through the store functions with newest-wins, and the project's held-back directory is removed. If not, the night's new records join the held-back directory, and the stored data stays as it was.
-- **Releasing by hand:** a manual run of the nightly workflow with `release: <project>` lands the project's held-back records regardless of their findings, and records the release in the tracking issue. Accepting the finding in `velocirepo/checks.toml` keeps it from coming back.
-- **Discarding:** a manual run with `discard: <project>` deletes the project's held-back records. Its resume points then fall back to the stored data, so data that can be re-fetched is fetched again the next night.
+- **Releasing by hand:** a manual run of the nightly workflow with `release: <source>/<project>` lands the held-back data regardless of its findings, and records the release in the tracking issue. Accepting the finding in `velocirepo/checks.toml` keeps it from coming back.
+- **Discarding:** a manual run with `discard: <source>/<project>` deletes the held-back data, watermarks included. The resume points then fall back to the stored watermarks, so data that can be re-fetched is fetched again the next night.
 
 The tracking issue links to each held-back directory.
 
@@ -187,7 +196,7 @@ New records for a period that's already concatenated, which happens with backfil
 Today a month is concatenated in the same run that stores its last day, as part of `fetch`. In the workflow, the nightly `fetch` runs with `--no-concatenate` instead, and concatenation becomes a step of the gate with its own commit. It's not a separate command: nobody needs to run it by hand. A `fetch` without the gate, such as a local run, still concatenates automatically with the same two conditions:
 
 1. **The calendar:** it's on or after the concatenation day, the 8th of the following month by default (`[settings] concatenate_on_day`).
-2. **The data:** every target and series of the project has a watermark past the month's last day, so every daily file of the month has been stored, and committed at least once.
+2. **The data:** every target and series of the project has a watermark past the month's last day, so every daily file of the month has been stored, and committed at least once. The targets are the ones in the current config, so a removed repository or site doesn't count. A target that's further behind than its freshness limit doesn't block either: `data.freshness` reports it, and its late data is merged into the period file once it arrives.
 
 A year is concatenated when December is, in the same run: December's daily files become `YYYY-12.jsonl`, and the twelve monthly files become `YYYY.jsonl`. Yearly files are kept.
 
@@ -204,10 +213,17 @@ Why one week after the month ends:
 
 A repair deliberately changes stored values, so it's the one exception to the rule.
 
-- **From the workflow:** a manual run with `repair: <source> <project> <from> <to>` fetches that range again with the current velocirepo version, or replays it where the range is archived and the API no longer has it. Changes within that source, project and range are reported as `diff.repaired`, a warning that lists what changed, instead of being undone. Records that disappear are still restored and reported. The repair is its own commit, "Repair plausible/dplyr 2026-06-22..2026-10-16", with a trailer in the same form: `Velocirepo-Repair: plausible/dplyr 2026-06-22..2026-10-16`.
+- **From the workflow:** a manual run with `repair: <source> <project> <from> <to>` fetches that range again with the current velocirepo version, or replays it where the range is archived and the API no longer has it. Changes within that source, project and range, removals included, are reported as `diff.repaired`, a warning that lists what changed, instead of being undone. A repair has to be able to remove records: an event has no value to correct, so a corrected event, or a record moved to another date, is a removal and an addition. Outside the repair's scope, removals are still restored and reported. The repair is its own commit, "Repair plausible/dplyr 2026-06-22..2026-10-16", with a trailer in the same form: `Velocirepo-Repair: plausible/dplyr 2026-06-22..2026-10-16`.
 - **By hand:** a commit with the same trailer, for example after a local `fetch` or `replay`, is treated the same way when the gate checks the commits since the previous run.
 
 A test repairs the October `total_reactions` incident by replay, and the Plausible pagination incident by re-fetch, from start to finish.
+
+### The gate's state
+
+The gate keeps a small state file, `velocirepo/gate-state.json`, committed with the data commit whenever it changes. It holds the open findings with their IDs, so the gate knows which ones are new or resolved, and, for findings about commits made by hand, the commit they're about. The records such a commit removed don't have to be stored: they're recomputed from the commit's parent whenever they're needed.
+
+- **The first run** creates `refs/velocirepo/checked` at `HEAD`, without checking the history before it.
+- **A checked ref that's no longer an ancestor of `main`,** for example after a force-push, is reported as a finding and reset to `HEAD`.
 
 ### Commits made by hand
 
@@ -252,20 +268,30 @@ Each check produces findings of this shape:
 
 ### Checks in the gate
 
-| Check | Reports | Would have caught |
-|---|---|---|
-| `fetch.failed` | a job failed | the four failed nights |
-| `diff.records-removed` | stored records disappear, compared by key over each changed project (not by file, since concatenation moves records between files) | the July deletion; the 44,619 `total_reactions` |
-| `diff.values-changed` | a stored value changes. Content files are exempt, since they're updated in place. | the Plausible duplicates, which changed stored values |
-| `diff.content-removed` | an ID disappears from a content file | — |
-| `diff.repaired` | the changes of a repair, as a warning | — |
-| `concatenate.records-moved` | the concatenation commit changes the set of records instead of only moving them between files | the months that concatenation overwrote, fixed in v0.9.0 |
-| `data.integrity` | `validate-data` finds duplicates, overlapping period files or temp files | the Plausible duplicates |
-| `data.freshness` | a target's watermark is further behind today than its source allows. Every source has a limit, and a test requires one: GitHub events and traffic 1 day; PyPI, Plausible, the star history, Homebrew, Open VSX, YouTube, LinkedIn and RSS 2; CRAN 3, since it publishes two days late. | stalled sources |
-| `data.volume` | a target that usually has data (on at least 20 of the last 28 days) gets none for several days | a source that stops returning data |
-| `reconcile.*` | stored totals differ from the API's own totals (measure 3) | the stars, positron, the Plausible duplicates, the CRAN month ends |
+| Check | Reports | Severity | Scope | Would have caught |
+|---|---|---|---|---|
+| `fetch.failed` | a job failed | error | its source and project | the four failed nights |
+| `diff.records-removed` | stored records disappear, compared as sets of keys over each changed project (not by file, since concatenation moves records between files). The records are restored. | error, or a warning within allowances | stored data | the July deletion; the 44,619 `total_reactions` |
+| `diff.values-changed` | a stored value changes; the stored value is kept. Content files are exempt, since they're updated in place. | error | stored data | the Plausible duplicates, which changed stored values |
+| `diff.content-removed` | an ID disappears from a content file; it's restored | error | stored data | — |
+| `diff.repaired` | the changes of a repair | warning | the repair's range | — |
+| `concatenate.records-moved` | the concatenation commit changes the set of records instead of only moving them between files | error | the concatenation commit, which isn't pushed | the months that concatenation overwrote, fixed in v0.9.0 |
+| `data.integrity` | `validate-data` finds duplicates, overlapping period files or temp files | error for new records; warning for stored data | both | the Plausible duplicates |
+| `data.freshness` | a target's watermark is further behind today than its source allows (see below) | warning | stored data | stalled sources |
+| `data.volume` | a target that usually has data (on at least 20 of the last 28 days) gets none for several days | warning | stored data | a source that stops returning data |
+| `reconcile.*` | stored totals differ from the API's own totals (measure 3) | warning | stored data | the stars, positron, the Plausible duplicates, the CRAN month ends |
 
-`check` reads the `HEAD` versions of the changed projects' files with `git cat-file --batch`, without checking out the repository, so its cost grows with the night's changes, not with the size of the repository. Comparing records instead of files is how the October repair was checked by hand, with DuckDB.
+Errors about stored data don't hold anything back (see [Which findings block](#which-findings-block)); they're reported until they're resolved. The diff checks undo what they find instead: removals are restored, and changed values keep their stored value.
+
+**Freshness limits** are the most days allowed between a target's watermark and today, in UTC. A watermark of yesterday is one day behind. Every source has a limit, and a test requires one:
+
+| Source | Limit | Why |
+|---|---|---|
+| GitHub events and traffic | 1 | fetched through yesterday every night; traffic only keeps 14 days |
+| Plausible, the star history, PyPI, Homebrew, Open VSX, YouTube, LinkedIn, RSS | 2 | fetched through yesterday by the scheduled run, a day of slack |
+| CRAN | 3 | published two days late, a day of slack |
+
+The diff checks read the `HEAD` versions of the changed projects' files with `git cat-file --batch`, without checking out the repository, so their cost grows with the night's changes, not with the size of the repository. Reconciliation, `data.integrity` and `data.volume` read all stored data, through DuckDB aggregates; their runtime on devrel-io is measured in the plan's acceptance criteria. Comparing records instead of files is how the October repair was checked by hand, with DuckDB.
 
 A source can declare that some removals are normal. GitHub events, for instance, disappear when comments or forks are deleted. Those removals are warnings up to a threshold.
 
@@ -273,7 +299,7 @@ There's no check for missing days. CRAN, PyPI and Plausible all leave out days w
 
 ### Notifications
 
-- **One tracking issue,** "Data health", opened by the gate while there are open findings.
+- **One tracking issue,** "Data health", with the label `velocirepo-health`, opened by the gate while there are open findings. The gate, the heartbeat and the digest find it by that label.
   - Its body is rewritten each night with the open findings, grouped by project, with links to held-back directories.
   - A comment is added only when findings appear or are resolved, so a stable problem doesn't notify every night. That works because finding IDs don't change from night to night.
   - It closes itself when no findings are left.
@@ -314,8 +340,10 @@ Errors and warnings also become `::error::` and `::warning::` annotations, so th
 
 - **Gate logic:** in velocirepo. That's `velocirepo check`, plus `velocirepo gate`, which does steps 1, 2 and 5 to 7, including concatenation. The gate calls GitHub's REST API directly, as `sync-secrets` does, so the workflow doesn't depend on `gh`.
 - **Workflow:** the action runs them, and `install-ci` generates the new workflows, so every user gets the gate, not just devrel-io.
+- **Reporting or enforcing:** the gate only enforces when `[settings] gate = "enforce"`. Without that setting it reports what it would do and commits everything, as today. So a workflow generated for report-only mode keeps reporting when the binary is upgraded, and enforcing is a deliberate change to the config.
 - **Opt-in for existing workflows:** existing workflows get the action's and the binary's changes automatically, since the action is referenced by a floating tag such as `v1` and installs the latest release. So the action's new steps are opt-in: its `mode` input defaults to `fetch`, which runs `velocirepo fetch` exactly as today, and only the workflows `install-ci` generates set `mode: gate`. A test renders the old workflow template against the new `action.yml`, to check that it still fetches, concatenates and commits as before.
-- **Permissions:** `contents: write` (commits, the checked ref and the archive releases), `issues: write`, and `actions: read` for the heartbeat. They're granted in the workflow file. No repository setting needs to change.
+- **Permissions:** the nightly workflow needs `contents: write` (commits, the checked ref and the archive releases), `issues: write`, and `actions: read` (pending archive artifacts). The heartbeat and digest workflows need `issues: write` and `actions: read`. They're granted in the workflow files. No repository setting needs to change.
+- **Action modes:** besides `fetch` and `gate`, the action's `mode` input has `check-heartbeat` and `digest`, so every workflow installs and runs velocirepo the same way.
 
 ## For other velocirepo users
 
@@ -383,17 +411,17 @@ A fetch only requests a day once it has ended in the target's time zone, plus a 
 
 So every target, and for GitHub the star history separately, gets its own resume point: a watermark of the day it was fetched through, in the existing per-target watermarks (`store.MarkFetched`, `_watermark.json`), with a series key added. A watermark rather than the latest stored record, because a quiet repository may not get a star for months, and days without stars aren't stored.
 
-**A watermark only moves as far as the source has published.** CRAN publishes two days late: the nightly run of 2026-10-21 could only store CRAN through 10-19, because cranlogs' `last-day` endpoint reported 10-19. If the watermark moved to the end date anyway, 10-20 would never be fetched. So each source tells how far its data is published:
+**A watermark only moves as far as the source has published.** CRAN publishes two days late: the nightly run of 2026-10-21 could only store CRAN through 10-19, because cranlogs' `last-day` endpoint reported 10-19. If the watermark moved to the end date anyway, 10-20 would never be fetched. So each source tells how far its data is published. That's asked once per source and run, not per target:
 
 | Source | Published through |
 |---|---|
 | CRAN | cranlogs' `last-day` endpoint |
-| PyPI | the latest day in the run's responses, across all its packages |
+| PyPI | the latest day pypistats reports for a reference package (`pip`), one request per run, so it doesn't depend on how quiet the run's own packages are |
 | everything else | the end date: the data is real time, or a snapshot |
 
 A source that can't tell moves the watermark only to the latest day it returned, which is always safe: at worst, a day without data is requested again the next night.
 
-**Upgrading.** No repository has a star-history watermark yet. On the first run, it's seeded from the latest stored `daily_stars` day of each repository, and the other watermarks from today's resume points, so the first night doesn't re-read every star history or source.
+**Upgrading.** No target has a watermark of this kind yet. A one-time migration, recorded by raising the data schema version that velocirepo already keeps, seeds them: the star history from the latest stored `daily_stars` day of each repository, and the others from today's resume points. So the first night doesn't re-read every star history or source. After the migration, a target without a watermark, such as one added to the config later, starts from the beginning of its history.
 
 **The nightly schedule.** `install-ci` schedules the nightly run after the latest time zone among the configured sources, plus the margin: 09:30 UTC for devrel-io, which covers US Pacific time in winter. At that time every real-time source's yesterday has ended, so the nightly run fetches them all through the same day. devrel-io's schedule moves from 06:00 to 09:30 UTC, so its data arrives three and a half hours later than now.
 
@@ -413,12 +441,12 @@ A source that can't tell moves the watermark only to the latest day it returned,
 
 The nightly job can't report that it didn't run at all, for example because GitHub disabled the schedule or a token expired. Two levels:
 
-- **Heartbeat workflow (default).** `install-ci` also generates a second scheduled workflow, `velocirepo-heartbeat.yml`, scheduled three hours after the nightly run (12:30 UTC for devrel-io). `velocirepo check-heartbeat` asks GitHub's API whether the nightly workflow has completed a run since its scheduled time that day, using the workflow token with `actions: read`. If not, it fails and comments on the tracking issue, or opens it. So a missed night is reported the same day. An open issue doesn't make it fail; it only adds the one escalation comment described under [Notifications](#notifications). It needs no setup. It does share GitHub Actions with the nightly job, so it can't report an Actions outage.
+- **Heartbeat workflow (default).** `install-ci` also generates a second scheduled workflow, `velocirepo-heartbeat.yml`, scheduled three hours after the nightly run (12:30 UTC for devrel-io). `velocirepo check-heartbeat` asks GitHub's API whether the nightly workflow has started a run since its scheduled time that day, using the workflow token with `actions: read`. A run that's still in progress counts. If there's none, it fails and comments on the tracking issue, or opens it. So a missed night is reported the same day. An open issue doesn't make it fail; it only adds the one escalation comment described under [Notifications](#notifications). It needs no setup. It does share GitHub Actions with the nightly job, so it can't report an Actions outage.
 - **External heartbeat (optional).** For independence from GitHub, a self-hosted [Healthchecks](https://github.com/healthchecks/healthchecks) (BSD-3) instance on other infrastructure. The workflow pings it when it starts and when it finishes, with success or failure. Healthchecks alerts on a missing ping and escalates to ntfy or email. It's enabled by setting a ping URL as a secret.
 
 ### 7. Weekly digest
 
-A scheduled workflow renders a view with one sparkline per source and project over the last 8 weeks, plus the week's findings, and posts it as a comment on the tracking issue, or as a new issue when none is open. It's for the problems no check was written for. Three months of zero positron events would have stood out in the first week.
+A scheduled workflow renders a view with one sparkline per source and project over the last 8 weeks, plus the week's findings, and posts it as a comment on a long-lived issue of its own, "Weekly digest", with the label `velocirepo-digest`. It never opens or closes the tracking issue. It's for the problems no check was written for. Three months of zero positron events would have stood out in the first week.
 
 ### 8. Testing the checks
 
@@ -472,7 +500,7 @@ The questions this design left open, each with the default it uses, an alternati
 
 ### How data is held back
 
-- **Default:** a nightly run never removes or changes stored data. New records that fail a check are held back per project, in `velocirepo/held-back/` on `main`, outside the data, until they pass, are released or are discarded.
+- **Default:** a nightly run never removes or changes stored data. New records that fail a check are held back per source and project, with their watermarks and content changes, in `velocirepo/held-back/` on `main`, outside the data, until they pass, are released or are discarded.
 - **Alternative:** hold back all of a project's changes, removals included, on a separate branch with a commit per night.
 - **Why the default:** most incidents removed or changed data, and undoing those is always right for a nightly run, so there's nothing to decide about them. That leaves only additions to hold back, and additions can be kept as plain record sets and merged through the store, without branches, rebases, or rules for which data can be re-fetched. A separate branch also turned out to be fragile: daily files mix data that can and can't be re-fetched, and rebasing per-night commits over them conflicts.
 
