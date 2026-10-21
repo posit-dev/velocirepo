@@ -20,9 +20,25 @@ inputs:
     required: false
     default: latest
   fetch-args:
-    description: "Extra arguments for velocirepo fetch, such as --archive <dir>"
+    description: "Extra arguments for velocirepo fetch"
     required: false
     default: ""
+  archive:
+    description: >-
+      Archive the responses of data that can't be fetched again, as assets of
+      this repository's monthly raw-YYYY-MM pre-release, for replays. Needs
+      the permissions contents: write and actions: read.
+    required: false
+    default: "false"
+  repo-token:
+    description: "Token for this repository, to store the archive (default: the workflow token)"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  pending-archive:
+    description: The path of an archive whose upload failed, saved as a workflow artifact for the next run
+    value: ${{ steps.upload-archive.outputs.pending-archive }}
 
 runs:
   using: composite
@@ -96,5 +112,34 @@ runs:
         YOUTUBE_TOKEN: ${{ inputs.youtube-token }}
         # Passed through the environment, not interpolated into the script.
         VELOCIREPO_FETCH_ARGS: ${{ inputs.fetch-args }}
+        VELOCIREPO_ARCHIVE: ${{ inputs.archive }}
       # Word splitting of the arguments is intended.
-      run: velocirepo fetch $VELOCIREPO_FETCH_ARGS
+      run: |
+        ARCHIVE_ARGS=""
+        if [ "$VELOCIREPO_ARCHIVE" = "true" ]; then
+          # Outside the work tree, so it's never committed.
+          ARCHIVE_ARGS="--archive $RUNNER_TEMP/velocirepo-archive"
+        fi
+        velocirepo fetch $ARCHIVE_ARGS $VELOCIREPO_FETCH_ARGS
+
+    - name: Upload the archive
+      id: upload-archive
+      # Also after a failed fetch: what it archived can't be fetched again.
+      if: ${{ !cancelled() && inputs.archive == 'true' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PLAUSIBLE_TOKEN: ${{ inputs.plausible-token }}
+        YOUTUBE_TOKEN: ${{ inputs.youtube-token }}
+        VELOCIREPO_REPO_TOKEN: ${{ inputs.repo-token }}
+      run: |
+        shopt -s nullglob
+        velocirepo upload-archive --pending --output "$GITHUB_OUTPUT" "$RUNNER_TEMP"/velocirepo-archive/*/
+
+    - name: Save the archive for the next run
+      if: ${{ !cancelled() && steps.upload-archive.outputs.pending-archive != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.upload-archive.outputs.pending-name }}
+        path: ${{ steps.upload-archive.outputs.pending-archive }}
+        retention-days: 7
