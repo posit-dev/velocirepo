@@ -99,21 +99,21 @@ That rules out storing it as files in the data repository: its pack is already 5
 | Files in the data repository | yes | forever | Too big; every clone downloads it. |
 | A separate Git repository | yes | forever | Git handles gigabytes of binary history badly, and the workflow's token can't write to another repository. |
 | GitHub Actions artifacts | yes | at most 90 days | Already part of the workflow; good for recent runs. |
-| Release assets in the data repository | yes | forever | Not part of clones or the Git history. The workflow's `GITHUB_TOKEN` can create releases in its own repository, so nothing has to be set up. One release per month, one asset per run and source; files up to 2 GB. Relies on GitHub keeping release storage free. |
+| Release assets in the data repository | yes | forever | Not part of clones or the Git history. The workflow token can create releases in its own repository, so nothing has to be set up. One release per month, one asset per run and source; files up to 2 GB. Relies on GitHub keeping release storage free. |
 | Self-hosted S3-compatible storage (Garage, SeaweedFS) | yes, with your own machine | forever | Independent of GitHub, but needs a server. |
 
-**Recommendation:** upload every run as an Actions artifact (90 days), and add the long-term part as release assets in the data repository itself. The releases are named `raw-YYYY-MM`, so they're easy to tell apart from anything else in the repository. The storage backend sits behind a small interface, so moving to self-hosted S3 storage later only changes configuration.
+**Recommendation:** upload every run as an Actions artifact, and add the long-term part as release assets in the data repository itself. Artifacts are kept for 90 days in public repositories. Private repositories have limited free artifact storage (500 MB on GitHub Free), so there the default is 14 days, and `[settings] archive_retention_days` changes it. A failed artifact or release upload is a warning, not a reason to hold data back: the data itself is fine, and the next run tries again. The releases are named `raw-YYYY-MM`, so they're easy to tell apart from anything else in the repository. The storage backend sits behind a small interface, so moving to self-hosted S3 storage later only changes configuration.
 
 ### Retention
 
-What's worth keeping forever depends on whether the API keeps the history itself:
+What's worth keeping forever depends on whether the API keeps the history itself. That's a property of a metric, not of a source: the `github` source fetches events, which can be re-fetched, and `total_stars` and `total_reactions`, which can't. Each source declares a tier for every metric it produces and for every request it makes, and retention and held-back data (see [What happens to held-back data](#what-happens-to-held-back-data)) work per tier, not per source:
 
-| Tier | Sources | Retention |
+| Tier | Metrics | Archive retention |
 |---|---|---|
-| Can't be re-fetched | GitHub traffic, PyPI (older than ~180 days), Homebrew, Open VSX, YouTube totals, LinkedIn, `total_stars`, `total_reactions` | forever |
-| Can be re-fetched | CRAN, Plausible, GitHub events and star history, RSS | 90 days |
+| Can't be re-fetched | `total_*` snapshots (stars, reactions, Homebrew, Open VSX, YouTube totals), LinkedIn statistics, GitHub traffic older than 14 days, PyPI older than ~180 days | forever |
+| Can be re-fetched | CRAN, Plausible, PyPI within ~180 days, GitHub events, `daily_stars`, GitHub traffic within 14 days, RSS | 90 days |
 
-For the second tier, re-fetching is the repair path. Ninety days is far more than the detection delay once the gate is in place.
+Most of GitHub's 4,191 nightly requests are for events, so they fall in the second tier, and only the snapshot requests are kept forever. For the second tier, re-fetching is the repair path. Ninety days is far more than the detection delay once the gate is in place. Data whose age moves it into the first tier, such as traffic held back for more than 14 days, is treated as the first tier from then on.
 
 ### Replay
 
@@ -130,7 +130,14 @@ Because it's the same code path as fetch, replay has two uses:
 
 A replay has to make exactly the requests the original run made. Those depend on each job's start date (from the resume point), its end date (from the time of the run and the source's time zone) and the source's time zones. All three would come out differently when resolved again later, after more data has been stored. So the manifest records, for every job, its start date, end date, run time and resolved time zones, and replay uses those instead of resolving them again. Sources must not depend on the clock beyond `FetchOptions`.
 
-Replayed records are written like fetched ones: as daily files, merged with newest-wins into a monthly or yearly file that already exists. The repair then goes through the normal checks, including `diff.values-changed`, which is how a repair shows what it changes.
+Replayed records are written like fetched ones: as daily files, merged with newest-wins into a monthly or yearly file that already exists.
+
+**Repairs.** A repair deliberately changes stored values, which the gate would otherwise treat as `diff.values-changed` and hold back. So repairs have their own path:
+
+- **From the workflow:** a manual run with `repair: <run-id>` (and optionally a source and project) replays that run inside the gate, after a fix has been released. Value changes that match the replay's records are reported as `diff.repaired`, a warning that lists what changed, instead of an error. Everything else is checked as usual: records that disappear are still errors. The repair is its own commit, "Repair plausible/dplyr from run 2026-10-20T09:31Z", with a `Velocirepo-Repair: <run-id>` trailer.
+- **By hand:** a commit with the same trailer, for example after a local `replay`, is treated the same way by the check on pushes.
+
+A test repairs the Plausible pagination incident this way, from start to finish.
 
 ### Privacy
 
@@ -164,18 +171,18 @@ All in the nightly job:
 
 Keeping new data and concatenation in separate commits gives each a check that fits it. The data commit should only add records, so the diff guard can be strict. The concatenation commit should only move records between files, so the set of records before and after it must be identical.
 
-The gate runs in the same job rather than as required status checks on a pull request. Pushes made with the workflow's `GITHUB_TOKEN` don't start other workflows, so required checks would never run on them. Creating pull requests with `GITHUB_TOKEN` also needs the repository setting "Allow GitHub Actions to create and approve pull requests", which is off by default and which not every user can change. So the gate doesn't use pull requests at all. In the same job, it also has the fetch results and the archive at hand.
+The gate runs in the same job rather than as required status checks on a pull request. Pushes made with the workflow token don't start other workflows, so required checks would never run on them. Creating pull requests with the workflow token also needs the repository setting "Allow GitHub Actions to create and approve pull requests", which is off by default and which not every user can change. So the gate doesn't use pull requests at all. In the same job, it also has the fetch results and the archive at hand.
 
 ### Tokens
 
 The workflow has two tokens, used for different things:
 
-| Token | Used for | Why |
-|---|---|---|
-| `GH_TOKEN`, a personal access token | fetching from GitHub's APIs | It has the 5,000-an-hour quota and access to the tracked repositories. |
-| `GITHUB_TOKEN`, the workflow's own | pushing to `main` and the held-back branch, the tracking issue, the archive's release assets | Its actions appear as `github-actions[bot]`. GitHub doesn't notify people about their own actions, so an issue opened with an owner's personal token wouldn't notify that owner. It needs no setup, and it can't trigger the workflow again. |
+| Token | How velocirepo gets it | Used for | Why |
+|---|---|---|---|
+| A **personal access token**, the secret `GH_TOKEN` | the environment variable `GITHUB_TOKEN`, as today: the action exports its `github-token` input under that name, and `fetch`, `check` and `sync-secrets` read it | fetching from GitHub's APIs, and reconciliation's reference requests | It has the 5,000-an-hour quota and access to the tracked repositories. |
+| The **workflow token** (`github.token`) | `gate --repo-token`, or the environment variable `VELOCIREPO_REPO_TOKEN`; the action's new `repo-token` input defaults to `github.token` | pushing to `main` and the held-back branch, the tracking issue, the archive's release assets, and reading the repository's workflow runs | Its actions appear as `github-actions[bot]`. GitHub doesn't notify people about their own actions, so an issue opened with an owner's personal token wouldn't notify that owner. It needs no setup, and it can't trigger the workflow again. |
 
-The gate gets `GITHUB_TOKEN` separately from `GH_TOKEN`, and never uses the personal token for issues, pushes or releases. When an issue or release call fails, for example with 403 because the workflow lacks `issues: write`, the gate reports a finding that names the missing permission instead of failing silently.
+The names are chosen so that nothing changes for local use: `GITHUB_TOKEN` keeps meaning the personal token, as it does for `fetch` and `sync-secrets` today. The gate never uses it for issues, pushes or releases, and a test runs the gate with both tokens set to different values and checks which one each call uses. When an issue, push or release call fails, for example with 403 because the workflow lacks `issues: write`, the gate reports a finding that names the missing permission instead of failing silently.
 
 ### Holding back per source and project
 
@@ -183,10 +190,15 @@ One broken repository shouldn't hold back everything. Findings refer to a source
 
 ### What happens to held-back data
 
-- **Held-back commits are carried forward.** `velocirepo/held-back` holds every held-back commit until it's released. Each night the gate rebases them onto the new `main`. That's always clean: `main` doesn't touch a held-back project's files while it's held back, since the gate restores them.
-- **Sources that can be re-fetched** (CRAN, Plausible, GitHub events) are fetched again anyway, because `main` doesn't have those days and the resume point starts from `main`. Once such a project passes, its re-fetched data lands, and its held-back commits are dropped as superseded.
-- **Sources that can't be re-fetched** (snapshots such as Homebrew, Open VSX, YouTube and `total_stars`, and GitHub traffic older than 14 days) only exist in the held-back commits. Once the project passes again, the gate checks its held-back commits with the current rules, oldest first, and lands those that pass on `main`. So a snapshot source held back for three nights still gets all three days.
-- **To release data by hand,** for example when a finding turns out to be wrong, the nightly workflow can be run manually with `release: <project>`. The gate then lands that project's held-back commits regardless of their findings, and records the release in the tracking issue. Accepting the finding in `velocirepo/checks.toml` keeps it from coming back.
+**One commit per night, source, project and tier.** The gate commits each held-back project's changes of the night separately per source and tier, for example "Hold back github/positron (can't be re-fetched) fetched on 2026-10-21". So data can be released or dropped per project and per tier.
+
+**Applying a night's commit.** A held-back commit contains only that night's diff for the project's paths, never a copy of its whole directory, so it can't delete files that earlier held-back nights added. For the tier that can be re-fetched, each night's re-fetch covers all held-back days again, because the resume point starts from `main`. So for that tier the branch only keeps the latest night: the new commit replaces the previous one. For the tier that can't be re-fetched, the commits accumulate, oldest first.
+
+**Carrying them forward.** Each night the gate rebases the held-back commits onto the new `main`. That's always clean: `main` doesn't touch a held-back project's files while it's held back, since the gate restores them.
+
+**Releasing.**
+- **When a project passes again,** its latest re-fetchable commit is superseded by the night's data, which lands normally, and is dropped. Its commits that can't be re-fetched are checked with the current rules, oldest first, and those that pass land on `main`. So a snapshot such as `total_stars` held back for three nights still gets all three days, even though its project's events are re-fetched.
+- **By hand,** for example when a finding turns out to be wrong, a manual run with `release: <project>` lands that project's held-back commits regardless of their findings, and records the release in the tracking issue. Accepting the finding in `velocirepo/checks.toml` keeps it from coming back.
 - **The tracking issue links** to `compare/main...velocirepo/held-back`, which shows exactly what's held back. Once nothing is held back, the gate deletes the branch.
 
 ### Concatenation
@@ -195,7 +207,7 @@ Today a month is concatenated in the same run that stores its last day, as part 
 
 A project's month is concatenated when all of these hold:
 
-1. **The calendar:** it's the concatenation day, the 8th of the following month by default (`[settings] concatenate_on_day`).
+1. **The calendar:** it's on or after the concatenation day, the 8th of the following month by default (`[settings] concatenate_on_day`).
 2. **The data:** a day after the month's last day has been stored, so every daily file of the month has been committed at least once. With the nightly run scheduled after every source's day has ended, that's on the 2nd for every source.
 3. **The gate:** the project has no open findings and no held-back data for that month.
 
@@ -211,6 +223,12 @@ Why one week after the month ends:
 A month that misses its concatenation day, because one of the conditions doesn't hold yet, is concatenated on the first run where all three hold.
 
 The resume point and `LastDate` work as they do now: a monthly or yearly file still counts as stored through the last day of its period.
+
+### Concurrency and Git
+
+- **One concurrency group.** Every workflow that writes to the repository or the tracking issue (the nightly run, the check on pushes, the heartbeat and the digest) is in the same concurrency group, so they never update the issue at the same time. GitHub keeps only one pending run per group and cancels older pending ones, so the check on pushes doesn't rely on its own run's `before` commit: it checks everything since the last commit it checked, which it records in the ref `refs/velocirepo/checked`. A cancelled check is then covered by the next one.
+- **History.** `actions/checkout` fetches a single commit by default. The workflows fetch what they need explicitly: the checked ref and the push's commits for the check on pushes, and `velocirepo/held-back` for the gate.
+- **When `main` moves during a run.** A person can push while the nightly run is working. If the gate's push is rejected, it fetches the new `main` and rebases its commits. If the new commits touch none of the projects the run changed, it pushes. Otherwise it reruns the diff checks for those projects against the new `HEAD` before pushing, and reports a finding if they fail.
 
 ### Commit messages
 
@@ -243,7 +261,7 @@ Each check produces findings of this shape:
 ```
 
 - **`severity`:** `error` holds data back, `warning` lets it land but is reported.
-- **`id`:** a stable hash of the check, source, project, target and a check-specific key. It's used to detect when a finding is new or resolved, and to accept findings.
+- **`id`:** a stable hash of the check, source, project, target and a check-specific key. The key identifies what the finding is about, such as a metric, a date range or a path, and never includes counts or values, so the same problem keeps its ID from night to night even when the numbers in its message change. The ID is used to detect when a finding is new or resolved, and to accept findings.
 - **Accepting findings:** known false positives, such as two bot comments posted in the same second, go in `velocirepo/checks.toml`, with a reason and optionally an expiry date. Since that file is in Git, accepting a finding is a reviewed change.
 
 ### Checks in the gate
@@ -256,21 +274,33 @@ Each check produces findings of this shape:
 | `diff.content-removed` | an ID disappears from a content file (`issues.jsonl`, `prs.jsonl`, videos, posts). Content is updated in place, but its entries shouldn't vanish. | — |
 | `concatenate.records-moved` | the concatenation commit changes the set of records instead of only moving them between files | the CRAN month ends and the overwritten months (A1) |
 | `data.integrity` | `validate-data` finds duplicates, overlapping period files or temp files | Plausible duplicates |
-| `data.freshness` | a target's latest stored day is further behind today than the source allows. Every source has a limit, and a test requires one: GitHub events and traffic 1 day; CRAN, PyPI, Plausible, the star history, Homebrew, Open VSX, YouTube, LinkedIn and RSS 2. | stalled sources |
-| `data.volume` | a series that usually has data has none for several days, or drops far below its 28-day median | positron's missing events |
-| `data.completeness` | a day is missing inside a stored range (month ends) | CRAN month ends |
+| `data.freshness` | the day a target was last fetched through (its watermark, not its latest record) is further behind today than the source allows. Every source has a limit, and a test requires one: GitHub events and traffic 1 day; CRAN, PyPI, Plausible, the star history, Homebrew, Open VSX, YouTube, LinkedIn and RSS 2. | stalled sources |
+| `data.volume` | a series that usually has data (on at least 20 of the last 28 days) has none for several days, or drops far below its 28-day median | a source that stops returning data |
+| `data.completeness` | a day is missing inside a stored range of a dense metric (month ends) | CRAN month ends |
 | `reconcile.*` | stored totals differ from the API's own totals (measure 3) | stars, positron, Plausible, CRAN |
 
 Comparing records instead of files is how the October repair was checked by hand, with DuckDB. `check` reads the `HEAD` versions of the changed projects' files with `git cat-file --batch`, without checking out the repository, so its cost grows with the night's changes, not with the size of the repository.
 
 A source can declare that some removals are normal. GitHub events, for instance, disappear when comments or forks are deleted. Those removals become warnings up to a threshold.
 
+**Kinds of series.** Not every series has a value every day, so each source declares, per metric, which kind it is, and the checks treat them accordingly:
+
+| Kind | Examples | Completeness | Volume | Freshness |
+|---|---|---|---|---|
+| Dense: a value every day | CRAN and PyPI downloads, Plausible site totals | checked | checked | from the watermark |
+| Sparse: only days with activity | GitHub events, `daily_stars`, Plausible page metrics | not checked | only for series that usually have data | from the watermark |
+| Change-only: stored when the value changes | every `total_*` metric | not checked | not checked | from the watermark |
+
+So a quiet repository, a small site or an unchanged total doesn't cause findings. Each kind has a fixture that must report nothing.
+
 ### Notifications
 
-- **One tracking issue,** "Data health", opened by the workflow while there are open findings.
-  - Its body is rewritten every night with the current findings.
-  - A comment is added only when findings appear or are resolved, so a stable problem doesn't notify every night.
-  - The issue closes itself when no findings are left.
+- **One tracking issue,** "Data health", opened while there are open findings.
+  - **Each finding records where it came from:** the nightly run, the check on pushes, or the heartbeat. The issue body keeps them in a hidden JSON block, and shows them grouped by origin.
+  - **Each writer replaces only its own findings.** A clean nightly run therefore doesn't remove a finding from the check on pushes about a commit that's already on `main`, which the nightly run can't see, since it only compares against `HEAD`.
+  - **A finding from the check on pushes stays open** until it's accepted, or until a later commit restores what it reported: the check on pushes then reports it as resolved.
+  - **Comments only on changes:** a comment is added only when findings appear or are resolved, so a stable problem doesn't notify every night. Finding IDs don't change from night to night (see [Findings](#findings)), which is what makes that possible.
+  - **Closing:** the issue closes itself when no origin has findings left.
 - **Notifying the owners:** the issue is assigned to the owners listed in `velocirepo.toml` (`[settings] owners`), and mentions them. Being assigned notifies a person whatever their watch settings are, and watchers are notified as usual.
   - `install-ci` fills in `owners` with the GitHub login of whoever runs it, and asks whether to add others.
   - Teams can be listed too (`@posit-dev/devrel`). They're mentioned, since issues can't be assigned to teams.
@@ -293,13 +323,13 @@ Errors and warnings also become `::error::` and `::warning::` annotations, so th
 
 - **Gate logic:** in velocirepo. That's `velocirepo check`, plus `velocirepo gate`, which does steps 5 to 7, including concatenation. The gate calls GitHub's REST API directly, as `sync-secrets` does, so the workflow doesn't depend on `gh`.
 - **Workflow:** the action runs them, and `install-ci` generates the new workflows, so every user gets the gate, not just devrel-io.
-- **Permissions:** the workflow needs `contents: write` (commits, the held-back branch and the archive releases) and `issues: write`. It doesn't need `pull-requests: write`, nor the repository setting for pull requests from GitHub Actions.
+- **Permissions:** the workflow needs `contents: write` (commits, the held-back branch, the checked ref and the archive releases), `issues: write`, and `actions: read` for the heartbeat. It doesn't need `pull-requests: write`, nor the repository setting for pull requests from GitHub Actions.
 
 ### Commits made by hand
 
 The gate only checks the nightly run. The worst incident, the deleted history of 2026-07-28, was a commit made by hand: a full re-fetch run locally and pushed. So the same checks also run on pushes that don't come from the nightly run:
 
-- **On every push to `main` by a person,** a workflow (`velocirepo-check.yml`, generated by `install-ci`) runs `velocirepo check` against the push's `before` commit, so every commit of a push is covered, with reconciliation's all-time totals. Pushes made with the workflow's `GITHUB_TOKEN` don't start other workflows, so the nightly run's own pushes don't trigger it; the gate has already checked those.
+- **On every push to `main` by a person,** a workflow (`velocirepo-check.yml`, generated by `install-ci`) runs `velocirepo check --base <commit> --head <commit>` over every commit since the last one it checked (see [Concurrency and Git](#concurrency-and-git)), with reconciliation's all-time totals. Without a run window, `diff.values-changed` exempts nothing except commits with a `Velocirepo-Repair:` trailer. Pushes made with the workflow token don't start other workflows, so the nightly run's own pushes don't trigger it. The gate has already checked those, and moves `refs/velocirepo/checked` past them when it pushes.
 - **A failed check can't be undone by holding back,** since the commit is already on `main`. It opens or updates the tracking issue instead, with the commit and its findings, so the commit can be reverted before the next nightly run builds on it.
 - **To keep bad commits off `main` entirely,** a branch protection rule can require pull requests, with `velocirepo-check` as a required status check. That's optional, because it changes how people work with the repository, but the workflow supports it: on a pull request it runs the same checks. Such a rule also blocks the gate's own pushes to `main`, though, so it needs a bypass for GitHub Actions, which only a repository administrator can add. Without that bypass, requiring pull requests isn't compatible with the gate.
 
@@ -317,7 +347,9 @@ Everything in this design ships with velocirepo, so it works for any project tha
 | Heartbeat workflow | None; `install-ci` generates it. The external heartbeat is optional and needs a Healthchecks instance. |
 | Weekly digest | None; `install-ci` generates it. |
 
-No repository settings need to change: the gate works with the default permissions of `GITHUB_TOKEN` plus `issues: write`, which the workflow file grants itself. The upgrade notes of the release that introduces the gate say that the workflow must be regenerated. Until it is, the old workflow keeps working without the gate.
+Existing workflows get the action's and the binary's changes automatically, since the action is referenced by a floating tag such as `v1` and installs the latest release. So the action's new steps are opt-in: its `mode` input defaults to `fetch`, which runs `velocirepo fetch` exactly as today, and only the workflows that `install-ci` generates set `mode: gate`. A test renders the old workflow template against the new `action.yml`, to check that it still concatenates and commits as before.
+
+No repository settings need to change: the gate works with the workflow token's default permissions plus `issues: write` and `actions: read`, which the workflow file grants itself. The upgrade notes of the release that introduces the gate say that the workflow must be regenerated. Until it is, the old workflow keeps working without the gate.
 
 ## Further measures
 
@@ -334,7 +366,9 @@ Two levels:
 - **Every night, all-time totals.** For GitHub, one GraphQL query returns a repository's numbers of issues, pull requests, merged pull requests, forks and stars, and many repositories fit in one query. Two repositories cost 1 point of the 5,000 an hour, so all 465 of devrel-io's take roughly ten requests. Compared with the stored events, this finds missing or duplicated history right away. It would have shown 8,172 positron issues on GitHub against none stored.
 - **Every week, per-month totals.** The search API's counts of issues and pull requests opened, closed and merged in the last complete month find gaps that all-time totals don't, such as a missing week that happens to balance out. Older months are covered by the all-time totals. That's four searches per repository, about 1,860 for devrel-io. The search API allows 30 requests a minute, so they're spread over the nights of the week: about 270 searches, or 9 minutes, a night.
 
-**Quota:** reconciliation may use at most 10% of each API's hourly quota per run, and gives way first when the quota runs low (see the quota budget in measure 4).
+**Quota:**
+- **Shared quotas** (GitHub's REST and GraphQL limits of 5,000 an hour, Plausible's): reconciliation may use at most 10% per run, and gives way first when the quota runs low (see the quota budget in measure 4). The nightly totals need about ten GraphQL requests, well within that.
+- **The search API** has its own limit of 30 requests a minute, and only reconciliation uses it: `fetch` makes no search requests. So its budget is stated separately, as at most 270 searches a night, at no more than 30 a minute. That covers the 1,860 weekly searches in seven nights, taking about 9 minutes a night.
 
 | Source | Reference total | Verified |
 |---|---|---|
@@ -373,7 +407,12 @@ Stored values don't change once their day is complete. In the October repair, re
 
 A fetch stores a source's day only once that day has ended in the source's time zone, plus a margin of an hour for processing. The default end date becomes the latest day that has ended, per source and site, instead of "yesterday" for every source. This replaces `settleDays` (`internal/fetch/fetch.go`), which delays Plausible by a whole day regardless of the time of the run, and it replaces the star history's 7-day re-read. When a site's time zone can't be read, for example because the account has no access to the Sites API, the fetch assumes UTC−12, the latest time zone there is, unless the time zone is set in the config (`[settings.timezones]`, mapping a Plausible site to a time zone such as `"plotnine.org" = "America/Los_Angeles"`).
 
-**The star history resumes on its own.** The star history is part of the GitHub source, which has one resume point for all its events. With its own end date, a run before about 08:00 UTC would move the events' resume point past a star day that wasn't fetched yet, and that day would never be fetched. So the star history resumes from its own latest stored `daily_stars` day per repository, not from the source's resume point. That's the same mechanism as its automatic backfill: a repository without `daily_stars` starts from its first star.
+**Resume points per target and series.** Today a job has one resume point for all its targets: the latest day stored for the source and project. That breaks as soon as targets end their days at different times. With its own end date, a run before about 08:00 UTC would move a project's resume point past a day that hadn't ended yet for one of its targets, and that day would never be fetched. That affects:
+
+- **the star history,** which is part of the GitHub source but ends its days in US Pacific time;
+- **projects with several Plausible sites** in different time zones.
+
+So every target, and for GitHub the star history separately, gets its own resume point: a watermark of the day it was fetched through, using the existing per-target watermarks (`store.MarkFetched`, `_watermark.json`). It's a watermark rather than the latest stored record, because a quiet repository may not get a star for months, and days without stars aren't stored. A repository without a star-history watermark starts from its first star, which is how the automatic backfill already works. `data.freshness` uses the same watermarks.
 
 **The nightly schedule.** `install-ci` schedules the nightly run after the latest time zone among the configured sources, plus the margin: 09:30 UTC for devrel-io, which covers US Pacific time in winter. At that time every source's yesterday has ended, so a nightly run fetches all sources through the same day. Runs at other times, such as manual ones, still only store days that have ended, so they never store a partial day either.
 
@@ -395,7 +434,7 @@ devrel-io's schedule moves from 06:00 to 09:30 UTC, so its data arrives three an
 
 The nightly job can't report that it didn't run at all, for example because GitHub disabled the schedule or a token expired. Two levels:
 
-- **Heartbeat workflow (default).** `install-ci` also generates a second scheduled workflow, `velocirepo-heartbeat.yml`, that runs at noon. It fails and opens the tracking issue if the latest data commit is more than 30 hours old, which means the nightly run didn't happen. An issue that's already open doesn't make it fail; it only adds the one escalation comment described under [Notifications](#notifications). It also runs reconciliation's all-time totals against `main`, about ten requests for devrel-io, as a daily safety net for anything that got past the gate and the check on pushes. It needs no setup. It does share GitHub Actions with the nightly job, so it can't report an Actions outage.
+- **Heartbeat workflow (default).** `install-ci` also generates a second scheduled workflow, `velocirepo-heartbeat.yml`, scheduled three hours after the nightly run (12:30 UTC for devrel-io). It asks GitHub's API whether the nightly workflow has completed a run since its scheduled time that day, using the workflow token with `actions: read`. If not, it fails and opens the tracking issue. So a missed night is reported the same day, not after a fixed number of hours. An issue that's already open doesn't make it fail; it only adds the one escalation comment described under [Notifications](#notifications). It also runs reconciliation's all-time totals against `main`, about ten requests for devrel-io, as a daily safety net for anything that got past the gate and the check on pushes. It needs no setup. It does share GitHub Actions with the nightly job, so it can't report an Actions outage.
 - **External heartbeat (optional).** For independence from GitHub, a self-hosted [Healthchecks](https://github.com/healthchecks/healthchecks) (BSD-3) instance on other infrastructure. The workflow pings it when it starts and when it finishes, with success or failure, and Healthchecks alerts on a missing ping and escalates to ntfy or email. It's enabled by setting a ping URL as a secret.
 
 ### 7. Weekly digest
@@ -451,7 +490,7 @@ The questions this design left open, each with the default it now uses, an alter
 
 - **Default:** archive public APIs and the private analytics velocirepo stores in full, and LinkedIn only as far as velocirepo reads it, after the same filter as the stored data. See [Privacy](#privacy).
 - **Alternative:** archive everything in full, in storage that isn't public (a private repository or self-hosted S3 storage).
-- **Why the default:** the archive's main use is replaying fixes, and almost every bug so far was in public APIs, which are kept in full. For LinkedIn, an accidentally published draft or non-public post can't be taken back, while a replay that misses a field only means re-fetching. The alternative would also need a second repository or server, and a token, for every user.
+- **Why the default:** the archive's main use is replaying fixes, and almost every bug so far was in public APIs, which are kept in full. LinkedIn's statistics are snapshots that can't be re-fetched, so fields the archive leaves out are lost for good: a future fix that needs one can't be replayed for past days. That's accepted, because an accidentally published draft or non-public post can't be taken back. The alternative would also need a second repository or server, and a token, for every user.
 
 ### Hold-back granularity
 
@@ -474,5 +513,5 @@ The questions this design left open, each with the default it now uses, an alter
 ### Held-back data without pull requests
 
 - **Default:** held-back data goes on the `velocirepo/held-back` branch, the tracking issue links to its comparison with `main`, and it's released by the next passing run or by a manual run with `release: <project>`.
-- **Alternative:** a pull request per night of held-back data, created with the personal `GH_TOKEN`.
-- **Why the default:** creating pull requests with `GITHUB_TOKEN` needs a repository setting that's off by default and that not every user is allowed to change. A pull request created with a personal token appears as that person's, so it doesn't notify them, and it ties the workflow to one person's token. The branch and the issue give the same overview, and releasing data doesn't need a merge.
+- **Alternative:** a pull request per night of held-back data, created with the personal access token.
+- **Why the default:** creating pull requests with the workflow token needs a repository setting that's off by default and that not every user is allowed to change. A pull request created with a personal token appears as that person's, so it doesn't notify them, and it ties the workflow to one person's token. The branch and the issue give the same overview, and releasing data doesn't need a merge.
