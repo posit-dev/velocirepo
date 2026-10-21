@@ -20,6 +20,7 @@ type GitHubEvents struct {
 
 	contentEntries map[string][]ContentEntry
 	records        []Record
+	snapshotRefs   []int
 }
 
 func (g *GitHubEvents) Name() string { return "github" }
@@ -79,22 +80,56 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 	}
 	events = append(events, comments...)
 
-	allContent := append(issueContent, prContent...)
-	reactionRecords, err := g.fetchReactionCounts(ctx, owner, repo, opts, allContent)
-	if err != nil {
-		return nil, fmt.Errorf("reaction counts: %w", err)
-	}
-	g.records = reactionRecords
-
 	starRecords, err := g.fetchStarHistory(ctx, owner, repo, opts)
 	if err != nil {
 		return nil, fmt.Errorf("star history: %w", err)
 	}
-	g.records = append(g.records, starRecords...)
+	g.records = starRecords
+
+	// The issues and pull requests updated since StartDate, closed ones
+	// included, get their reaction counts refreshed: a count is otherwise
+	// only refreshed the next time its item shows up as updated.
+	var refs []int
+	for _, entry := range append(issueContent, prContent...) {
+		if entry.Ref != nil {
+			refs = append(refs, *entry.Ref)
+		}
+	}
+	if err := g.fetchSnapshots(ctx, owner, repo, opts, refs); err != nil {
+		return nil, err
+	}
+
+	return events, nil
+}
+
+// FetchSnapshots fetches only the repository's snapshots: its repository info
+// (with total_stars) and the reaction counts of the given issues and pull
+// requests. Their values can't be fetched for a past day, so their requests
+// are archived, and replay uses this to repeat them without the event
+// requests, which aren't.
+func (g *GitHubEvents) FetchSnapshots(ctx context.Context, opts FetchOptions, refs []int) error {
+	owner, repo := splitOwnerRepo(g.Repo)
+	if owner == "" || repo == "" {
+		return fmt.Errorf("invalid github repo: %q", g.Repo)
+	}
+	g.contentEntries = make(map[string][]ContentEntry)
+	g.records = nil
+	return g.fetchSnapshots(ctx, owner, repo, opts, refs)
+}
+
+// SnapshotRefs returns the issue and pull request numbers the last fetch
+// requested reaction counts for, for the archive's manifest.
+func (g *GitHubEvents) SnapshotRefs() []int {
+	return g.snapshotRefs
+}
+
+func (g *GitHubEvents) fetchSnapshots(ctx context.Context, owner, repo string, opts FetchOptions, refs []int) error {
+	ctx = WithArchiveMode(ctx, ArchiveFull)
+	g.snapshotRefs = append([]int(nil), refs...)
 
 	repoContent, starCount, err := g.fetchRepoInfo(ctx, owner, repo, opts)
 	if err != nil {
-		return nil, fmt.Errorf("repo info: %w", err)
+		return fmt.Errorf("repo info: %w", err)
 	}
 	if len(repoContent) > 0 {
 		g.contentEntries["repos.jsonl"] = repoContent
@@ -107,7 +142,12 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 		Value:     starCount,
 	})
 
-	return events, nil
+	reactionRecords, err := g.fetchReactionCounts(ctx, owner, repo, opts, refs)
+	if err != nil {
+		return fmt.Errorf("reaction counts: %w", err)
+	}
+	g.records = append(g.records, reactionRecords...)
+	return nil
 }
 
 type githubPageReader func([]byte) ([]Event, pageInfo, bool, error)
@@ -564,17 +604,7 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 
 const reactionCountBatchSize = 10
 
-func (g *GitHubEvents) fetchReactionCounts(ctx context.Context, owner, repo string, opts FetchOptions, content []ContentEntry) ([]Record, error) {
-	// content holds the issues and pull requests updated since StartDate,
-	// closed ones included. Refresh all of their counts: a count is otherwise
-	// only refreshed the next time its item shows up as updated.
-	var numbers []int
-	for _, entry := range content {
-		if entry.Ref != nil {
-			numbers = append(numbers, *entry.Ref)
-		}
-	}
-
+func (g *GitHubEvents) fetchReactionCounts(ctx context.Context, owner, repo string, opts FetchOptions, numbers []int) ([]Record, error) {
 	if len(numbers) == 0 {
 		return nil, nil
 	}
