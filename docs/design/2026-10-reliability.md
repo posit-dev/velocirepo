@@ -132,7 +132,13 @@ Sources must not depend on the clock beyond `FetchOptions`, so that a replay is 
 
 ### Privacy
 
-devrel-io is public, and so is its data. Raw responses can contain more than the stored data does, for example full issue bodies, or fields of private analytics APIs (YouTube, LinkedIn) that velocirepo doesn't store. Release assets have the visibility of their repository, so the archive is exactly as public as the data. For private analytics sources, there's an option to keep only the fields that velocirepo reads. Which sources need it is an open question.
+devrel-io is public, and so is its data. Release assets have the visibility of their repository, so the archive is exactly as public as the data. Raw responses can contain more than the stored data, though:
+
+- **Public APIs** (GitHub, CRAN, PyPI, Open VSX, Homebrew, RSS, YouTube's Data API) return what anyone can see. Their responses are archived in full.
+- **Private analytics** that velocirepo stores, such as Plausible and GitHub traffic, only return the metrics velocirepo asks for. They're archived in full too.
+- **LinkedIn** is different. The posts endpoint returns an organisation's posts with their `visibility` and `lifecycleState`, and velocirepo only stores public, published ones. The share statistics have more fields than the six it stores. So for LinkedIn the archive keeps only what velocirepo reads, after the same filter as the stored data: no drafts, no non-public posts, only the stored statistics.
+
+A source declares which of these it is. A new source is archived in full only if it declares itself public.
 
 ## 2. Data gate
 
@@ -250,7 +256,11 @@ A source can declare that some removals are normal. GitHub events, for instance,
   - Its body is rewritten every night with the current findings.
   - A comment is added only when findings appear or are resolved, so a stable problem doesn't notify every night.
   - The issue closes itself when no findings are left.
-- **Notifying the owner:** GitHub doesn't notify people about their own actions. Issues created by `github-actions[bot]` notify the repository's watchers, but the body also mentions the owners listed in `velocirepo.toml` (`[settings] owners`) and assigns them, so a notification doesn't depend on watch settings.
+- **Notifying the owners:** the issue is assigned to the owners listed in `velocirepo.toml` (`[settings] owners`), and mentions them. Being assigned notifies a person whatever their watch settings are, and watchers are notified as usual.
+  - `install-ci` fills in `owners` with the GitHub login of whoever runs it, and asks whether to add others.
+  - Teams can be listed too (`@posit-dev/devrel`). They're mentioned, since issues can't be assigned to teams.
+  - Owners must have access to the repository to be assigned. `install-ci` checks that.
+  - Without owners, the issue only notifies watchers, and `check` reports a warning about it.
 - **Workflow failure emails:** GitHub's own emails for failed scheduled workflows go to whoever last changed the schedule, depending on their settings. The four failed nights show they can't be relied on alone. The gate makes them redundant.
 - **Escalation:** if the issue stays open for more than a day, the heartbeat (measure 6) escalates, for example to ntfy.
 
@@ -292,13 +302,19 @@ These plug into the archive and the gate.
 
 ### 3. Reconciliation
 
-Each source can provide reference totals that the API computes independently of the data velocirepo stores. They're fetched in the same run, so they're archived too. `check` compares them with the stored data over a rolling window every night, and over the full history in weekly slices to stay within the quota.
+Each source can provide reference totals that the API computes independently of the data velocirepo stores. They're fetched in the same run, so they're archived too. Two levels:
+
+- **Every night, all-time totals.** For GitHub, one GraphQL query returns a repository's numbers of issues, pull requests, merged pull requests, forks and stars, and many repositories fit in one query. Two repositories cost 1 point of the 5,000 an hour, so all 465 of devrel-io's take roughly ten requests. Compared with the stored events, this finds missing or duplicated history right away. It would have shown 8,172 positron issues on GitHub against none stored.
+- **Every week, per-month totals.** The search API's counts of issues and pull requests opened, closed and merged in the last complete month find gaps that all-time totals don't, such as a missing week that happens to balance out. Older months are covered by the all-time totals. That's four searches per repository, about 1,860 for devrel-io. The search API allows 30 requests a minute, so they're spread over the nights of the week: about 270 searches, or 9 minutes, a night.
+
+**Quota:** reconciliation may use at most 10% of each API's hourly quota per run, and gives way first when the quota runs low (see the quota budget in measure 4).
 
 | Source | Reference total | Verified |
 |---|---|---|
 | GitHub events | search API counts of issues and PRs opened, closed and merged per month | yes, in the October repair |
 | GitHub stars | `stargazerCount` against summed `daily_stars` | yes |
-| GitHub forks | `forkCount` against fork events | to verify |
+| GitHub forks | `forkCount` against fork events | yes; deleted forks make the stored count slightly higher |
+| GitHub issues and pull requests, all time | `issues`, `pullRequests` and `pullRequests(states: MERGED)` total counts | yes |
 | Plausible | aggregate query over a date range, without the day dimension | to verify |
 | CRAN | cranlogs totals over a range | to verify |
 | PyPI | pypistats recent totals (day, week, month) | to verify |
@@ -380,9 +396,30 @@ Mutation testing of the checks themselves (removing a check must fail a test) is
 6. **Enforcing gate:** holding back per project, with the held-back branch and its pull request.
 7. **Further measures:** reconciliation, the quota budget, live tests, the heartbeat workflow and the digest, each with its tests from the table above.
 
-## Open questions
+## Decisions
 
-1. **Private analytics:** which sources should keep only the fields velocirepo reads in the archive (YouTube, LinkedIn)?
-2. **Hold-back granularity:** per source and project, as proposed, or everything for simplicity?
-3. **Who gets notified:** only the owners listed in the config, or also the repository's watchers?
-4. **Quota:** how much of the GitHub quota may reconciliation use? The nightly run already uses about 4,200 of 5,000 requests an hour.
+The questions this design left open, each with the default it now uses, an alternative, and why the default was chosen.
+
+### Private analytics in the archive
+
+- **Default:** archive public APIs and the private analytics velocirepo stores in full, and LinkedIn only as far as velocirepo reads it, after the same filter as the stored data. See [Privacy](#privacy).
+- **Alternative:** archive everything in full, in storage that isn't public (a private repository or self-hosted S3 storage).
+- **Why the default:** the archive's main use is replaying fixes, and almost every bug so far was in public APIs, which are kept in full. For LinkedIn, an accidentally published draft or non-public post can't be taken back, while a replay that misses a field only means re-fetching. The alternative would also need a second repository or server, and a token, for every user.
+
+### Hold-back granularity
+
+- **Default:** hold back per source and project. The rest of the night lands on `main`.
+- **Alternative:** hold back the whole night when any project has a blocking finding.
+- **Why the default:** with 465 projects, one broken repository or one false positive would otherwise stop all data, every night until it's resolved. That would also put pressure on accepting findings quickly instead of fixing them. The cost is attributing findings to files, which `check` needs anyway to say what's wrong. Findings that don't belong to a project still hold back everything.
+
+### Who gets notified
+
+- **Default:** the owners in `[settings] owners`, assigned to the tracking issue. `install-ci` fills it in with the login of whoever runs it; teams can be mentioned.
+- **Alternative:** only the repository's watchers, with nothing to configure.
+- **Why the default:** whether watchers get notified depends on each person's settings, and the four failed nights showed that GitHub's default notifications can't be relied on. Assignment always notifies. Watchers still get notified too, so the default adds to the alternative rather than replacing it.
+
+### Quota for reconciliation
+
+- **Default:** at most 10% of each API's hourly quota per run. All-time totals every night, which cost about ten GitHub requests for devrel-io, and per-month search counts spread over the week.
+- **Alternative:** a separate token for reconciliation, which doubles the quota, or reconciliation only once a week.
+- **Why the default:** the nightly totals cost almost nothing and catch most problems on the first night, as missing history did. The per-month counts are what's expensive, and spreading them over the week keeps them within the search API's limit without delaying the fetch. A second token is more setup for every user, and weekly-only checks would let problems go unnoticed for up to a week.
