@@ -276,7 +276,7 @@ Errors and warnings also become `::error::` and `::warning::` annotations, so th
 
 ### Where it lives
 
-- **Gate logic:** in velocirepo. That's `velocirepo check`, plus `velocirepo gate`, which does steps 5 to 7 using `gh`, including concatenation.
+- **Gate logic:** in velocirepo. That's `velocirepo check`, plus `velocirepo gate`, which does steps 5 to 7, including concatenation. The gate calls GitHub's REST API directly, as `sync-secrets` does, so the workflow doesn't depend on `gh`.
 - **Workflow:** the action runs them, and `install-ci` generates the new workflows, so every user gets the gate, not just devrel-io.
 - **Permissions:** the workflow needs `contents: write` (commits and the archive releases), `pull-requests: write` and `issues: write`.
 
