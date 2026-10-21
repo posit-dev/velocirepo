@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -21,12 +22,15 @@ func checksFile() string {
 func checkCmd() *cobra.Command {
 	var resultsPath, fetchLog, jsonPath, summaryPath, base, head string
 	var repairs []string
+	var noReconcile bool
 	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Check stored data and a fetch run for problems",
 		Long: `Run velocirepo's checks and report their findings. Exits non-zero when there are errors that aren't accepted in velocirepo/checks.toml.
 
-In a Git repository, the data is also compared with HEAD: a fetch only adds data, so removed records, changed values and removed content entries are reported. With --base and --head, two commits are compared instead, for example to check commits made by hand. Changes within a repair, given with --repair or a Velocirepo-Repair trailer, are warnings.`,
+In a Git repository, the data is also compared with HEAD: a fetch only adds data, so removed records, changed values and removed content entries are reported. With --base and --head, two commits are compared instead, for example to check commits made by hand. Changes within a repair, given with --repair or a Velocirepo-Repair trailer, are warnings.
+
+With GITHUB_TOKEN set, stored totals are compared with GitHub's own totals of issues, pull requests, forks and stars (--no-reconcile skips that).`,
 		GroupID: "data",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := &check.Context{Config: cfg, DataDir: cfg.DataDir(), Now: time.Now()}
@@ -67,6 +71,10 @@ In a Git repository, the data is also compared with HEAD: a fetch only adds data
 				c.Diff = d
 			}
 
+			if !noReconcile {
+				c.Reconcilers = fetch.Reconcilers(cfg, fetch.TokensFromEnv(), &http.Client{Timeout: 60 * time.Second})
+			}
+
 			accepted, err := check.LoadAcceptances(checksFile())
 			if err != nil {
 				return err
@@ -100,6 +108,7 @@ In a Git repository, the data is also compared with HEAD: a fetch only adds data
 	cmd.Flags().StringVar(&summaryPath, "summary", "", "write a Markdown summary to this file")
 	cmd.Flags().StringVar(&base, "base", "", "compare the data with this commit (default: HEAD)")
 	cmd.Flags().StringVar(&head, "head", "", "compare this commit with --base, instead of the work tree")
+	cmd.Flags().BoolVar(&noReconcile, "no-reconcile", false, "don't compare stored totals with the APIs' own totals")
 	cmd.Flags().StringArrayVar(&repairs, "repair", nil, "changes within this repair are deliberate: <source>/<project> <from>..<to>")
 	return cmd
 }

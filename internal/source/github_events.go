@@ -1170,8 +1170,9 @@ func init() {
 		// Events, comments and the star history can be fetched again. The
 		// snapshot requests (repository info and reaction counts) mark themselves
 		// with WithArchiveMode, since their values can't be fetched for a past day.
-		Archive:           NotArchived,
-		NoReferenceTotals: "not implemented yet",
+		Archive:        NotArchived,
+		Reconciles:     true,
+		ReferenceQuota: "api.github.com/graphql",
 		// Comments and forks are deleted by their authors.
 		RemovableEvents: []string{"comment", "fork"},
 	})

@@ -238,6 +238,31 @@ type versions struct {
 	// migrateFrom is the base's schema version when the head's is later,
 	// so the base is migrated before it's compared; zero otherwise.
 	migrateFrom int
+	// trees holds each commit's data files by project directory, listed
+	// once per commit.
+	trees map[string]map[string][]string
+}
+
+// filesAt returns the data files of a project directory at a commit.
+func (v *versions) filesAt(ctx context.Context, rev, dir string) ([]string, error) {
+	if v.trees == nil {
+		v.trees = map[string]map[string][]string{}
+	}
+	tree, ok := v.trees[rev]
+	if !ok {
+		names, err := v.g.listFiles(ctx, rev, v.prefix)
+		if err != nil {
+			return nil, err
+		}
+		tree = map[string][]string{}
+		for _, name := range names {
+			if d, _, ok := projectOf(v.prefix, name); ok {
+				tree[d] = append(tree[d], name)
+			}
+		}
+		v.trees[rev] = tree
+	}
+	return tree[dir], nil
 }
 
 func (v *versions) schemaVersion(rev string) (int, error) {
@@ -296,15 +321,12 @@ func (v *versions) read(ctx context.Context, rev, dir, category string, isBase b
 			files[e.Name()] = data
 		}
 	} else {
-		names, err := v.g.listFiles(ctx, rev, dir)
+		names, err := v.filesAt(ctx, rev, dir)
 		if err != nil {
 			return nil, err
 		}
 		for _, name := range names {
 			base := path.Base(name)
-			if path.Dir(name) != dir || !isDataFile(base) {
-				continue
-			}
 			data, err := v.cat.read(rev, name)
 			if err != nil {
 				return nil, err

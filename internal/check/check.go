@@ -10,6 +10,7 @@ import (
 
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/fetch"
+	"github.com/posit-dev/velocirepo/internal/source"
 	"github.com/posit-dev/velocirepo/internal/store"
 )
 
@@ -23,6 +24,9 @@ type Context struct {
 	Results *fetch.RunResults
 	// Diff, if set, compares the data with an earlier version.
 	Diff *Diff
+	// Reconcilers give the reference totals of the sources that have them;
+	// without them, nothing is reconciled.
+	Reconcilers map[string]source.Reconciler
 }
 
 // Checker is one check.
@@ -33,7 +37,7 @@ type Checker interface {
 
 // Default are the checks velocirepo check runs.
 func Default() []Checker {
-	return []Checker{fetchFailed{}, deprecations{}, diffChecks{}, integrity{}, volume{}, freshness{}}
+	return []Checker{fetchFailed{}, deprecations{}, diffChecks{}, integrity{}, volume{}, freshness{}, reconciliation{}}
 }
 
 // Run runs checks, marks accepted findings, and returns them sorted by

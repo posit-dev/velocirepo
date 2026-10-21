@@ -899,3 +899,24 @@ func LinkedIn(ctx context.Context, cfg *config.Config, tokens Tokens, opts Optio
 func RSS(ctx context.Context, cfg *config.Config, tokens Tokens, opts Options) ([]Result, error) {
 	return runDescriptor(ctx, cfg, tokens, opts, "rss")
 }
+
+// Reconcilers returns the sources that provide reference totals, for the
+// tokens that are set. GitHub's GraphQL API needs a token.
+func Reconcilers(cfg *config.Config, tokens Tokens, client *http.Client) map[string]source.Reconciler {
+	out := map[string]source.Reconciler{}
+	for _, desc := range fetchSourceDescriptors {
+		if desc.skipReason(tokens) != "" || (desc.Name == "github" && tokens.GitHub == "") {
+			continue
+		}
+		var src any
+		if desc.eventFactory != nil {
+			src = desc.eventFactory(client, tokens, cfg, "")
+		} else {
+			src = desc.metricFactory(client, tokens, cfg, "")
+		}
+		if r, ok := src.(source.Reconciler); ok {
+			out[desc.Name] = r
+		}
+	}
+	return out
+}

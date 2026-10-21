@@ -45,6 +45,9 @@ type Meta struct {
 	Reconciles bool
 	// NoReferenceTotals says why a source doesn't reconcile.
 	NoReferenceTotals string
+	// ReferenceQuota is the quota the reference requests use, as fetch
+	// --results names it, such as "api.github.com/graphql".
+	ReferenceQuota string
 	// RemovableEvents are the event types that can disappear upstream, such
 	// as deleted comments, so a re-fetch that no longer has them isn't an
 	// error.
@@ -127,14 +130,24 @@ type Publisher interface {
 // ReferenceTotal is a total that an API computes itself, for reconciliation.
 type ReferenceTotal struct {
 	Target string
-	// Metric names what's counted, such as "issue_open" events or
-	// "daily_stars" records.
+	// Kind says what's compared with Value: "events", the number of stored
+	// events of type Metric, or "records", the sum of the stored records of
+	// metric Metric.
+	Kind   string
 	Metric string
-	Value  int64
+	// Label is what's counted, for messages, such as "issues".
+	Label string
+	Value int64
+	// Tolerance is how far the stored total may differ from Value, for
+	// example by what happened since the last day fetched.
+	Tolerance int64
 	// From and Through bound the period the total covers; a zero From means
 	// all time.
 	From    time.Time
 	Through time.Time
+	// Unavailable says why the total couldn't be read, such as a repository
+	// that doesn't exist anymore; Value is meaningless then.
+	Unavailable string
 }
 
 // Reconciler is implemented by sources that can report reference totals.
