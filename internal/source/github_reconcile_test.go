@@ -20,7 +20,7 @@ func TestGitHubReferenceTotals(t *testing.T) {
 		_ = json.Unmarshal(body, &req)
 		queries = append(queries, req.Query)
 		_, _ = fmt.Fprint(w, `{"data": {
-			"r0": {"issues": {"totalCount": 8172}, "pullRequests": {"totalCount": 3000}, "merged": {"totalCount": 2500}, "forkCount": 120, "stargazerCount": 3400},
+			"r0": {"issues": {"totalCount": 8172}, "pullRequests": {"totalCount": 3000}, "merged": {"totalCount": 2500}, "forks": {"totalCount": 120}, "stargazerCount": 3400},
 			"r1": null},
 			"errors": [{"type": "NOT_FOUND", "message": "Could not resolve to a Repository"}]}`)
 	}))

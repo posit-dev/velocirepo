@@ -44,7 +44,7 @@ func storeHistory(t *testing.T, dataDir, project, repo string, n int, starCount 
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.WriteRecords(dataDir, "github", project, []source.Record{{Metric: "daily_stars", ProjectID: project, Target: repo, Date: "2026-10-01", Value: starCount}}); err != nil {
+	if _, err := store.WriteRecords(dataDir, "github", project, []source.Record{{Metric: "daily_stars", ProjectID: project, Target: repo, Date: "2026-09-01", Value: starCount}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -127,4 +127,22 @@ func TestReconcileSkipsWhenTheQuotaIsLow(t *testing.T) {
 	rec := cannedReconciler{err: errors.New("must not be asked")}
 	results := &fetch.RunResults{Quota: map[string]fetch.Quota{"api.github.com/graphql": {Limit: 5000, Remaining: 300}}}
 	requireOnly(t, reconcileFindings(t, dataDir, rec, results), "quota.low", Warning)
+}
+
+// An all-time total includes today, which isn't fetched yet: a busy
+// repository's new items of today are within tolerance.
+func TestReconcileAllowsForTodaysActivity(t *testing.T) {
+	dataDir := t.TempDir()
+	var events []source.Event
+	for i := 0; i < 15; i++ {
+		ref := i + 1
+		events = append(events, source.Event{Type: "issue_open", ProjectID: "positron", Target: "posit-dev/positron", Datetime: fmt.Sprintf("2026-10-20T10:%02d:00Z", i), Ref: &ref})
+	}
+	if _, err := store.WriteEvents(dataDir, "github", "positron", events); err != nil {
+		t.Fatal(err)
+	}
+	rec := cannedReconciler{totals: []source.ReferenceTotal{issues("posit-dev/positron", 30, 5)}}
+	if fs := reconcileFindings(t, dataDir, rec, nil); len(fs) != 0 {
+		t.Errorf("today's issues of a busy repository reported %+v", fs)
+	}
 }

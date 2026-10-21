@@ -141,6 +141,9 @@ type ReferenceTotal struct {
 	// Tolerance is how far the stored total may differ from Value, for
 	// example by what happened since the last day fetched.
 	Tolerance int64
+	// MayExceed says the stored total can be any amount higher, such as
+	// forks that were deleted since they were stored.
+	MayExceed bool
 	// From and Through bound the period the total covers; a zero From means
 	// all time.
 	From    time.Time

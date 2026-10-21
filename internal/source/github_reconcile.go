@@ -14,8 +14,9 @@ import (
 const githubReferenceBatch = 40
 
 // githubReferenceTolerance is how far stored totals may differ from GitHub's
-// all-time totals, relative to them, and at least githubReferenceSlack: items
-// opened since the last day fetched, deleted forks, and stars taken back.
+// all-time totals, relative to them, and at least githubReferenceSlack:
+// deleted forks and stars taken back. Items opened since the last day fetched
+// are allowed for by reconcile, from the target's recent activity.
 const (
 	githubReferenceTolerance = 0.01
 	githubReferenceSlack     = 5
@@ -27,7 +28,7 @@ type githubRepoTotals struct {
 	Issues         struct{ TotalCount int64 } `json:"issues"`
 	PullRequests   struct{ TotalCount int64 } `json:"pullRequests"`
 	Merged         struct{ TotalCount int64 } `json:"merged"`
-	ForkCount      int64                      `json:"forkCount"`
+	Forks          struct{ TotalCount int64 } `json:"forks"`
 	StargazerCount int64                      `json:"stargazerCount"`
 }
 
@@ -56,7 +57,7 @@ func (g *GitHubEvents) referenceBatch(ctx context.Context, repos []string) ([]Re
 		if !ok {
 			return nil, fmt.Errorf("repository %q isn't owner/name", repo)
 		}
-		fmt.Fprintf(&q, ` r%d: repository(owner: %q, name: %q) { issues { totalCount } pullRequests { totalCount } merged: pullRequests(states: MERGED) { totalCount } forkCount stargazerCount }`, i, owner, name)
+		fmt.Fprintf(&q, ` r%d: repository(owner: %q, name: %q) { issues { totalCount } pullRequests { totalCount } merged: pullRequests(states: MERGED) { totalCount } forks { totalCount } stargazerCount }`, i, owner, name)
 	}
 	q.WriteString(" }")
 
@@ -85,15 +86,18 @@ func (g *GitHubEvents) referenceBatch(ctx context.Context, repos []string) ([]Re
 		for _, r := range []struct {
 			kind, metric, label string
 			value               int64
+			mayExceed           bool
 		}{
-			{"events", "issue_open", "issues", t.Issues.TotalCount},
-			{"events", "pr_open", "pull requests", t.PullRequests.TotalCount},
-			{"events", "pr_merge", "merged pull requests", t.Merged.TotalCount},
-			{"events", "fork", "forks", t.ForkCount},
-			{"records", "daily_stars", "stars", t.StargazerCount},
+			{"events", "issue_open", "issues", t.Issues.TotalCount, false},
+			{"events", "pr_open", "pull requests", t.PullRequests.TotalCount, false},
+			{"events", "pr_merge", "merged pull requests", t.Merged.TotalCount, false},
+			// Direct forks, as velocirepo lists them; forkCount is the
+			// whole fork network. Deleted forks stay stored.
+			{"events", "fork", "forks", t.Forks.TotalCount, true},
+			{"records", "daily_stars", "stars", t.StargazerCount, false},
 		} {
 			tol := max(int64(githubReferenceSlack), int64(float64(r.value)*githubReferenceTolerance))
-			out = append(out, ReferenceTotal{Target: repo, Kind: r.kind, Metric: r.metric, Label: r.label, Value: r.value, Tolerance: tol})
+			out = append(out, ReferenceTotal{Target: repo, Kind: r.kind, Metric: r.metric, Label: r.label, Value: r.value, Tolerance: tol, MayExceed: r.mayExceed})
 		}
 	}
 	return out, nil

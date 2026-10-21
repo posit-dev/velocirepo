@@ -31,7 +31,7 @@ func (reconciliation) Run(ctx context.Context, c *Context) ([]Finding, error) {
 		}
 		reconcilers[name] = r
 	}
-	results, err := reconcile.Run(ctx, c.Config, c.DataDir, reconcilers)
+	results, err := reconcile.Run(ctx, c.Config, c.DataDir, c.Now, reconcilers)
 	if err != nil {
 		return nil, err
 	}
