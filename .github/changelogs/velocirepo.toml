@@ -1,0 +1,15 @@
+# The changelogs of the APIs velocirepo depends on, fetched daily by
+# .github/workflows/changelogs.yml, which flags entries that mention the
+# endpoints velocirepo uses. GitHub announced both the stargazer
+# restriction and the star history endpoint in its changelog.
+
+[data]
+dir = "data"
+
+[projects.github]
+name = "GitHub changelog"
+rss = "https://github.blog/changelog/feed/"
+
+[projects.plausible]
+name = "Plausible releases"
+rss = "https://github.com/plausible/analytics/releases.atom"
