@@ -137,3 +137,26 @@ type ReferenceTotal struct {
 type Reconciler interface {
 	ReferenceTotals(ctx context.Context, targets []string) ([]ReferenceTotal, error)
 }
+
+// RequestInfo says which source, project and target a request is made for.
+// The fetch orchestrator sets it on the context it fetches a target with, so
+// the archive knows where each response belongs.
+type RequestInfo struct {
+	Source  string
+	Project string
+	Target  string
+}
+
+type requestInfoKey struct{}
+
+// WithRequestInfo marks the requests made with ctx as being for a source,
+// project and target.
+func WithRequestInfo(ctx context.Context, info RequestInfo) context.Context {
+	return context.WithValue(ctx, requestInfoKey{}, info)
+}
+
+// RequestInfoOf returns the information set with WithRequestInfo, if any.
+func RequestInfoOf(ctx context.Context) (RequestInfo, bool) {
+	info, ok := ctx.Value(requestInfoKey{}).(RequestInfo)
+	return info, ok
+}

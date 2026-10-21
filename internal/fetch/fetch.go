@@ -34,9 +34,12 @@ type Options struct {
 	// WrapTransport wraps the HTTP transport every source uses, for example
 	// to capture responses for the archive.
 	WrapTransport func(http.RoundTripper) http.RoundTripper
-	// OnJob is called for every job with its resolved options, before it
-	// runs.
+	// OnJob is called for every target of a job with its resolved options,
+	// before it's fetched.
 	OnJob func(JobInfo)
+	// OnTargetDone is called after a target was fetched successfully, with
+	// its source, for example to collect what the archive's manifest needs.
+	OnTargetDone func(JobInfo, any)
 	// Concatenate replaces the concatenation after the fetch; nil uses
 	// store.Aggregate. It isn't called with NoConcatenate.
 	Concatenate func(dataDir string, now time.Time) error
@@ -48,6 +51,8 @@ type JobInfo struct {
 	Project string
 	Target  string
 	Options source.FetchOptions
+	// Zones are the time zones the target's series end their days in.
+	Zones map[string]string
 }
 
 func (o Options) now() time.Time {
@@ -236,7 +241,7 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	for _, job := range jobs {
 		job := job
 		g.Go(func() error {
-			resultsCh <- runJob(gctx, plan, job, opts.OnJob)
+			resultsCh <- runJob(gctx, plan, job, hooks{onJob: opts.OnJob, onDone: opts.OnTargetDone})
 			return nil
 		})
 	}
@@ -275,10 +280,32 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	return results, nil
 }
 
-func runJob(ctx context.Context, plan *planner, job fetchJob, onJob func(JobInfo)) []Result {
+// hooks are the callbacks a job reports its targets to.
+type hooks struct {
+	onJob  func(JobInfo)
+	onDone func(JobInfo, any)
+}
+
+func (h hooks) start(info JobInfo) {
+	if h.onJob != nil {
+		h.onJob(info)
+	}
+}
+
+func (h hooks) done(info JobInfo, src any) {
+	if h.onDone != nil {
+		h.onDone(info, src)
+	}
+}
+
+func targetContext(ctx context.Context, info JobInfo) context.Context {
+	return source.WithRequestInfo(ctx, source.RequestInfo{Source: info.Source, Project: info.Project, Target: info.Target})
+}
+
+func runJob(ctx context.Context, plan *planner, job fetchJob, h hooks) []Result {
 	started := time.Now()
 	if len(job.eventSources) > 0 {
-		return runEventJob(ctx, plan, job, onJob, started)
+		return runEventJob(ctx, plan, job, h, started)
 	}
 	if len(job.sources) == 0 {
 		return []Result{{
@@ -288,14 +315,7 @@ func runJob(ctx context.Context, plan *planner, job fetchJob, onJob func(JobInfo
 			Error:     "no fetcher configured",
 		}}
 	}
-	return runMetricJob(ctx, plan, job, onJob, started)
-}
-
-func notifyJob(onJob func(JobInfo), job fetchJob, target string, opts source.FetchOptions) {
-	if onJob == nil {
-		return
-	}
-	onJob(JobInfo{Source: job.sourceName, Project: job.projectID, Target: target, Options: opts})
+	return runMetricJob(ctx, plan, job, h, started)
 }
 
 func jobError(job fetchJob, started time.Time, format string, err error) []Result {
@@ -310,6 +330,7 @@ func jobError(job fetchJob, started time.Time, format string, err error) []Resul
 // eventPlan is one target of an event job, with the days it fetches per
 // series.
 type eventPlan struct {
+	info   JobInfo
 	target string
 	src    source.EventSource
 	opts   source.FetchOptions
@@ -317,7 +338,7 @@ type eventPlan struct {
 	stars  source.Window
 }
 
-func runEventJob(ctx context.Context, plan *planner, job fetchJob, onJob func(JobInfo), started time.Time) []Result {
+func runEventJob(ctx context.Context, plan *planner, job fetchJob, h hooks, started time.Time) []Result {
 	dataDir := plan.dataDir
 	mainMarks, err := store.SeriesWatermarks(dataDir, job.sourceName, job.projectID, "")
 	if err != nil {
@@ -331,11 +352,11 @@ func runEventJob(ctx context.Context, plan *planner, job fetchJob, onJob func(Jo
 	var plans []eventPlan
 	for i, src := range job.eventSources {
 		target := job.eventTargets[i]
-		events, err := plan.window(ctx, job, src, target, "", mainMarks)
+		events, eventsZone, err := plan.window(ctx, job, src, target, "", mainMarks)
 		if err != nil {
 			return jobError(job, started, "plan: %v", err)
 		}
-		stars, err := plan.window(ctx, job, src, target, "stars", starMarks)
+		stars, starsZone, err := plan.window(ctx, job, src, target, "stars", starMarks)
 		if err != nil {
 			return jobError(job, started, "plan: %v", err)
 		}
@@ -349,8 +370,10 @@ func runEventJob(ctx context.Context, plan *planner, job fetchJob, onJob func(Jo
 			DataDir:   dataDir,
 			Windows:   map[string]source.Window{"stars": stars},
 		}
-		notifyJob(onJob, job, target, opts)
-		plans = append(plans, eventPlan{target: target, src: src, opts: opts, events: events, stars: stars})
+		info := JobInfo{Source: job.sourceName, Project: job.projectID, Target: target, Options: opts,
+			Zones: map[string]string{"": eventsZone.String(), "stars": starsZone.String()}}
+		h.start(info)
+		plans = append(plans, eventPlan{info: info, target: target, src: src, opts: opts, events: events, stars: stars})
 	}
 	if len(plans) == 0 {
 		return []Result{{Source: job.sourceName, ProjectID: job.projectID, Duration: time.Since(started), Skipped: "already up to date"}}
@@ -361,7 +384,7 @@ func runEventJob(ctx context.Context, plan *planner, job fetchJob, onJob func(Jo
 	var records []source.Record
 	contentByFilename := make(map[string][]source.ContentEntry)
 	for _, pl := range plans {
-		fetched, err := pl.src.FetchEvents(ctx, pl.opts)
+		fetched, err := pl.src.FetchEvents(targetContext(ctx, pl.info), pl.opts)
 		if err != nil {
 			results = append(results, Result{
 				Source:     job.sourceName,
@@ -372,6 +395,7 @@ func runEventJob(ctx context.Context, plan *planner, job fetchJob, onJob func(Jo
 			})
 			continue
 		}
+		h.done(pl.info, pl.src)
 		events = append(events, fetched...)
 		if mcp, ok := pl.src.(source.MultiContentProvider); ok {
 			for filename, entries := range mcp.ContentByFilename() {
@@ -464,17 +488,18 @@ func span(plans []eventPlan) (string, string) {
 	return dateutil.FormatDate(start), dateutil.FormatDate(end)
 }
 
-// window returns the days a target's series is fetched over.
-func (p *planner) window(ctx context.Context, job fetchJob, src any, target, series string, marks map[string]string) (source.Window, error) {
+// window returns the days a target's series is fetched over, and the time
+// zone they end in.
+func (p *planner) window(ctx context.Context, job fetchJob, src any, target, series string, marks map[string]string) (source.Window, *time.Location, error) {
 	start, err := p.startDate(job.sourceName, job.projectID, target, series, marks)
 	if err != nil {
-		return source.Window{}, err
+		return source.Window{}, nil, err
 	}
-	zone, err := dayZone(ctx, src, series)
+	zone, err := dayZone(source.WithRequestInfo(ctx, source.RequestInfo{Source: job.sourceName, Project: job.projectID, Target: target}), src, series)
 	if err != nil {
-		return source.Window{}, err
+		return source.Window{}, nil, err
 	}
-	return source.Window{Start: start, End: p.endDate(zone, job.sourceName, target)}, nil
+	return source.Window{Start: start, End: p.endDate(zone, job.sourceName, target)}, zone, nil
 }
 
 // markFetched records that a target's series has been fetched through date,
@@ -490,6 +515,7 @@ func markFetched(dataDir string, job fetchJob, series, target string, date time.
 
 // metricPlan is one target of a metric job.
 type metricPlan struct {
+	info   JobInfo
 	target string
 	src    source.Source
 	opts   source.FetchOptions
@@ -498,7 +524,7 @@ type metricPlan struct {
 	mark time.Time
 }
 
-func runMetricJob(ctx context.Context, plan *planner, job fetchJob, onJob func(JobInfo), started time.Time) []Result {
+func runMetricJob(ctx context.Context, plan *planner, job fetchJob, h hooks, started time.Time) []Result {
 	dataDir := plan.dataDir
 	marks, err := store.SeriesWatermarks(dataDir, job.sourceName, job.projectID, "")
 	if err != nil {
@@ -508,7 +534,7 @@ func runMetricJob(ctx context.Context, plan *planner, job fetchJob, onJob func(J
 	var plans []metricPlan
 	for i, src := range job.sources {
 		target := job.targets[i]
-		w, err := plan.window(ctx, job, src, target, "", marks)
+		w, zone, err := plan.window(ctx, job, src, target, "", marks)
 		if err != nil {
 			return jobError(job, started, "plan: %v", err)
 		}
@@ -516,7 +542,7 @@ func runMetricJob(ctx context.Context, plan *planner, job fetchJob, onJob func(J
 		if _, isPublisher := src.(source.Publisher); isPublisher {
 			// A source that publishes late is only fetched, and marked,
 			// through the day it has published.
-			pub := plan.publishedThrough(ctx, job.sourceName, src)
+			pub := plan.publishedThrough(source.WithRequestInfo(ctx, source.RequestInfo{Source: job.sourceName, Project: job.projectID}), job.sourceName, src)
 			switch {
 			case !pub.known:
 				mark = time.Time{}
@@ -528,8 +554,9 @@ func runMetricJob(ctx context.Context, plan *planner, job fetchJob, onJob func(J
 			continue
 		}
 		opts := source.FetchOptions{ProjectID: job.projectID, StartDate: w.Start, EndDate: w.End, DataDir: dataDir}
-		notifyJob(onJob, job, target, opts)
-		plans = append(plans, metricPlan{target: target, src: src, opts: opts, mark: mark})
+		info := JobInfo{Source: job.sourceName, Project: job.projectID, Target: target, Options: opts, Zones: map[string]string{"": zone.String()}}
+		h.start(info)
+		plans = append(plans, metricPlan{info: info, target: target, src: src, opts: opts, mark: mark})
 	}
 	if len(plans) == 0 {
 		return []Result{{Source: job.sourceName, ProjectID: job.projectID, Duration: time.Since(started), Skipped: "already up to date"}}
@@ -539,7 +566,7 @@ func runMetricJob(ctx context.Context, plan *planner, job fetchJob, onJob func(J
 	var records []source.Record
 	contentByFilename := make(map[string][]source.ContentEntry)
 	for _, pl := range plans {
-		fetched, err := pl.src.Fetch(ctx, pl.opts)
+		fetched, err := pl.src.Fetch(targetContext(ctx, pl.info), pl.opts)
 		if err != nil {
 			results = append(results, Result{
 				Source:     job.sourceName,
@@ -550,6 +577,7 @@ func runMetricJob(ctx context.Context, plan *planner, job fetchJob, onJob func(J
 			})
 			continue
 		}
+		h.done(pl.info, pl.src)
 		if len(fetched) == 0 {
 			continue
 		}
