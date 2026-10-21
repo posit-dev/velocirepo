@@ -12,8 +12,8 @@ This plan turns the [design](2026-10-reliability.md) into phases of work. Each p
 | 1. Foundations | Days fetched once they've ended; the raw archive behind a flag; `velocirepo check` with data checks; live API tests | 4 | v1.1.0 |
 | 2. Building blocks | Replay; diff checks; new concatenation rules; GitHub reconciliation; archive storage | 5 | v1.2.0 |
 | 3. Report-only gate | `velocirepo gate` and the new workflows, reporting but holding nothing back; the heartbeat | 2 | v1.3.0 |
-| 4. Enforcing gate | Holding back per project, the concatenation commit; per-month reconciliation and the quota budget; reconciliation for other sources | 3+ | v2.0.0 |
-| 5. Completion | Weekly digest, external heartbeat, changelog monitoring, the incident replay suite, documentation | 4 | v2.1.0 |
+| 4. Enforcing gate | Holding back per project, the concatenation commit; per-month reconciliation and the quota budget; reconciliation for other sources | 3+ | v1.4.0 |
+| 5. Completion | Weekly digest, external heartbeat, changelog monitoring, the incident replay suite, documentation | 4 | v1.5.0 |
 
 devrel-io follows each release: measuring the archive after phase 1, running the gate in report-only mode after phase 3, and enforcing it after phase 4.
 
@@ -328,7 +328,7 @@ Worktree `reliability/heartbeat`. Depends on 3a's template structure: branch off
 
 ## Phase 4: enforcing gate
 
-**Goal:** bad data stays off `main`. Release v2.0.0: the nightly workflow's behaviour changes, so this is a major version.
+**Goal:** bad data stays off `main`. Release v1.4.0. The nightly workflow's behaviour changes, but only for users who regenerate their workflows with `install-ci`; existing workflows keep working as before. The upgrade notes put this first.
 
 ### 4a. Enforcing gate
 
@@ -377,14 +377,14 @@ One worktree per source, all in parallel: `reliability/reconcile-<source>`. Size
 
 **Tests:** per source, the reference totals are parsed from canned responses and compared within tolerance.
 
-### Release v2.0.0 and devrel-io
+### Release v1.4.0 and devrel-io
 
 - **Release:** the upgrade notes explain holding back, the held-back pull request, and the concatenation commit on the 8th.
 - **devrel-io:** switch from report-only to enforcing. The first concatenation commit after that is checked by hand as well.
 
 ## Phase 5: completion
 
-**Goal:** the remaining measures. Release v2.1.0. Four streams in parallel, plus documentation.
+**Goal:** the remaining measures. Release v1.5.0. Four streams in parallel, plus documentation.
 
 | Stream | Worktree | Contents | Size |
 |---|---|---|---|
