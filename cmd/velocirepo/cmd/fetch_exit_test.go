@@ -66,3 +66,27 @@ github = "not-a-repo"
 		t.Errorf("results = %s", results)
 	}
 }
+
+// fetch --archive writes a run's archive outside the data, and keeps it only
+// if it contains none of the tokens.
+func TestFetchArchive(t *testing.T) {
+	cfgPath := setupTestConfig(t, `[data]
+dir = "data"
+
+[projects.broken]
+github = "not-a-repo"
+`)
+	dir := t.TempDir()
+	_, _, _ = execCmd(cfgPath, "fetch-github", "--archive", dir)
+	manifests, _ := filepath.Glob(filepath.Join(dir, "*", "manifest.json"))
+	if len(manifests) != 1 {
+		t.Fatalf("manifests = %v, want one run", manifests)
+	}
+
+	// Without --archive, nothing is archived.
+	other := t.TempDir()
+	_, _, _ = execCmd(cfgPath, "fetch-github")
+	if entries, _ := filepath.Glob(filepath.Join(other, "*")); len(entries) != 0 {
+		t.Errorf("archived without --archive: %v", entries)
+	}
+}
