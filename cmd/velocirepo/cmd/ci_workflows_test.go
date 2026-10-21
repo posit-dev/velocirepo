@@ -17,14 +17,14 @@ import (
 
 var updateGolden = flag.Bool("update", false, "update the golden files")
 
-var goldenData = workflowData{Cron: "30 9 * * *", HeartbeatCron: "30 12 * * *", Version: "v1", Workflow: "velocirepo.yml", NeedsPlausible: true, NeedsYouTube: true}
+var goldenData = workflowData{Cron: "30 9 * * *", HeartbeatCron: "30 12 * * *", DigestCron: "30 13 * * 1", Version: "v1", Workflow: "velocirepo.yml", NeedsPlausible: true, NeedsYouTube: true}
 
 // The generated workflows match golden files, and pass actionlint when it's
 // installed (CI installs it).
 func TestWorkflowsMatchGoldenFiles(t *testing.T) {
 	dir := t.TempDir()
 	workflows := filepath.Join(dir, ".github", "workflows")
-	for name, text := range map[string]string{"velocirepo.yml": workflowTemplate, "velocirepo-heartbeat.yml": heartbeatTemplate} {
+	for name, text := range map[string]string{"velocirepo.yml": workflowTemplate, "velocirepo-heartbeat.yml": heartbeatTemplate, "velocirepo-digest.yml": digestTemplate} {
 		path := filepath.Join(workflows, name)
 		if err := renderWorkflow(path, text, goldenData); err != nil {
 			t.Fatal(err)
@@ -51,7 +51,7 @@ func TestWorkflowsMatchGoldenFiles(t *testing.T) {
 		t.Log("actionlint isn't installed")
 		return
 	}
-	out, err := exec.Command("actionlint", filepath.Join(workflows, "velocirepo.yml"), filepath.Join(workflows, "velocirepo-heartbeat.yml")).CombinedOutput()
+	out, err := exec.Command("actionlint", filepath.Join(workflows, "velocirepo.yml"), filepath.Join(workflows, "velocirepo-heartbeat.yml"), filepath.Join(workflows, "velocirepo-digest.yml")).CombinedOutput()
 	if err != nil {
 		t.Errorf("actionlint: %v\n%s", err, out)
 	}
@@ -66,6 +66,7 @@ func TestWorkflowPermissions(t *testing.T) {
 	}{
 		{workflowTemplate, map[string]string{"contents": "write", "issues": "write", "actions": "read"}},
 		{heartbeatTemplate, map[string]string{"contents": "read", "issues": "write", "actions": "read"}},
+		{digestTemplate, map[string]string{"contents": "read", "issues": "write"}},
 	} {
 		path := filepath.Join(t.TempDir(), "w.yml")
 		if err := renderWorkflow(path, c.text, goldenData); err != nil {

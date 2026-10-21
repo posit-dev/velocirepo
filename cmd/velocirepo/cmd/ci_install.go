@@ -72,6 +72,8 @@ jobs:
           release: ${{"{{"}} inputs.release {{"}}"}}
           discard: ${{"{{"}} inputs.discard {{"}}"}}
           repair: ${{"{{"}} inputs.repair {{"}}"}}
+          # Optional: a Healthchecks ping URL, for a heartbeat outside GitHub.
+          healthchecks-url: ${{"{{"}} secrets.HEALTHCHECKS_URL {{"}}"}}
 `
 
 // heartbeatTemplate checks every day that the nightly workflow ran, since a
@@ -100,6 +102,30 @@ jobs:
         with:
           mode: check-heartbeat
           fetch-args: --workflow {{.Workflow}}
+`
+
+// digestTemplate posts the weekly digest, for the problems no check was
+// written for.
+const digestTemplate = `name: Weekly digest
+
+on:
+  schedule:
+    - cron: '{{.DigestCron}}'
+  workflow_dispatch:
+
+permissions:
+  contents: read  # the data
+  issues: write   # the digest issue
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: posit-dev/velocirepo@{{.Version}}
+        with:
+          mode: digest
 `
 
 // legacyWorkflowTemplate is the workflow install-ci generated before the
@@ -154,6 +180,7 @@ jobs:
 type workflowData struct {
 	Cron           string
 	HeartbeatCron  string
+	DigestCron     string
 	Version        string
 	Workflow       string
 	NeedsPlausible bool
@@ -178,6 +205,14 @@ func heartbeatCron(cron string) (string, error) {
 		return "", bad
 	}
 	return fmt.Sprintf("%d %d * * *", minute, (hour+heartbeatDelay)%24), nil
+}
+
+// digestCron returns the digest's schedule: Mondays, an hour after the
+// heartbeat.
+func digestCron(heartbeat string) string {
+	fields := strings.Fields(heartbeat)
+	hour, _ := strconv.Atoi(fields[1])
+	return fmt.Sprintf("%s %d * * 1", fields[0], (hour+1)%24)
 }
 
 // renderWorkflow writes a template to path.
@@ -239,7 +274,7 @@ func installCICmd() *cobra.Command {
 				return err
 			}
 
-			data := workflowData{Cron: cron, HeartbeatCron: hbCron, Version: actionRef(ver, version.Version), Workflow: filepath.Base(filename)}
+			data := workflowData{Cron: cron, HeartbeatCron: hbCron, DigestCron: digestCron(hbCron), Version: actionRef(ver, version.Version), Workflow: filepath.Base(filename)}
 			for _, p := range cfg.Projects {
 				data.NeedsPlausible = data.NeedsPlausible || !p.Plausible.IsEmpty()
 				data.NeedsYouTube = data.NeedsYouTube || !p.YouTube.IsEmpty()
@@ -248,6 +283,7 @@ func installCICmd() *cobra.Command {
 			files := []struct{ path, text string }{
 				{filepath.Join(cfg.Dir, filename), workflowTemplate},
 				{filepath.Join(cfg.Dir, filepath.Dir(filename), "velocirepo-heartbeat.yml"), heartbeatTemplate},
+				{filepath.Join(cfg.Dir, filepath.Dir(filename), "velocirepo-digest.yml"), digestTemplate},
 			}
 			for _, f := range files {
 				if _, err := os.Stat(f.path); err == nil {

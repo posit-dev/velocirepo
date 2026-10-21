@@ -48,6 +48,13 @@ inputs:
     description: "In gate mode: re-fetch or replay a range, <source>/<project> <from>..<to>"
     required: false
     default: ""
+  healthchecks-url:
+    description: >-
+      Optional: a Healthchecks ping URL. The gate pings it when it starts and
+      when it ends, with its outcome, so a heartbeat outside GitHub notices a
+      run that didn't happen
+    required: false
+    default: ""
   repo-token:
     description: "Token for this repository, to store the archive (default: the workflow token)"
     required: false
@@ -155,6 +162,14 @@ runs:
         shopt -s nullglob
         velocirepo upload-archive --pending --output "$GITHUB_OUTPUT" "$RUNNER_TEMP"/velocirepo-archive/*/
 
+    - name: Ping Healthchecks at the start
+      if: ${{ inputs.mode == 'gate' && inputs.healthchecks-url != '' }}
+      shell: bash
+      env:
+        HEALTHCHECKS_URL: ${{ inputs.healthchecks-url }}
+      # A ping that fails never fails the run.
+      run: curl -fsS -m 10 --retry 3 -o /dev/null "$HEALTHCHECKS_URL/start" || true
+
     - name: Run the gate
       id: gate
       if: ${{ inputs.mode == 'gate' }}
@@ -170,6 +185,16 @@ runs:
         VELOCIREPO_REPAIR: ${{ inputs.repair }}
       # Word splitting of the arguments is intended.
       run: velocirepo gate $VELOCIREPO_FETCH_ARGS
+
+    - name: Ping Healthchecks at the end
+      if: ${{ !cancelled() && inputs.mode == 'gate' && inputs.healthchecks-url != '' }}
+      shell: bash
+      env:
+        HEALTHCHECKS_URL: ${{ inputs.healthchecks-url }}
+        OUTCOME: ${{ steps.gate.outcome }}
+      run: |
+        if [ "$OUTCOME" = "success" ]; then url="$HEALTHCHECKS_URL"; else url="$HEALTHCHECKS_URL/fail"; fi
+        curl -fsS -m 10 --retry 3 -o /dev/null "$url" || true
 
     - name: Check that the nightly run ran
       if: ${{ inputs.mode == 'check-heartbeat' }}

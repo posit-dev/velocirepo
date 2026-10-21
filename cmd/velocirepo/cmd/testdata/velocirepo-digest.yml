@@ -1,0 +1,20 @@
+name: Weekly digest
+
+on:
+  schedule:
+    - cron: '30 13 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read  # the data
+  issues: write   # the digest issue
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: posit-dev/velocirepo@v1
+        with:
+          mode: digest

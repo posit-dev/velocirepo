@@ -46,3 +46,5 @@ jobs:
           release: ${{ inputs.release }}
           discard: ${{ inputs.discard }}
           repair: ${{ inputs.repair }}
+          # Optional: a Healthchecks ping URL, for a heartbeat outside GitHub.
+          healthchecks-url: ${{ secrets.HEALTHCHECKS_URL }}
