@@ -19,9 +19,10 @@ type TargetFreshness struct {
 	// Watermark is the last day fetched, or "" if the target has no
 	// watermark yet.
 	Watermark string
-	// Limit is the most days the watermark may lag behind yesterday (UTC).
+	// Limit is the most days the watermark may lag behind today (UTC); a
+	// watermark of yesterday is one day behind.
 	Limit int
-	// Lag is how many days the watermark lags behind yesterday (UTC).
+	// Lag is how many days the watermark lags behind today (UTC).
 	Lag int
 }
 
@@ -34,7 +35,8 @@ func (f TargetFreshness) Stale() bool {
 // sorted by source, project, target and series. Sources without a freshness
 // limit are left out.
 func Freshness(cfg *config.Config, dataDir string, now time.Time) ([]TargetFreshness, error) {
-	yesterday := latestEndedDay(now, time.UTC)
+	y, m, d := now.UTC().Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 	var out []TargetFreshness
 	for _, desc := range fetchSourceDescriptors {
 		meta, ok := source.MetaFor(desc.Name)
@@ -63,7 +65,7 @@ func Freshness(cfg *config.Config, dataDir string, now time.Time) ([]TargetFresh
 						if err != nil {
 							return nil, err
 						}
-						f.Lag = max(0, int(yesterday.Sub(t).Hours()/24))
+						f.Lag = max(0, int(today.Sub(t).Hours()/24))
 					}
 					out = append(out, f)
 				}

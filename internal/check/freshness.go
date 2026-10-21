@@ -7,7 +7,7 @@ import (
 	"github.com/posit-dev/velocirepo/internal/fetch"
 )
 
-// freshness reports targets whose watermark lags behind yesterday by more
+// freshness reports targets whose watermark lags behind today (UTC) by more
 // than their source's freshness limit: a target that keeps failing, or a
 // source that stopped publishing. A target without a watermark yet isn't
 // reported; its first fetch gives it one, or fails and is reported as such.

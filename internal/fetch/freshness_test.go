@@ -74,7 +74,7 @@ func TestFreshness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][2]any{"a": {1, false}, "b": {10, true}, "new": {0, false}}
+	want := map[string][2]any{"a": {2, false}, "b": {11, true}, "new": {0, false}}
 	if len(got) != len(want) {
 		t.Fatalf("freshness = %+v", got)
 	}
