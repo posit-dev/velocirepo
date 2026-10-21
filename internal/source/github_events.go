@@ -104,8 +104,10 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 			refs = append(refs, *entry.Ref)
 		}
 	}
-	if err := g.fetchSnapshots(ctx, owner, repo, opts, refs); err != nil {
-		return nil, err
+	if !opts.SkipSnapshots {
+		if err := g.fetchSnapshots(ctx, owner, repo, opts, refs); err != nil {
+			return nil, err
+		}
 	}
 
 	return events, nil

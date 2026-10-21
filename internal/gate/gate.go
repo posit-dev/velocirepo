@@ -58,6 +58,12 @@ type Options struct {
 	// Discard deletes it, watermarks included.
 	Release string
 	Discard string
+	// Repair, if set, makes the run a repair of a range instead of the
+	// nightly fetch.
+	Repair *check.Repair
+	// Runs downloads into dir the archived runs a repair replays; nil means
+	// from Repo's releases.
+	Runs func(ctx context.Context, repair check.Repair, dir string) ([]string, error)
 	// OutputPath and SummaryPath are GitHub Actions' step output and job
 	// summary files, if set.
 	OutputPath  string
@@ -86,7 +92,7 @@ type Outcome struct {
 	HeldBack     []string
 	DataCommit   string
 	ConcatCommit string
-	Pushed        bool
+	Pushed       bool
 	// Other are problems of the run itself, such as a refused permission.
 	Other []check.Finding
 }
@@ -144,19 +150,31 @@ func Run(ctx context.Context, opts Options) (Outcome, error) {
 
 	// 2. Held-back data is overlaid, so the fetch continues from it and it's
 	// checked again as a whole. That happens when reporting too, so held-back
-	// data lands when enforcing is switched off.
-	held, notes, err := r.prepareHeldBack()
-	if err != nil {
-		return out, err
+	// data lands when enforcing is switched off. A repair leaves it alone.
+	var held, notes []string
+	if opts.Repair == nil {
+		if held, notes, err = r.prepareHeldBack(); err != nil {
+			return out, err
+		}
 	}
 
-	// 3. The fetch, without concatenation.
-	results, stats, archiveFindings := r.fetch(ctx)
+	// 3. The fetch, without concatenation, or the repair.
+	var results []fetch.Result
+	var stats *fetch.Stats
+	var findings []check.Finding
+	var diff check.Diff
+	if opts.Repair != nil {
+		results, stats, findings = r.repair(ctx, *opts.Repair)
+		diff = check.Diff{Base: "HEAD", Repairs: []check.Repair{*opts.Repair}}
+	} else {
+		results, stats, findings = r.fetch(ctx)
+		diff = check.Diff{Base: "HEAD"}
+	}
 	out.Fetch = results
-	out.Other = append(out.Other, archiveFindings...)
+	out.Other = append(out.Other, findings...)
 
 	// 4. The night's changes.
-	c := &check.Context{Config: r.cfg, DataDir: r.dataDir, Now: r.now, Diff: &check.Diff{Base: "HEAD"}, Reconcilers: opts.Reconcilers,
+	c := &check.Context{Config: r.cfg, DataDir: r.dataDir, Now: r.now, Diff: &diff, Reconcilers: opts.Reconcilers,
 		Results: &fetch.RunResults{RunTime: r.now, Results: results, Quota: stats.QuotaSnapshot(), Deprecations: stats.DeprecationsSnapshot()}}
 	night, err := check.Run(ctx, c, check.Default(), r.accepted)
 	if err != nil {
@@ -164,7 +182,17 @@ func Run(ctx context.Context, opts Options) (Outcome, error) {
 	}
 	out.Night = night
 	out.WouldRestore, out.WouldKeep, out.WouldHoldBack = wouldEnforce(night)
-	if r.cfg.Settings.Enforce() {
+	if r.cfg.Settings.Enforce() && opts.Repair != nil {
+		// A repair is deliberate: nothing is held back, and only changes
+		// outside its range are undone.
+		diffs, repairs, err := check.CompareData(ctx, r.dataDir, diff)
+		if err != nil {
+			return out, err
+		}
+		if err := r.applyRule(diffs, repairs); err != nil {
+			return out, err
+		}
+	} else if r.cfg.Settings.Enforce() {
 		heldNow, err := r.enforce(ctx, night)
 		if err != nil {
 			return out, err
@@ -193,13 +221,17 @@ func Run(ctx context.Context, opts Options) (Outcome, error) {
 		return out, err
 	}
 	freshness, _ := fetch.Freshness(r.cfg, r.dataDir, r.now)
-	out.DataCommit, err = r.git.commitPaths(ctx, dataMessage(r.now, freshness, heldBackNotes(out.HeldBack, night, r.veloRel)), r.veloRel)
+	message := dataMessage(r.now, freshness, heldBackNotes(out.HeldBack, night, r.veloRel))
+	if opts.Repair != nil {
+		message = repairMessage(*opts.Repair)
+	}
+	out.DataCommit, err = r.git.commitPaths(ctx, message, r.veloRel)
 	if err != nil {
 		return out, err
 	}
 
 	// 6. Concatenation, in its own commit.
-	if !opts.NoConcatenate {
+	if !opts.NoConcatenate && opts.Repair == nil {
 		commit, findings, err := r.concatenate(ctx)
 		if err != nil {
 			return out, err

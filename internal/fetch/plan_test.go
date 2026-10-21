@@ -3,7 +3,9 @@ package fetch
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -360,5 +362,50 @@ func TestNewRepositoryKeepsTheOthersEvents(t *testing.T) {
 	}
 	if got := strings.Join(sortedCopy(targets), ","); got != "org/a:alice,org/new:u" {
 		t.Errorf("2026-10-15 = %s, want org/a's comment kept next to org/new's", got)
+	}
+}
+
+// A repair replaces what's stored for its days, also with "no data", and
+// leaves the days outside it and the watermarks as they are.
+func TestRepairReplacesItsRange(t *testing.T) {
+	for _, quiet := range []bool{false, true} {
+		dataDir := t.TempDir()
+		var stored []source.Record
+		for d := 1; d <= 6; d++ {
+			stored = append(stored, source.Record{Metric: "daily_downloads", ProjectID: "proj", Target: "pkg", Date: fmt.Sprintf("2026-10-%02d", d), Value: 9})
+		}
+		if _, err := store.WriteRecords(dataDir, "pypi", "proj", stored); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.MarkFetchedSeries(dataDir, "pypi", "proj", "", "2026-10-06", []string{"pkg"}); err != nil {
+			t.Fatal(err)
+		}
+		var mu sync.Mutex
+		var asked []string
+		src := zonedSource{target: "pkg", quiet: quiet, mu: &mu, asked: &asked}
+		cfg := &config.Config{Data: config.DataConfig{Dir: dataDir}}
+		opts := Options{Now: at(21, 9, 30), NoConcatenate: true, Repair: true, StartDate: "2026-10-02", EndDate: "2026-10-04"}
+		job := fetchJob{sourceName: "pypi", projectID: "proj", targets: []string{"pkg"}, sources: []source.Source{src}}
+		if _, err := runJobs(context.Background(), cfg, opts, []fetchJob{job}, 1); err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]int64{}
+		paths, _ := filepath.Glob(filepath.Join(store.MetricsProjectDir(dataDir, "pypi", "proj"), "*.jsonl"))
+		for _, p := range paths {
+			records, _ := store.ReadRecords(p)
+			for _, r := range records {
+				got[r.Date] = r.Value
+			}
+		}
+		want := map[string]int64{"2026-10-01": 9, "2026-10-02": 1, "2026-10-03": 1, "2026-10-04": 1, "2026-10-05": 9, "2026-10-06": 9}
+		if quiet {
+			want = map[string]int64{"2026-10-01": 9, "2026-10-05": 9, "2026-10-06": 9}
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("quiet=%v: stored %v, want %v", quiet, got, want)
+		}
+		if marks, _ := store.SeriesWatermarks(dataDir, "pypi", "proj", ""); marks["pkg"] != "2026-10-06" {
+			t.Errorf("the watermark moved: %v", marks)
+		}
 	}
 }

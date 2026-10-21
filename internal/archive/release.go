@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -344,4 +345,68 @@ func (s *ReleaseStore) Download(ctx context.Context, runID, dir string) (string,
 func IsPermission(err error) bool {
 	var p *PermissionError
 	return errors.As(err, &p)
+}
+
+// RunsInRange downloads into dir the runs with a job of the source and
+// project whose end date falls from one day through another, oldest first,
+// for a repair by replay. Only the manifests are downloaded to choose them.
+func (s *ReleaseStore) RunsInRange(ctx context.Context, sourceName, project, from, to, dir string) ([]string, error) {
+	start, err := time.Parse("2006-01-02", from)
+	if err != nil {
+		return nil, err
+	}
+	end, err := time.Parse("2006-01-02", to)
+	if err != nil {
+		return nil, err
+	}
+	type found struct {
+		id string
+		at time.Time
+	}
+	var runs []found
+	// A run fetches the day before it, so the month after the range can
+	// hold its last day's run.
+	for m := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC); !m.After(end.AddDate(0, 1, 0)); m = m.AddDate(0, 1, 0) {
+		rel, err := s.releaseFor(ctx, ReleaseTag(m), false)
+		if err != nil {
+			return nil, err
+		}
+		if rel == nil {
+			continue
+		}
+		assets, err := s.assets(ctx, rel.ID)
+		if err != nil {
+			return nil, err
+		}
+		for name, a := range assets {
+			id, ok := strings.CutSuffix(name, "-manifest.json")
+			if !ok {
+				continue
+			}
+			data, _, err := s.do(ctx, "download "+name, http.MethodGet, fmt.Sprintf("%s/repos/%s/releases/assets/%d", s.apiURL(), s.Repo, a.ID), nil, "", "application/octet-stream")
+			if err != nil {
+				return nil, err
+			}
+			var m Manifest
+			if err := json.Unmarshal(data, &m); err != nil {
+				return nil, fmt.Errorf("manifest %s: %w", name, err)
+			}
+			for _, j := range m.Jobs {
+				if j.Source == sourceName && j.Project == project && j.End[""] >= from && j.End[""] <= to {
+					runs = append(runs, found{id, m.RunTime})
+					break
+				}
+			}
+		}
+	}
+	sort.SliceStable(runs, func(i, j int) bool { return runs[i].at.Before(runs[j].at) })
+	var out []string
+	for _, r := range runs {
+		runDir, err := s.Download(ctx, r.id, dir)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, runDir)
+	}
+	return out, nil
 }

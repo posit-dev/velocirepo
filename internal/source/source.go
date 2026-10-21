@@ -62,6 +62,10 @@ type FetchOptions struct {
 	// time, so it has its own window. A series without one uses StartDate
 	// and EndDate.
 	Windows map[string]Window
+	// SkipSnapshots leaves out the requests of values that can't be fetched
+	// for a past day, such as GitHub's star and reaction counts: a repair of
+	// a past range would store today's values on past dates.
+	SkipSnapshots bool
 }
 
 // Window is a range of days to fetch. A zero Start means from the beginning.

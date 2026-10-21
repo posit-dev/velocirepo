@@ -34,6 +34,8 @@ type planner struct {
 	// end is an explicit end date, or zero for the latest day that has
 	// ended.
 	end time.Time
+	// repair re-fetches the explicit range and replaces what's stored.
+	repair bool
 
 	mu        sync.Mutex
 	published map[string]publishedDay

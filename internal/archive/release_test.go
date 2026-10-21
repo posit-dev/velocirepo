@@ -26,13 +26,15 @@ type fakeGitHub struct {
 	assets    map[int64]map[string][]byte
 	artifacts []Artifact
 	zips      map[int64][]byte
+	assetIDs  map[string]int64 // release id/name → asset id
+	byID      map[int64][]byte
 	forbidden bool
 	failures  int // server errors before requests succeed
 	uploads   int
 }
 
 func newFakeGitHub(t *testing.T) (*fakeGitHub, *httptest.Server) {
-	f := &fakeGitHub{releases: map[string]map[string]any{}, ids: map[string]int64{}, assets: map[int64]map[string][]byte{}, zips: map[int64][]byte{}}
+	f := &fakeGitHub{releases: map[string]map[string]any{}, ids: map[string]int64{}, assets: map[int64]map[string][]byte{}, zips: map[int64][]byte{}, assetIDs: map[string]int64{}, byID: map[int64][]byte{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -79,13 +81,16 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			f.assets[id][name] = body
+			aid := int64(len(f.byID) + 1)
+			f.assetIDs[fmt.Sprint(id)+"/"+name] = aid
+			f.byID[aid] = body
 			f.uploads++
 			w.WriteHeader(http.StatusCreated)
 			return
 		}
 		var list []asset
 		for name := range f.assets[id] {
-			list = append(list, asset{ID: id*1000 + int64(len(list)), Name: name})
+			list = append(list, asset{ID: f.assetIDs[fmt.Sprint(id)+"/"+name], Name: name})
 		}
 		if r.URL.Query().Get("page") != "1" {
 			list = nil
@@ -93,18 +98,12 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(list)
 	case strings.HasPrefix(path, "/releases/assets/"):
 		aid, _ := strconv.ParseInt(strings.TrimPrefix(path, "/releases/assets/"), 10, 64)
-		id := aid / 1000
-		i := int(aid % 1000)
-		n := 0
-		for name, data := range f.assets[id] {
-			_ = name
-			if n == i {
-				_, _ = w.Write(data)
-				return
-			}
-			n++
+		data, ok := f.byID[aid]
+		if !ok {
+			http.NotFound(w, r)
+			return
 		}
-		http.NotFound(w, r)
+		_, _ = w.Write(data)
 	case path == "/actions/artifacts":
 		_ = json.NewEncoder(w).Encode(map[string]any{"artifacts": f.artifacts})
 	case strings.HasPrefix(path, "/actions/artifacts/"):
@@ -235,5 +234,35 @@ func TestCatchUpSkipsArchivesWithSecrets(t *testing.T) {
 	}
 	if len(got.Failed) != 1 || !strings.Contains(got.Failed[0].Err.Error(), "token") || fake.uploads != 0 {
 		t.Errorf("catch-up = %+v with %d uploads, want the archive refused", got, fake.uploads)
+	}
+}
+
+// A repair range selects, from the releases, every run whose end dates fall
+// in it, downloading only the manifests of the others.
+func TestReleaseRunsInRange(t *testing.T) {
+	_, srv := newFakeGitHub(t)
+	s := storeFor(srv)
+	src := t.TempDir()
+	for _, id := range []string{"20261011T093105Z-1-1", "20261021T093105Z-2-1", "20261101T093105Z-3-1"} {
+		at, _ := time.Parse("20060102T150405Z", id[:16])
+		w, err := NewWriter(src, id, "test", at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = w.Write(Exchange{Source: "pypi", Project: "proj", Target: "pkg", Method: "GET", URL: "https://pypistats.org/api", Status: 200, Body: id})
+		w.AddJob(Job{Source: "pypi", Project: "proj", Target: "pkg", End: map[string]string{"": at.AddDate(0, 0, -1).Format("2006-01-02")}})
+		if _, err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Upload(context.Background(), w.Dir()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.RunsInRange(context.Background(), "pypi", "proj", "2026-10-15", "2026-10-31", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || filepath.Base(got[0]) != "20261021T093105Z-2-1" || filepath.Base(got[1]) != "20261101T093105Z-3-1" {
+		t.Errorf("runs = %v", got)
 	}
 }

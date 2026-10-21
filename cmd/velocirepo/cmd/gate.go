@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/posit-dev/velocirepo/internal/check"
 	"github.com/posit-dev/velocirepo/internal/fetch"
 	"github.com/posit-dev/velocirepo/internal/gate"
 	"github.com/posit-dev/velocirepo/internal/ui"
@@ -57,6 +58,14 @@ GITHUB_TOKEN is the token velocirepo fetches with. The tracking issue and the ar
 			}
 			if !noReconcile {
 				opts.Reconcilers = fetch.Reconcilers(cfg, tokens, &http.Client{Timeout: time.Minute})
+			}
+
+			if repair != "" {
+				rep, err := check.ParseRepair(repair)
+				if err != nil {
+					return err
+				}
+				opts.Repair = &rep
 			}
 
 			out, err := gate.Run(cmd.Context(), opts)

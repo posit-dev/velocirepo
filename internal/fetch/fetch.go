@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/posit-dev/velocirepo/internal/auth"
@@ -19,7 +20,9 @@ import (
 )
 
 type Options struct {
-	Project       string
+	Project string
+	// Sources limits the fetch to these sources; empty means all.
+	Sources       []string
 	StartDate     string
 	EndDate       string
 	NoConcatenate bool
@@ -40,6 +43,11 @@ type Options struct {
 	// OnTargetDone is called after a target was fetched successfully, with
 	// its source, for example to collect what the archive's manifest needs.
 	OnTargetDone func(JobInfo, any)
+	// Repair re-fetches StartDate through EndDate and replaces what's stored
+	// for those days, so a day can also become "no data". Snapshots, whose
+	// values can't be fetched for a past day, are left out, and watermarks
+	// don't move.
+	Repair bool
 	// Concatenate replaces the concatenation after the fetch; nil uses
 	// ConcatenationPolicy. It isn't called with NoConcatenate.
 	Concatenate func(dataDir string, now time.Time) error
@@ -213,7 +221,10 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	if err != nil {
 		return nil, fmt.Errorf("parse end date: %w", err)
 	}
-	plan := &planner{dataDir: cfg.DataDir(), now: opts.now()}
+	plan := &planner{dataDir: cfg.DataDir(), now: opts.now(), repair: opts.Repair}
+	if opts.Repair && (opts.StartDate == "" || opts.EndDate == "") {
+		return nil, fmt.Errorf("a repair needs a start and end date")
+	}
 	if opts.StartDate != "" {
 		startDate, err := dateutil.ParseDate(opts.StartDate)
 		if err != nil {
@@ -366,11 +377,12 @@ func runEventJob(ctx context.Context, plan *planner, job fetchJob, h hooks, star
 			continue
 		}
 		opts := source.FetchOptions{
-			ProjectID: job.projectID,
-			StartDate: events.Start,
-			EndDate:   events.End,
-			DataDir:   dataDir,
-			Windows:   map[string]source.Window{"stars": stars},
+			ProjectID:     job.projectID,
+			StartDate:     events.Start,
+			EndDate:       events.End,
+			DataDir:       dataDir,
+			Windows:       map[string]source.Window{"stars": stars},
+			SkipSnapshots: plan.repair,
 		}
 		info := JobInfo{Source: job.sourceName, Project: job.projectID, Target: target, Options: opts,
 			Zones: map[string]string{"": eventsZone.String(), "stars": starsZone.String()}}
@@ -436,7 +448,25 @@ func runEventJob(ctx context.Context, plan *planner, job fetchJob, h hooks, star
 			filesWritten++
 		}
 	}
-	if len(records) > 0 {
+	if plan.repair {
+		// Only the star history is re-fetched; the snapshots' totals stay.
+		scope := store.RecordScope{Windows: map[string]source.Window{}, Metrics: []string{"daily_stars"}}
+		var history []source.Record
+		for _, pl := range plans {
+			scope.Windows[pl.target] = pl.stars
+		}
+		for _, r := range records {
+			if r.Metric == "daily_stars" {
+				history = append(history, r)
+			}
+		}
+		n, err := store.WriteRecordsScoped(dataDir, job.sourceName, job.projectID, history, scope)
+		if err != nil {
+			return jobError(job, started, "write: %v", err)
+		}
+		filesWritten += n
+		records = history
+	} else if len(records) > 0 {
 		n, err := store.WriteRecords(dataDir, job.sourceName, job.projectID, records)
 		if err != nil {
 			slog.Warn("write records failed", "source", job.sourceName, "project", job.projectID, "error", err)
@@ -445,6 +475,9 @@ func runEventJob(ctx context.Context, plan *planner, job fetchJob, h hooks, star
 	}
 
 	for _, pl := range plans {
+		if plan.repair {
+			break
+		}
 		if !pl.events.Empty() {
 			markFetched(dataDir, job, "", pl.target, pl.events.End)
 		}
@@ -595,7 +628,17 @@ func runMetricJob(ctx context.Context, plan *planner, job fetchJob, h hooks, sta
 	}
 
 	var filesWritten int
-	if len(records) > 0 {
+	if plan.repair {
+		scope := store.RecordScope{Windows: map[string]source.Window{}}
+		for _, pl := range plans {
+			scope.Windows[pl.target] = source.Window{Start: pl.opts.StartDate, End: pl.opts.EndDate}
+		}
+		n, err := store.WriteRecordsScoped(dataDir, job.sourceName, job.projectID, records, scope)
+		if err != nil {
+			return jobError(job, started, "write: %v", err)
+		}
+		filesWritten = n
+	} else if len(records) > 0 {
 		n, err := store.WriteRecords(dataDir, job.sourceName, job.projectID, records)
 		if err != nil {
 			return jobError(job, started, "write: %v", err)
@@ -612,17 +655,20 @@ func runMetricJob(ctx context.Context, plan *planner, job fetchJob, h hooks, sta
 
 	start, end := plans[0].opts.StartDate, plans[0].opts.EndDate
 	for _, pl := range plans {
-		mark := pl.mark
-		if mark.IsZero() {
-			mark = latestRecordDate(records, pl.target)
-		}
-		markFetched(dataDir, job, "", pl.target, mark)
 		if pl.opts.StartDate.Before(start) {
 			start = pl.opts.StartDate
 		}
 		if pl.opts.EndDate.After(end) {
 			end = pl.opts.EndDate
 		}
+		if plan.repair {
+			continue
+		}
+		mark := pl.mark
+		if mark.IsZero() {
+			mark = latestRecordDate(records, pl.target)
+		}
+		markFetched(dataDir, job, "", pl.target, mark)
 	}
 
 	r := Result{
@@ -634,7 +680,7 @@ func runMetricJob(ctx context.Context, plan *planner, job fetchJob, h hooks, sta
 		EndDate:   dateutil.FormatDate(end),
 		Duration:  time.Since(started),
 	}
-	if len(records) == 0 {
+	if len(records) == 0 && !plan.repair {
 		r.Skipped = "no new records"
 	}
 	return []Result{r}
@@ -759,7 +805,7 @@ func All(ctx context.Context, cfg *config.Config, tokens Tokens, opts Options) (
 	client := clientForOpts(&opts)
 
 	for _, desc := range fetchSourceDescriptors {
-		if desc.skipReason(tokens) != "" {
+		if desc.skipReason(tokens) != "" || (len(opts.Sources) > 0 && !slices.Contains(opts.Sources, desc.Name)) {
 			continue
 		}
 		desc.runBeforeFetch(ctx, tokens)
