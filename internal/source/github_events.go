@@ -1172,5 +1172,7 @@ func init() {
 		// with WithArchiveMode, since their values can't be fetched for a past day.
 		Archive:           NotArchived,
 		NoReferenceTotals: "not implemented yet",
+		// Comments and forks are deleted by their authors.
+		RemovableEvents: []string{"comment", "fork"},
 	})
 }

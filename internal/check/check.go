@@ -21,6 +21,8 @@ type Context struct {
 	// Results are what a fetch run did, if known: from fetch --results, or
 	// from the fetch log of a past run.
 	Results *fetch.RunResults
+	// Diff, if set, compares the data with an earlier version.
+	Diff *Diff
 }
 
 // Checker is one check.
@@ -31,7 +33,7 @@ type Checker interface {
 
 // Default are the checks velocirepo check runs.
 func Default() []Checker {
-	return []Checker{fetchFailed{}, deprecations{}, integrity{}, volume{}, freshness{}}
+	return []Checker{fetchFailed{}, deprecations{}, diffChecks{}, integrity{}, volume{}, freshness{}}
 }
 
 // Run runs checks, marks accepted findings, and returns them sorted by

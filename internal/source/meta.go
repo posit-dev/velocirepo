@@ -45,6 +45,10 @@ type Meta struct {
 	Reconciles bool
 	// NoReferenceTotals says why a source doesn't reconcile.
 	NoReferenceTotals string
+	// RemovableEvents are the event types that can disappear upstream, such
+	// as deleted comments, so a re-fetch that no longer has them isn't an
+	// error.
+	RemovableEvents []string
 }
 
 var (
