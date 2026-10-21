@@ -317,11 +317,14 @@ func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob
 			}}
 		}
 		opts := source.FetchOptions{
-			ProjectID:           job.projectID,
-			StartDate:           job.startDate,
-			EndDate:             endDate,
-			DataDir:             dataDir,
-			StarHistoryBackfill: backfill,
+			ProjectID: job.projectID,
+			StartDate: job.startDate,
+			EndDate:   endDate,
+			DataDir:   dataDir,
+			Windows:   map[string]source.Window{"stars": {Start: job.startDate, End: endDate}},
+		}
+		if len(backfill) > 0 {
+			opts.Windows["stars"] = source.Window{End: endDate}
 		}
 		notifyJob(onJob, job, opts)
 		return runEventJob(ctx, dataDir, job, opts, started)

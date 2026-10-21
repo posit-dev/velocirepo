@@ -47,6 +47,21 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 	}
 
 	g.contentEntries = make(map[string][]ContentEntry)
+	g.records = nil
+
+	stars := opts.Window("stars")
+	if !stars.Empty() {
+		starRecords, err := g.fetchStarHistory(ctx, owner, repo, opts, stars)
+		if err != nil {
+			return nil, fmt.Errorf("star history: %w", err)
+		}
+		g.records = starRecords
+	}
+
+	if opts.Window("").Empty() {
+		// Only the star history was behind.
+		return nil, nil
+	}
 
 	var events []Event
 
@@ -79,12 +94,6 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 		return nil, fmt.Errorf("comments: %w", err)
 	}
 	events = append(events, comments...)
-
-	starRecords, err := g.fetchStarHistory(ctx, owner, repo, opts)
-	if err != nil {
-		return nil, fmt.Errorf("star history: %w", err)
-	}
-	g.records = starRecords
 
 	// The issues and pull requests updated since StartDate, closed ones
 	// included, get their reaction counts refreshed: a count is otherwise
@@ -178,25 +187,23 @@ func (g *GitHubEvents) fetchPaginatedEvents(ctx context.Context, owner, repo, qu
 	return events, nil
 }
 
-// starHistoryRereadDays is how many days before the end date each fetch
-// reads again. GitHub's star history uses US Pacific days, so the latest day
-// may still have been in progress during the previous run, and stars that are
-// removed again lower the count of the day they were given.
-const starHistoryRereadDays = 7
+// starHistoryZone is the time zone GitHub's star history counts days in.
+const starHistoryZone = "America/Los_Angeles"
+
+// DayZone returns the time zone a series' days end in: US Pacific time for
+// the star history, UTC for the events.
+func (g *GitHubEvents) DayZone(ctx context.Context, series string) (*time.Location, error) {
+	if series == "stars" {
+		return time.LoadLocation(starHistoryZone)
+	}
+	return time.UTC, nil
+}
 
 // fetchStarHistory returns daily_stars records from the star history
-// endpoint. Unlike the stargazer list, GitHub provides it for every
-// repository. Days without stars are only stored within the reread window,
-// where they may replace an earlier count.
-func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string, opts FetchOptions) ([]Record, error) {
-	reread := opts.EndDate.AddDate(0, 0, -starHistoryRereadDays)
-	from := opts.StartDate
-	if opts.StarHistoryBackfill[g.Repo] {
-		from = time.Time{}
-	} else if reread.Before(from) {
-		from = reread
-	}
-
+// endpoint for the days in w. Unlike the stargazer list, GitHub provides it
+// for every repository. Days without stars aren't stored. Each day is fetched
+// once, after it has ended in US Pacific time, so no stored day is read again.
+func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string, opts FetchOptions, w Window) ([]Record, error) {
 	var records []Record
 	// GitHub serves at most 100 pages of 30 weeks.
 	for page := 1; page <= 100; page++ {
@@ -213,11 +220,11 @@ func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string,
 		}
 
 		older := false
-		for _, w := range weeks {
-			sunday := time.Unix(w.Week, 0).UTC()
-			for i, n := range w.Days {
+		for _, week := range weeks {
+			sunday := time.Unix(week.Week, 0).UTC()
+			for i, n := range week.Days {
 				day := sunday.AddDate(0, 0, i)
-				if !inDateRange(day, from, opts.EndDate) || (n == 0 && day.Before(reread)) {
+				if n == 0 || !inDateRange(day, w.Start, w.End) {
 					continue
 				}
 				records = append(records, Record{
@@ -229,7 +236,7 @@ func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string,
 				})
 			}
 			// Weeks come newest first, so the rest are older still.
-			if sunday.Before(from) {
+			if sunday.Before(w.Start) {
 				older = true
 			}
 		}

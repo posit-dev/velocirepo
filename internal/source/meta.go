@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+	// Time zones are looked up by name, also on systems without tzdata.
+	_ "time/tzdata"
 )
 
 // ArchiveMode says whether a response is kept in the raw archive.

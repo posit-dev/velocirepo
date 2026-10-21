@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 const repoInfoWithStarsResponse = `{"data":{"repository":{"name":"repo","description":"","url":"https://github.com/owner/repo","homepageUrl":null,"createdAt":"2020-01-01T00:00:00Z","pushedAt":"2025-06-10T12:00:00Z","primaryLanguage":null,"licenseInfo":null,"repositoryTopics":{"nodes":[]},"defaultBranchRef":{"name":"main"},"isArchived":false,"stargazerCount":7015}}}`
@@ -70,8 +71,9 @@ func TestGitHubEventsRecordsTotalStars(t *testing.T) {
 }
 
 // Daily stars come from the star history endpoint, which GitHub provides for
-// every repository. Weeks come newest first, and paging stops at the first
-// week that starts before the window.
+// every repository, over the star history's own window. Weeks come newest
+// first, and paging stops at the first week that starts before the window.
+// Days without stars aren't stored.
 func TestGitHubEventsRecordsStarHistory(t *testing.T) {
 	responses := emptyGitHubResponses()
 	responses["starHistory:1"] = "[" + starWeek(15, 1, 0, 2, 0, 0, 0, 6) + "]"
@@ -84,18 +86,15 @@ func TestGitHubEventsRecordsStarHistory(t *testing.T) {
 	defer srv.Close()
 
 	g := &GitHubEvents{Client: srv.Client(), Repo: "owner/repo", BaseURL: srv.URL}
-	if _, err := g.FetchEvents(context.Background(), juneFetchOptions("proj", 10, 20)); err != nil {
+	opts := juneFetchOptions("proj", 10, 20)
+	opts.Windows = map[string]Window{"stars": {Start: dateUTC(2025, 6, 10), End: dateUTC(2025, 6, 20)}}
+	if _, err := g.FetchEvents(context.Background(), opts); err != nil {
 		t.Fatalf("FetchEvents failed: %v", err)
 	}
 
 	got := starsByDate(g.Records())
-	want := map[string]int64{
-		// Stars in the window. 2025-06-08 and 2025-06-21 fall outside it.
-		"2025-06-10": 3, "2025-06-13": 4, "2025-06-15": 1, "2025-06-17": 2,
-		// Days without stars are only stored in the last week, so a star
-		// that was removed again gets overwritten.
-		"2025-06-14": 0, "2025-06-16": 0, "2025-06-18": 0, "2025-06-19": 0, "2025-06-20": 0,
-	}
+	// 2025-06-08 and 2025-06-21 fall outside the window.
+	want := map[string]int64{"2025-06-10": 3, "2025-06-13": 4, "2025-06-15": 1, "2025-06-17": 2}
 	if len(got) != len(want) {
 		t.Errorf("got daily_stars %v, want %v", got, want)
 	}
@@ -114,38 +113,45 @@ func TestGitHubEventsRecordsStarHistory(t *testing.T) {
 	}
 }
 
-// A nightly run starts after the last stored day, but the last days are read
-// again: GitHub's days end in US Pacific time, so the latest one may still have
-// been in progress during the previous run.
-func TestGitHubEventsStarHistoryRereadsLastWeek(t *testing.T) {
+// The star history has its own window, since its days end in US Pacific
+// time. A run can fetch only the star history, when the events are already up
+// to date: then neither events nor snapshots are requested.
+func TestGitHubEventsStarHistoryOnly(t *testing.T) {
 	responses := emptyGitHubResponses()
-	responses["starHistory:1"] = "[" + starWeek(15, 1, 0, 2, 0, 0, 7, 0) + "," + starWeek(8, 5, 0, 0, 0, 0, 0, 0) + "]"
-
-	srv := httptest.NewServer(graphqlHandler(responses))
+	responses["starHistory:1"] = "[" + starWeek(15, 1, 0, 2, 0, 0, 7, 0) + "]"
+	var pages []string
+	var mu sync.Mutex
+	other := 0
+	handler := recordingHandler(responses, &pages, &mu)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !contains(r.URL.Path, "stargazers/history") {
+			other++
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	defer srv.Close()
 
 	g := &GitHubEvents{Client: srv.Client(), Repo: "owner/repo", BaseURL: srv.URL}
-	if _, err := g.FetchEvents(context.Background(), juneFetchOptions("proj", 20, 20)); err != nil {
+	opts := juneFetchOptions("proj", 21, 20) // events up to date
+	opts.Windows = map[string]Window{"stars": {Start: dateUTC(2025, 6, 20), End: dateUTC(2025, 6, 20)}}
+	events, err := g.FetchEvents(context.Background(), opts)
+	if err != nil {
 		t.Fatalf("FetchEvents failed: %v", err)
 	}
-
+	if len(events) != 0 || other != 0 {
+		t.Errorf("got %d events and %d other requests, want none", len(events), other)
+	}
 	got := starsByDate(g.Records())
-	want := map[string]int64{
-		"2025-06-15": 1, "2025-06-17": 2, "2025-06-20": 7,
-		"2025-06-13": 0, "2025-06-14": 0, "2025-06-16": 0, "2025-06-18": 0, "2025-06-19": 0,
+	if len(got) != 1 || got["2025-06-20"] != 7 {
+		t.Errorf("daily_stars = %v, want 7 on 2025-06-20", got)
 	}
-	if len(got) != len(want) {
-		t.Errorf("got daily_stars %v, want %v", got, want)
-	}
-	for date, n := range want {
-		if v, ok := got[date]; !ok || v != n {
-			t.Errorf("daily_stars on %s = %d (stored: %v), want %d", date, v, ok, n)
-		}
+	if len(filterByMetric(g.Records(), "total_stars")) != 0 {
+		t.Error("a star-history-only run took a total_stars snapshot")
 	}
 }
 
-// A repository without stored daily stars gets its whole star history, so
-// upgrading doesn't need a full re-fetch of every issue and comment.
+// A repository without a star history watermark gets its whole history: the
+// window starts at the zero time.
 func TestGitHubEventsBackfillsStarHistory(t *testing.T) {
 	responses := emptyGitHubResponses()
 	responses["starHistory:1"] = "[" + starWeek(15, 1, 0, 0, 0, 0, 0, 0) + "]"
@@ -157,7 +163,7 @@ func TestGitHubEventsBackfillsStarHistory(t *testing.T) {
 
 	g := &GitHubEvents{Client: srv.Client(), Repo: "owner/repo", BaseURL: srv.URL}
 	opts := juneFetchOptions("proj", 20, 20)
-	opts.StarHistoryBackfill = map[string]bool{"owner/repo": true}
+	opts.Windows = map[string]Window{"stars": {End: dateUTC(2025, 6, 20)}}
 	if _, err := g.FetchEvents(context.Background(), opts); err != nil {
 		t.Fatalf("FetchEvents failed: %v", err)
 	}
@@ -168,9 +174,18 @@ func TestGitHubEventsBackfillsStarHistory(t *testing.T) {
 			t.Errorf("daily_stars on %s = %d, want %d (got %v)", date, got[date], n, got)
 		}
 	}
-	// Days without stars before the reread window aren't stored.
 	if _, ok := got["2025-06-02"]; ok {
 		t.Errorf("stored a zero for 2025-06-02: %v", got)
+	}
+}
+
+func TestGitHubDayZones(t *testing.T) {
+	g := &GitHubEvents{Repo: "owner/repo"}
+	if loc, err := g.DayZone(context.Background(), "stars"); err != nil || loc.String() != "America/Los_Angeles" {
+		t.Errorf("stars zone = %v, %v", loc, err)
+	}
+	if loc, err := g.DayZone(context.Background(), ""); err != nil || loc != time.UTC {
+		t.Errorf("events zone = %v, %v", loc, err)
 	}
 }
 

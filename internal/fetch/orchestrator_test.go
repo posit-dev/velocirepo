@@ -232,7 +232,7 @@ func TestEventJobBackfillsStarHistoryOfNewRepositories(t *testing.T) {
 		eventJob([]string{"org/a", "org/b"}, optsEvents{&got}), 1); err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]bool{"org/b": true}; len(got.StarHistoryBackfill) != 1 || !got.StarHistoryBackfill["org/b"] {
-		t.Errorf("StarHistoryBackfill = %v, want %v", got.StarHistoryBackfill, want)
+	if w := got.Window("stars"); !w.Start.IsZero() {
+		t.Errorf("star window = %+v, want the whole history", w)
 	}
 }
