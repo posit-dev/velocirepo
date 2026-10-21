@@ -30,8 +30,6 @@ func (r *run) report(out Outcome) {
 	}
 	b.WriteString(check.Summary(check.Report{Findings: findings}))
 	fmt.Fprintf(&b, "\n%d new, %d resolved since the last run.\n", len(out.Changes.New), len(out.Changes.Resolved))
-	b.WriteString("\n### What enforcing would have done\n\n")
-	b.WriteString("This version of the gate only reports: it committed everything. An enforcing gate would have:\n\n")
 	list := func(what string, items []string) {
 		if len(items) == 0 {
 			fmt.Fprintf(&b, "- %s: nothing\n", what)
@@ -39,9 +37,21 @@ func (r *run) report(out Outcome) {
 		}
 		fmt.Fprintf(&b, "- %s: %s\n", what, strings.Join(items, ", "))
 	}
-	list("restored removed records of", out.WouldRestore)
-	list("kept the stored values of", out.WouldKeep)
-	list("held back the new records of", out.WouldHoldBack)
+	if r.cfg.Settings.Enforce() {
+		b.WriteString("\n### What the gate did\n\n")
+		list("restored removed records of", out.WouldRestore)
+		list("kept the stored values of", out.WouldKeep)
+		list("held back the new records of", out.HeldBack)
+	} else {
+		b.WriteString("\n### What enforcing would have done\n\n")
+		b.WriteString("The gate only reports: it committed everything. With `[settings] gate = \"enforce\"`, it would have:\n\n")
+		list("restored removed records of", out.WouldRestore)
+		list("kept the stored values of", out.WouldKeep)
+		list("held back the new records of", out.WouldHoldBack)
+	}
+	for _, n := range out.Changes.Notes {
+		fmt.Fprintf(&b, "\n%s\n", n)
+	}
 	f, err := os.OpenFile(r.opts.SummaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		r.logf("::warning::job summary: %v", err)

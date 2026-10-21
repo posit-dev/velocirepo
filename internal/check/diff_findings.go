@@ -145,7 +145,7 @@ func DiffFindings(cfg *config.Config, diffs []ProjectDiff, repairs []Repair) []F
 				if pd.Category == store.ContentDataDir {
 					date = ""
 				}
-				if r.covers(pd.Source, pd.Project, date) {
+				if r.Covers(pd.Source, pd.Project, date) {
 					return r, true
 				}
 			}
@@ -170,6 +170,15 @@ func DiffFindings(cfg *config.Config, diffs []ProjectDiff, repairs []Repair) []F
 			default:
 				count(pd, removedCheck, Error, pd.Category, what, "", it)
 			}
+		}
+		for _, it := range pd.duplicated {
+			if r, ok := inRepair(it); ok {
+				count(pd, "diff.repaired", Warning, r.String(), "duplicates added by the repair "+r.String(), "", it)
+				continue
+			}
+			// Duplicates in new records; those that were stored already are
+			// validate-data's, as warnings.
+			count(pd, "data.integrity", Error, pd.Category+" duplicates added", noun(pd.Category)+" stored twice", "", it)
 		}
 		for _, it := range pd.changed {
 			if r, ok := inRepair(it); ok {

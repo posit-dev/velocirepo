@@ -348,3 +348,72 @@ func WriteEventsScoped(dataDir, sourceName, projectID string, events []source.Ev
 	ensureSchemaVersion(dataDir)
 	return n, nil
 }
+
+// WriteRecordsFile writes a data file's records, sorted by date, replacing
+// the file; an empty list removes it.
+func WriteRecordsFile(path string, records []source.Record) error {
+	if len(records) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	sort.SliceStable(records, func(i, j int) bool { return recordLess(records[i], records[j]) })
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return writeFileAtomic(path, records)
+}
+
+// WriteEventsFile writes a data file's events, sorted by time, replacing the
+// file; an empty list removes it.
+func WriteEventsFile(path string, events []source.Event) error {
+	if len(events) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	sort.SliceStable(events, func(i, j int) bool { return eventLess(events[i], events[j]) })
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return writeEventsFileAtomic(path, events)
+}
+
+// AddEvents adds events to the stored ones, each into the file its day
+// belongs in, without replacing anything: an event that's stored already
+// stays as it is.
+func AddEvents(dataDir, sourceName, projectID string, events []source.Event) (int, error) {
+	for i := range events {
+		events[i].Source = sourceName
+	}
+	dir := EventsProjectDir(dataDir, sourceName, projectID)
+	files := newPending(ReadEvents, writeEventsFileAtomic, eventLess)
+	stored := map[string]map[string]bool{}
+	for _, e := range events {
+		path := writeTarget(dir, e.Datetime[:10])
+		existing, err := files.load(path)
+		if err != nil {
+			return 0, err
+		}
+		keys, ok := stored[path]
+		if !ok {
+			keys = make(map[string]bool, len(existing))
+			for _, s := range existing {
+				keys[dedupEventKey(s)] = true
+			}
+			stored[path] = keys
+		}
+		if key := dedupEventKey(e); !keys[key] {
+			keys[key] = true
+			files.set(path, append(existing, e))
+		}
+	}
+	n, err := files.flush(dir)
+	if err != nil {
+		return n, err
+	}
+	ensureSchemaVersion(dataDir)
+	return n, nil
+}

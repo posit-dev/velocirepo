@@ -22,16 +22,11 @@ func gateCmd() *cobra.Command {
 		Short: "Run the nightly fetch so that it only adds data",
 		Long: `Run the nightly fetch in GitHub Actions: check the commits made since the last run, fetch, check the night's changes, commit the data, concatenate on or after the concatenation day in a commit of its own, push, and report in the tracking issue labelled velocirepo-health.
 
-This version only reports what an enforcing gate would restore, keep and hold back; it commits everything, as fetch does.
+A night only adds data. With [settings] gate = "enforce", removed records are restored, changed values keep their stored value, and the new records of a source and project with an error about them are held back in velocirepo/held-back/ until they pass, or a manual run releases (--release) or discards (--discard) them. Without it, the gate only reports what it would do, and commits everything, as fetch does.
 
 GITHUB_TOKEN is the token velocirepo fetches with. The tracking issue and the archive use the workflow token, from --repo-token or VELOCIREPO_REPO_TOKEN.`,
 		GroupID: "ci",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			for name, value := range map[string]string{"release": release, "discard": discard, "repair": repair} {
-				if value != "" {
-					ui.Warnf("--%s is available from velocirepo v1.4.0; this run only reports", name)
-				}
-			}
 			repoName, repoToken, err := repo.resolve()
 			if err != nil {
 				ui.Warnf("%v; there's no tracking issue and no archive upload", err)
@@ -42,7 +37,7 @@ GITHUB_TOKEN is the token velocirepo fetches with. The tracking issue and the ar
 			tokens := fetch.TokensFromEnv()
 			opts := gate.Options{
 				Config: cfg, Tokens: tokens, Repo: repoName, RepoToken: repoToken,
-				ArchiveDir: archiveDir, NoConcatenate: noConcatenate,
+				ArchiveDir: archiveDir, NoConcatenate: noConcatenate, Release: release, Discard: discard,
 				OutputPath: os.Getenv("GITHUB_OUTPUT"), SummaryPath: os.Getenv("GITHUB_STEP_SUMMARY"),
 				Log: cmd.OutOrStdout(),
 				AfterFetch: func(results []fetch.Result) {
@@ -81,8 +76,8 @@ GITHUB_TOKEN is the token velocirepo fetches with. The tracking issue and the ar
 	cmd.Flags().BoolVar(&noReconcile, "no-reconcile", false, "don't compare stored totals with the APIs' own totals")
 	// The workflow's manual inputs come through the environment, since they
 	// contain spaces.
-	cmd.Flags().StringVar(&release, "release", os.Getenv("VELOCIREPO_RELEASE"), "land a project's held-back data: <source>/<project> (from v1.4.0; default: $VELOCIREPO_RELEASE)")
-	cmd.Flags().StringVar(&discard, "discard", os.Getenv("VELOCIREPO_DISCARD"), "discard a project's held-back data: <source>/<project> (from v1.4.0; default: $VELOCIREPO_DISCARD)")
-	cmd.Flags().StringVar(&repair, "repair", os.Getenv("VELOCIREPO_REPAIR"), "re-fetch or replay a range: <source>/<project> <from>..<to> (from v1.4.0; default: $VELOCIREPO_REPAIR)")
+	cmd.Flags().StringVar(&release, "release", os.Getenv("VELOCIREPO_RELEASE"), "land a project's held-back data regardless of its findings: <source>/<project> (default: $VELOCIREPO_RELEASE)")
+	cmd.Flags().StringVar(&discard, "discard", os.Getenv("VELOCIREPO_DISCARD"), "delete a project's held-back data, so it's fetched again: <source>/<project> (default: $VELOCIREPO_DISCARD)")
+	cmd.Flags().StringVar(&repair, "repair", os.Getenv("VELOCIREPO_REPAIR"), "re-fetch or replay a range: <source>/<project> <from>..<to> (default: $VELOCIREPO_REPAIR)")
 	return cmd
 }

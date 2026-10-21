@@ -48,9 +48,9 @@ func (t tracker) update(ctx context.Context, c Changes) error {
 	if err != nil {
 		return err
 	}
-	body := t.body(c.Open)
+	body := t.body(c.Open, c.HeldBack)
 	switch {
-	case existing == nil && len(c.Open) == 0:
+	case existing == nil && len(c.Open) == 0 && len(c.HeldBack) == 0:
 		return nil
 	case existing == nil:
 		in := map[string]any{"title": issueTitle, "body": body, "labels": []string{HealthLabel}}
@@ -72,7 +72,7 @@ func (t tracker) update(ctx context.Context, c Changes) error {
 			return err
 		}
 	}
-	if len(c.Open) == 0 {
+	if len(c.Open) == 0 && len(c.HeldBack) == 0 {
 		_, err := t.api.call(ctx, "close the tracking issue", "issues: write", http.MethodPatch, path, map[string]any{"state": "closed", "state_reason": "completed"}, nil)
 		return err
 	}
@@ -99,9 +99,16 @@ func (t tracker) teams() []string {
 	return out
 }
 
-func (t tracker) body(open []OpenFinding) string {
+func (t tracker) body(open []OpenFinding, heldBack []string) string {
 	var b strings.Builder
 	b.WriteString("velocirepo checks the data every night. This issue lists the findings that are open; it's rewritten by every run.\n\n")
+	if len(heldBack) > 0 {
+		b.WriteString("**Held back** in `velocirepo/held-back/`, until their errors are fixed or accepted, or a manual run releases or discards them:\n\n")
+		for _, h := range heldBack {
+			fmt.Fprintf(&b, "- `%s`\n", h)
+		}
+		b.WriteString("\n")
+	}
 	if len(open) == 0 {
 		b.WriteString("No findings are open.\n")
 		return b.String()
@@ -142,6 +149,9 @@ func (t tracker) comment(c Changes) string {
 	}
 	for _, f := range c.Resolved {
 		fmt.Fprintf(&b, "- Resolved: `%s` %s/%s: %s\n", f.Check, f.Source, f.Project, f.Message)
+	}
+	for _, n := range c.Notes {
+		fmt.Fprintf(&b, "- %s\n", n)
 	}
 	if len(c.Open) == 0 {
 		b.WriteString("\nNo findings are left.\n")

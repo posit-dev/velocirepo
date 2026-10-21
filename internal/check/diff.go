@@ -41,7 +41,9 @@ func (r Repair) String() string {
 	return fmt.Sprintf("%s/%s %s..%s", r.Source, r.Project, r.From, r.To)
 }
 
-func (r Repair) covers(sourceName, project, date string) bool {
+// Covers reports whether a change to a source and project on a day is
+// within the repair; "" for the day covers any.
+func (r Repair) Covers(sourceName, project, date string) bool {
 	return r.Source == sourceName && r.Project == project && (date == "" || (date >= r.From && date <= r.To))
 }
 
@@ -84,6 +86,28 @@ type item struct {
 	value int64
 	// valued is set for records, whose values must not change.
 	valued bool
+	// file and line are where the item is stored, as it's stored there.
+	file string
+	line []byte
+	// count is how often the item is stored, duplicates included.
+	count int
+}
+
+// Line is a stored record, event or content entry, as it's in its file.
+type Line struct {
+	// File is the file's name in the project directory.
+	File   string
+	Data   []byte
+	Target string
+	Date   string
+}
+
+func lines(items []item) []Line {
+	out := make([]Line, len(items))
+	for i, it := range items {
+		out[i] = Line{File: it.file, Data: it.line, Target: it.target, Date: it.date}
+	}
+	return out
 }
 
 // ProjectDiff is how one project's data of one source differs between two
@@ -101,7 +125,23 @@ type ProjectDiff struct {
 	addedKeys map[string]bool
 	// removedKeys of the removed items, for recognising renames.
 	removedKeys []string
+	// duplicated are the items stored more often than before.
+	duplicated []item
 }
+
+// RemovedLines are the items that disappeared, as they were stored.
+func (d ProjectDiff) RemovedLines() []Line { return lines(d.removed) }
+
+// ChangedLines are the records whose value changed, as they were stored,
+// with their stored value.
+func (d ProjectDiff) ChangedLines() []Line { return lines(d.changed) }
+
+// AddedLines are the new items, as they're stored now.
+func (d ProjectDiff) AddedLines() []Line { return lines(d.added) }
+
+// DuplicatedLines are the items stored more often than before: duplicates
+// that were added.
+func (d ProjectDiff) DuplicatedLines() []Line { return lines(d.duplicated) }
 
 // Removed, Added and Changed count the project's removed, added and changed
 // items.
@@ -196,14 +236,20 @@ func CompareData(ctx context.Context, dataDir string, d Diff) ([]ProjectDiff, []
 			case b.valued && a.value != b.value:
 				pd.changed = append(pd.changed, b)
 			}
+			if ok && a.count > b.count {
+				pd.duplicated = append(pd.duplicated, a)
+			}
 		}
 		for key, a := range after {
 			if _, ok := before[key]; !ok {
 				pd.added = append(pd.added, a)
 				pd.addedKeys[key] = true
+				if a.count > 1 {
+					pd.duplicated = append(pd.duplicated, a)
+				}
 			}
 		}
-		if len(pd.removed)+len(pd.added)+len(pd.changed) > 0 {
+		if len(pd.removed)+len(pd.added)+len(pd.changed)+len(pd.duplicated) > 0 {
 			out = append(out, pd)
 		}
 	}
@@ -391,6 +437,15 @@ func migrateFiles(files map[string][]byte, relDir string, from int) (map[string]
 // parseItems adds the items of a data file to items, by key. Lines that
 // don't parse are left out; data.integrity reports them.
 func parseItems(category, name string, data []byte, items map[string]item) {
+	add := func(key string, it item, line []byte) {
+		if prev, ok := items[key]; ok {
+			prev.count++
+			items[key] = prev
+			return
+		}
+		it.file, it.line, it.count = name, append([]byte(nil), line...), 1
+		items[key] = it
+	}
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
@@ -402,7 +457,7 @@ func parseItems(category, name string, data []byte, items map[string]item) {
 			if json.Unmarshal(line, &r) != nil {
 				continue
 			}
-			items[recordKey(r)] = item{target: r.Target, date: r.Date, label: r.Metric, value: r.Value, valued: true}
+			add(RecordKey(r), item{target: r.Target, date: r.Date, label: r.Metric, value: r.Value, valued: true}, line)
 		case store.EventsDir:
 			var e source.Event
 			if json.Unmarshal(line, &e) != nil {
@@ -412,13 +467,13 @@ func parseItems(category, name string, data []byte, items map[string]item) {
 			if len(date) >= 10 {
 				date = date[:10]
 			}
-			items[eventKey(e)] = item{target: e.Target, date: date, label: e.Type}
+			add(EventKey(e), item{target: e.Target, date: date, label: e.Type}, line)
 		case store.ContentDataDir:
 			var c source.ContentEntry
 			if json.Unmarshal(line, &c) != nil || c.ID == "" {
 				continue
 			}
-			items[name+"\x00"+c.ID] = item{target: c.Target, label: strings.TrimSuffix(name, ".jsonl")}
+			add(name+"\x00"+c.ID, item{target: c.Target, label: strings.TrimSuffix(name, ".jsonl")}, line)
 		}
 	}
 }
@@ -434,17 +489,17 @@ func extraKey(b *strings.Builder, extra map[string]string) {
 	}
 }
 
-// recordKey identifies a record within its project, without its value.
-func recordKey(r source.Record) string {
+// RecordKey identifies a record within its project, without its value.
+func RecordKey(r source.Record) string {
 	var b strings.Builder
 	b.WriteString(r.Target + "\x00" + r.Metric + "\x00" + r.Date)
 	extraKey(&b, r.Extra)
 	return b.String()
 }
 
-// eventKey identifies an event within its project. Events have no value, so
+// EventKey identifies an event within its project. Events have no value, so
 // a changed event is a removal and an addition.
-func eventKey(e source.Event) string {
+func EventKey(e source.Event) string {
 	var b strings.Builder
 	b.WriteString(e.Target + "\x00" + e.Type + "\x00" + e.Datetime + "\x00" + e.User)
 	if e.Ref != nil {

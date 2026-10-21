@@ -56,10 +56,15 @@ type Changes struct {
 	New      []OpenFinding
 	Resolved []OpenFinding
 	Open     []OpenFinding
+	// HeldBack are the sources and projects held back after the run.
+	HeldBack []string
+	// Notes are what manual runs did, such as a release.
+	Notes []string
 }
 
-// Changed reports whether findings were opened or resolved.
-func (c Changes) Changed() bool { return len(c.New)+len(c.Resolved) > 0 }
+// Changed reports whether findings were opened or resolved, or a manual run
+// did something.
+func (c Changes) Changed() bool { return len(c.New)+len(c.Resolved)+len(c.Notes) > 0 }
 
 // update replaces the open findings with the run's, keeping when each was
 // first reported. Accepted findings and notes aren't kept open.

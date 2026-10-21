@@ -45,8 +45,8 @@ func dataMessage(runTime time.Time, freshness []fetch.TargetFreshness, heldBack 
 			fmt.Fprintf(&b, "- %s: %s\n", strings.Join(sources, ", "), d)
 		}
 	}
-	if len(heldBack) > 0 {
-		fmt.Fprintf(&b, "\nHeld back: %s\n", strings.Join(heldBack, ", "))
+	for _, h := range heldBack {
+		fmt.Fprintf(&b, "\nHeld back: %s\n", h)
 	}
 	return b.String()
 }

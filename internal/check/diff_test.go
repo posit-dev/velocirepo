@@ -347,3 +347,19 @@ func TestDiffReadsOnlyChangedProjects(t *testing.T) {
 		t.Error("nothing was read")
 	}
 }
+
+// A duplicate added tonight is an error about the night's records; one that
+// was stored already isn't the night's.
+func TestDiffDuplicatesAdded(t *testing.T) {
+	r := newRepo(t)
+	line := metric("posit-dev/positron", "daily_stars", "2026-10-19", 7)
+	r.write("metrics/github/positron/2026-10-19.jsonl", line+line)
+	r.commit("a stored duplicate")
+	r.write("metrics/github/positron/2026-10-19.jsonl", line+line+metric("posit-dev/positron", "daily_stars", "2026-10-20", 1))
+	if fs := r.diff(cfgWith("positron"), Diff{}); len(fs) != 0 {
+		t.Errorf("a stored duplicate in a file touched tonight was reported: %+v", fs)
+	}
+	added := metric("posit-dev/positron", "daily_stars", "2026-10-21", 2)
+	r.write("metrics/github/positron/2026-10-21.jsonl", added+added)
+	requireOnly(t, r.diff(cfgWith("positron"), Diff{}), "data.integrity", Error)
+}

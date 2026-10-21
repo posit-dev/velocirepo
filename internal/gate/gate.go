@@ -54,6 +54,10 @@ type Options struct {
 	Artifacts *archive.Artifacts
 	// NoConcatenate skips concatenation.
 	NoConcatenate bool
+	// Release lands a held-back source/project regardless of its findings;
+	// Discard deletes it, watermarks included.
+	Release string
+	Discard string
 	// OutputPath and SummaryPath are GitHub Actions' step output and job
 	// summary files, if set.
 	OutputPath  string
@@ -78,8 +82,10 @@ type Outcome struct {
 	WouldRestore  []string
 	WouldKeep     []string
 	WouldHoldBack []string
-	DataCommit    string
-	ConcatCommit  string
+	// HeldBack are the sources and projects held back, as source/project.
+	HeldBack     []string
+	DataCommit   string
+	ConcatCommit string
 	Pushed        bool
 	// Other are problems of the run itself, such as a refused permission.
 	Other []check.Finding
@@ -136,12 +142,20 @@ func Run(ctx context.Context, opts Options) (Outcome, error) {
 	}
 	out.Hand, out.Other = hand, other
 
-	// 2. The fetch, without concatenation.
+	// 2. Held-back data is overlaid, so the fetch continues from it and it's
+	// checked again as a whole. That happens when reporting too, so held-back
+	// data lands when enforcing is switched off.
+	held, notes, err := r.prepareHeldBack()
+	if err != nil {
+		return out, err
+	}
+
+	// 3. The fetch, without concatenation.
 	results, stats, archiveFindings := r.fetch(ctx)
 	out.Fetch = results
 	out.Other = append(out.Other, archiveFindings...)
 
-	// 3. The night's changes.
+	// 4. The night's changes.
 	c := &check.Context{Config: r.cfg, DataDir: r.dataDir, Now: r.now, Diff: &check.Diff{Base: "HEAD"}, Reconcilers: opts.Reconcilers,
 		Results: &fetch.RunResults{RunTime: r.now, Results: results, Quota: stats.QuotaSnapshot(), Deprecations: stats.DeprecationsSnapshot()}}
 	night, err := check.Run(ctx, c, check.Default(), r.accepted)
@@ -150,22 +164,41 @@ func Run(ctx context.Context, opts Options) (Outcome, error) {
 	}
 	out.Night = night
 	out.WouldRestore, out.WouldKeep, out.WouldHoldBack = wouldEnforce(night)
+	if r.cfg.Settings.Enforce() {
+		heldNow, err := r.enforce(ctx, night)
+		if err != nil {
+			return out, err
+		}
+		out.HeldBack = heldNow
+	}
+	if err := r.landHeldBack(held, out.HeldBack); err != nil {
+		return out, err
+	}
+	if r.opts.Release != "" {
+		if contains(held, r.opts.Release) {
+			notes = append(notes, "Released the held-back data of "+r.opts.Release+", regardless of its findings.")
+		} else {
+			notes = append(notes, "Nothing is held back for "+r.opts.Release+".")
+		}
+	}
 
-	// 4. The data commit, with the state.
+	// 5. The data commit, with the state.
 	all := r.openFindings(night.Findings, "")
 	all = append(all, hand...)
 	all = append(all, r.openFindings(out.Other, "")...)
 	out.Changes = state.update(all, r.now.UTC().Format("2006-01-02"))
+	out.Changes.Notes = notes
+	out.Changes.HeldBack = out.HeldBack
 	if err := writeState(statePath, state); err != nil {
 		return out, err
 	}
 	freshness, _ := fetch.Freshness(r.cfg, r.dataDir, r.now)
-	out.DataCommit, err = r.git.commitPaths(ctx, dataMessage(r.now, freshness, nil), r.veloRel)
+	out.DataCommit, err = r.git.commitPaths(ctx, dataMessage(r.now, freshness, heldBackNotes(out.HeldBack, night, r.veloRel)), r.veloRel)
 	if err != nil {
 		return out, err
 	}
 
-	// 5. Concatenation, in its own commit.
+	// 6. Concatenation, in its own commit.
 	if !opts.NoConcatenate {
 		commit, findings, err := r.concatenate(ctx)
 		if err != nil {
@@ -181,7 +214,7 @@ func Run(ctx context.Context, opts Options) (Outcome, error) {
 		}
 	}
 
-	// 6. Push, and move the checked ref.
+	// 7. Push, and move the checked ref.
 	raced, err := r.push(ctx, head)
 	if err != nil {
 		return out, err
@@ -197,7 +230,7 @@ func Run(ctx context.Context, opts Options) (Outcome, error) {
 		}
 	}
 
-	// 7. The tracking issue and the job summary.
+	// 8. The tracking issue and the job summary.
 	if opts.Repo != "" {
 		t := tracker{api: githubAPI{Token: opts.RepoToken, Repo: opts.Repo, URL: opts.APIURL}, owners: r.cfg.Settings.Owners, runURL: opts.RunURL}
 		if err := t.update(ctx, out.Changes); err != nil {
@@ -291,6 +324,7 @@ func (r *run) recordFindings(ctx context.Context, statePath string, state *State
 	c := state.update(open, r.now.UTC().Format("2006-01-02"))
 	c.New = append(prevNew, c.New...)
 	c.Resolved = prevResolved
+	c.Notes, c.HeldBack = changes.Notes, changes.HeldBack
 	*changes = c
 	if err := writeState(statePath, *state); err != nil {
 		return err
@@ -575,4 +609,110 @@ func wouldEnforce(night check.Report) (restore, keep, holdBack []string) {
 	sort.Strings(keep)
 	sort.Strings(holdBack)
 	return restore, keep, holdBack
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// prepareHeldBack discards what the run was asked to discard, and overlays
+// the rest. It returns the overlaid sources and projects.
+func (r *run) prepareHeldBack() ([]string, []string, error) {
+	var notes []string
+	if r.opts.Discard != "" {
+		if _, err := os.Stat(r.heldBackPath(r.opts.Discard)); err == nil {
+			if err := os.RemoveAll(r.heldBackPath(r.opts.Discard)); err != nil {
+				return nil, nil, err
+			}
+			notes = append(notes, "Discarded the held-back data of "+r.opts.Discard+"; it's fetched again where it can be.")
+		} else {
+			notes = append(notes, "Nothing is held back for "+r.opts.Discard+".")
+		}
+	}
+	held, err := r.heldBackProjects()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, key := range held {
+		if err := r.overlay(key); err != nil {
+			return nil, nil, fmt.Errorf("overlay held-back %s: %w", key, err)
+		}
+	}
+	return held, notes, nil
+}
+
+// enforce applies the rule to the night's changes and holds back the new
+// records of the sources and projects with blocking errors. It returns
+// what it held back.
+func (r *run) enforce(ctx context.Context, night check.Report) ([]string, error) {
+	diffs, repairs, err := check.CompareData(ctx, r.dataDir, check.Diff{Base: "HEAD"})
+	if err != nil {
+		return nil, err
+	}
+	if err := r.applyRule(diffs, repairs); err != nil {
+		return nil, fmt.Errorf("restore stored data: %w", err)
+	}
+	keys, global := blocked(night.Findings)
+	if global {
+		for _, pd := range diffs {
+			keys[pd.Source+"/"+pd.Project] = true
+		}
+	}
+	delete(keys, r.opts.Release)
+	changed := map[string]bool{}
+	for _, pd := range diffs {
+		changed[pd.Source+"/"+pd.Project] = true
+	}
+	var out []string
+	for key := range keys {
+		if changed[key] {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	for _, key := range out {
+		if err := r.holdBack(ctx, key, diffs); err != nil {
+			return nil, fmt.Errorf("hold back %s: %w", key, err)
+		}
+	}
+	return out, nil
+}
+
+// landHeldBack removes the held-back directories of the projects that were
+// overlaid and aren't held back again: their data is in the data directory
+// now.
+func (r *run) landHeldBack(overlaid, heldNow []string) error {
+	for _, key := range overlaid {
+		if contains(heldNow, key) {
+			continue
+		}
+		if err := os.RemoveAll(r.heldBackPath(key)); err != nil {
+			return err
+		}
+		src, _ := splitKey(key)
+		if entries, err := os.ReadDir(filepath.Join(r.heldBackRoot(), src)); err == nil && len(entries) == 0 {
+			_ = os.Remove(filepath.Join(r.heldBackRoot(), src))
+		}
+	}
+	return nil
+}
+
+// heldBackNotes says, for the commit message, what's held back and why.
+func heldBackNotes(keys []string, night check.Report, veloRel string) []string {
+	var out []string
+	for _, key := range keys {
+		var checks []string
+		for _, f := range night.Findings {
+			if blocks(f) && (f.Source+"/"+f.Project == key || f.Project == "") && !contains(checks, f.Check) {
+				checks = append(checks, f.Check)
+			}
+		}
+		out = append(out, fmt.Sprintf("%s (%s), see %s/", key, strings.Join(checks, ", "), joinRel(veloRel, HeldBackDir+"/"+key)))
+	}
+	return out
 }
