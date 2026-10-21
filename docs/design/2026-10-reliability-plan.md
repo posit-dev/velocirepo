@@ -58,8 +58,10 @@ Phase 0 exists so that parallel streams rarely touch the same lines.
 | `internal/fetch/stats.go` (the HTTP transport) | 1b |
 | `internal/store/aggregate.go` and `internal/store/jsonl.go` | 2c |
 | `internal/store/watermark.go` | 1a |
+| `internal/source/github_events.go` | phase 0 (the snapshot unit), then 1a |
 | `cmd/velocirepo/cmd/check.go` | 1c; in phase 2, 2b and 2d each add flags, and the second to merge rebases |
-| `cmd/velocirepo/cmd/ci_install.go` and `action.yml` | phase 0 (the `@v0` fix), 1a (the schedule only), then 3a, then 3b after 3a is merged, then 5a–5c in separate functions |
+| `cmd/velocirepo/cmd/ci_install.go` | phase 0 (the `@v0` fix), 1a (the schedule only), then 3a, then 3b after 3a is merged, then 5a–5c in separate functions |
+| `action.yml` | 1b (a `fetch-args` input), 2e (the artifact fallback), then 3a, then 3b |
 | `internal/config/config.go` | phase 0 declares the gate and archive settings; 1a, 2c and 3a each add one more, in different phases |
 | `cmd/velocirepo/cmd/root.go` | anyone; each new command adds one line |
 
@@ -84,12 +86,13 @@ Sequential, in one branch (`reliability/interfaces`). Size: small.
 | Task | Files | Contents |
 |---|---|---|
 | 0.1 Findings | `internal/check/finding.go` | The `Finding` type (`check`, `severity`, `source`, `project`, `target`, `message`, `paths`), its stable ID from the check, source, project, target and a check-specific key that never contains counts or values, and the JSON schema of `check.json` |
-| 0.2 Source metadata | `internal/source/meta.go`, every `internal/source/*.go` | The optional interfaces `DayZone(ctx, target, series) (*time.Location, error)`, `PublishedThrough(ctx) (time.Time, error)` (asked once per source and run, not per target), `ArchivePolicy` (for each request: archived or not, and in full or with only the read fields) and `Reconciler`. Every existing source declares UTC, "published through the end date", its archive policy (archived: snapshots, traffic, PyPI, LinkedIn with read fields only, and read fields only for targets that aren't public) and "no reference totals yet". A source without an `ArchivePolicy` isn't archived. |
+| 0.2 Source metadata | `internal/source/meta.go`, every `internal/source/*.go` | The optional interfaces `DayZone(ctx, target, series) (*time.Location, error)`, `PublishedThrough(ctx) (time.Time, error)` (asked once per source and run, not per target), `ArchivePolicy` (for each request: archived or not, and in full or with only the read fields) and `Reconciler`. Each source also declares its freshness limit, which both concatenation and `data.freshness` read. Every existing source declares UTC, "published through the end date", its freshness limit, its archive policy (archived: snapshots, traffic, PyPI, LinkedIn with read fields only, and read fields only for targets that aren't public) and "no reference totals yet". A source without an `ArchivePolicy` isn't archived. |
 | 0.3 Registry tests | `internal/source/meta_test.go` | Every registered source declares an archive policy and a reconciliation status, like the test that keeps badge presets in line with the metrics sources emit |
 | 0.4 Archive record and manifest | `internal/archive/record.go` | One archived exchange: time, job, target, method, redacted URL, redacted request body, status, selected headers, body. The manifest, with every job's and target's options (start date, end date, run time, resolved time zones), and for GitHub the issue and pull request numbers its reaction counts were requested for. The layout `raw/<run-id>/<source>.jsonl.zst` |
 | 0.5 Watermark series | `internal/store/watermark.go` | A series key in the per-target watermarks, so the star history can have its own. Reading old watermark files without it keeps working. |
 | 0.5b Settings | `internal/config/config.go` | `[settings] gate` (`report` or `enforce`, default `report`) and `[settings] archive` (default on), read by later phases. Declared here so that no stream has to add them. |
 | 0.6 Injection points and results | `internal/fetch/fetch.go`, `internal/fetch/results.go`, `cmd/velocirepo/cmd/fetch.go` | The observer, transport wrapper, per-job overrides and concatenation policy in `fetch.Options`. `fetch --results <file>` writes the run's `[]Result` as JSON, with the quota left per API. |
+| 0.6b GitHub's snapshot unit | `internal/source/github_events.go` | Fetch the repository info first and the reaction counts after it, as a unit whose requests don't depend on the event requests: the issue and pull request numbers for the reaction counts are passed in and recorded in the manifest. No change in what's fetched or stored. |
 | 0.7 Action reference | `cmd/velocirepo/cmd/ci_install.go` | `install-ci` maps "latest" to `@v0` (`ci_install.go:141`), so workflows generated with v1.0.0 reference the v0 action. Map it to the current major version. This is a bug today, so it's released on its own as v1.0.1. |
 
 **Acceptance:**
@@ -113,7 +116,7 @@ Worktree `reliability/day-ends`. Size: large. Design: [measure 4](2026-10-reliab
 | `DayZone` for Plausible: the site's time zone from `GET /api/v1/sites/{site}`, cached per run; `[settings.timezones]` overrides it; UTC−12 if neither is available | `internal/source/plausible.go`, `internal/config/config.go` |
 | Resume points per target and series: watermarks of the day each target was fetched through, with the star history as its own series, replacing the source-and-project resume point and the star history's 7-day re-read | `internal/fetch/fetch.go`, `internal/store/watermark.go`, `internal/source/github_events.go` |
 | `PublishedThrough`, asked once per source and run: CRAN from cranlogs' `last-day` endpoint, PyPI from pypistats' latest day for a reference package (`pip`). A watermark moves to the earlier of the end date and the published day; a source that can't tell moves it to the latest day it returned | `internal/source/cran.go`, `internal/source/pypi.go`, `internal/fetch/fetch.go` |
-| Seeding on upgrade, as a one-time migration that raises the data schema version: watermarks are seeded from today's resume points, and the star history's from the latest stored `daily_stars` day per repository. After the migration, a target without a watermark starts from the beginning of its history | `internal/store/migrate.go`, `internal/fetch/fetch.go` |
+| Seeding without a migration: a target without a watermark gets one from its stored data the first time it's fetched, the star history from its latest stored `daily_stars` day and the others from today's resume point; a target without stored data starts from the beginning. The schema version stays the same | `internal/fetch/fetch.go` |
 | `install-ci` schedules the nightly run after the latest time zone of the configured sources | `cmd/velocirepo/cmd/ci_install.go` (one function; 3a later rewrites the template) |
 
 **Tests:**
@@ -124,8 +127,8 @@ Worktree `reliability/day-ends`. Size: large. Design: [measure 4](2026-10-reliab
 - **Daylight saving time:** the margin covers both PDT and PST.
 - **Time zone sources:** `[settings.timezones]` overrides the Sites API, and without either Plausible falls back to UTC−12. Invalid zone names are rejected by config validation.
 - **Explicit end dates:** an end date that hasn't ended is moved back, with a warning.
-- **Upgrading:** on a copy of devrel-io, the migration runs once, and the first run makes about as many requests as a normal night, not a full re-read of every star history.
-- **New targets:** a target added to the config after the migration gets its full history.
+- **Upgrading:** the old workflow template, run with the new binary on a copy of devrel-io's data, succeeds without `migrate`, and makes about as many requests as a normal night, not a full re-read of every star history.
+- **New targets:** a target added to the config later gets its full history.
 - **A single quiet PyPI package:** run on its own with `--project`, its watermark still moves, because the published day comes from the reference package.
 
 **Acceptance:** at 09:30 UTC, devrel-io's real-time sources all end on the same day, and CRAN ends on its published day.
@@ -139,9 +142,8 @@ Worktree `reliability/archive`. Size: medium. Design: [raw response archive](202
 | A transport chain in place of `countingTransport`: counting, rate-limit tracking (quota left per API, from response headers), and capture of the requests each source's `ArchivePolicy` marks as archived | `internal/fetch/stats.go`, `internal/archive/capture.go` |
 | Redaction of secret query parameters and body fields, and a check that refuses an archive containing a known secret | `internal/archive/redact.go` |
 | Read-fields-only archiving: for LinkedIn after its post filter, and for targets that aren't public or whose visibility isn't known yet | `internal/archive/policy.go`, `internal/source/linkedin.go` |
-| GitHub's snapshot unit: repository info first (which also gives the visibility), then the reaction counts, for issue and pull request numbers recorded in the manifest, so that the unit can be replayed without the requests that aren't archived | `internal/source/github_events.go` |
 | The archive writer: zstd JSONL per source, and the manifest from the phase 0 observer | `internal/archive/writer.go` |
-| `fetch --archive <dir>`, off by default | `cmd/velocirepo/cmd/fetch.go` |
+| `fetch --archive <dir>`: capture is off unless a directory is given. The action gets a `fetch-args` input, so a workflow can pass it before the gate exists | `cmd/velocirepo/cmd/fetch.go`, `action.yml` |
 | `Deprecation` and `Sunset` headers of every request, archived or not, in the fetch log | `internal/archive/capture.go`, `internal/store/log.go` |
 
 **Tests:**
@@ -151,7 +153,7 @@ Worktree `reliability/archive`. Size: medium. Design: [raw response archive](202
   - A source without an archive policy isn't archived.
   - LinkedIn drafts and non-public posts never reach the archive.
   - A private repository's responses keep only the read fields, also before its visibility is known.
-- **GitHub's snapshot unit:** its requests don't depend on any request that isn't archived.
+- **Explicit capture:** `fetch` without `--archive` writes no archive.
 - **Manifest:** it records every job's and target's options.
 - **Quota:** rate-limit headers are tracked per API, and appear in `--results`.
 
@@ -197,7 +199,7 @@ Each source's target and credentials:
 | Source | Target | Secret in velocirepo's repository |
 |---|---|---|
 | GitHub events, star history, reconciliation | a public repository, such as velocirepo itself | `GH_TOKEN` |
-| GitHub traffic | velocirepo itself (needs admin access) | `GH_TOKEN` with admin access to velocirepo |
+| GitHub traffic | velocirepo itself | a separate fine-grained token, limited to velocirepo, with only the permission the traffic API needs, stored as its own secret and used only by `live.yml` |
 | CRAN, PyPI, Homebrew, Open VSX, RSS | public packages and feeds | none |
 | Plausible | none public | skipped, unless a `PLAUSIBLE_TOKEN` for a test site is added |
 | YouTube | a public channel | `YOUTUBE_TOKEN` |
@@ -215,7 +217,7 @@ Each source's target and credentials:
   - Accounts without Sites API access can set `[settings.timezones]`.
 - **devrel-io:**
   - Move the nightly run to 09:30 UTC.
-  - Fetch with `--archive` and upload the archive as an artifact for now (a manual workflow edit, until 3a generates it).
+  - Pass `fetch-args: --archive ${{ runner.temp }}/raw` to the action, and add an `actions/upload-artifact` step for that directory, for now (a manual workflow edit, until 3a generates it).
   - For a week, measure the archive's size and check its redaction.
 
 ## Phase 2: building blocks
@@ -251,7 +253,8 @@ Worktree `reliability/diff-checks`. Depends on 1c. Size: medium.
 | Task | Files |
 |---|---|
 | Read the `HEAD` versions of the changed projects' files with `git cat-file --batch`, without a checkout, and compare records by key. A second mode, `--base <commit> --head <commit>`, compares two commits the same way, for commits made by hand | `internal/check/diff.go`, `cmd/velocirepo/cmd/check.go` |
-| `diff.records-removed`, with per-source allowances (deleted comments and forks) | `internal/check/diff.go` |
+| Only record and content files are read; watermark files, the fetch log, the schema version and the gate's state file are excluded | `internal/check/diff.go` |
+| `diff.records-removed`, with per-source allowances (deleted comments and forks). Removals under project IDs no longer in the config are information; records moving from an old project ID to a new one are recognised as a rename; a commit that changes the schema version is compared after mapping old metric names to new ones | `internal/check/diff.go` |
 | `diff.values-changed`, exempting content files | `internal/check/diff.go` |
 | `diff.content-removed`: an ID that disappears from a content file | `internal/check/diff.go` |
 | `diff.repaired`: changes within the scope of a `Velocirepo-Repair: <source>/<project> <from>..<to>` trailer, or of a repair run, removals included, as warnings. Diffs compare sets of keys | `internal/check/diff.go` |
@@ -264,6 +267,8 @@ Worktree `reliability/diff-checks`. Depends on 1c. Size: medium.
 - **Content files:** content updated in place isn't reported, but a content entry that disappears is.
 - **Repairs:** changes inside a repair's scope are warnings, including records that move to another date and events whose `Extra` changes; outside it, they're errors.
 - **Two commits:** `--base` and `--head` find a deletion spread over three commits.
+- **velocirepo's own removals:** a commit made after `rename-project`, one after `remove-project --delete-data`, and one after `migrate` report no errors.
+- **Excluded files:** a night that only moves watermarks reports nothing.
 - **Cost:** only the changed projects' files are read.
 
 **Acceptance:** on devrel-io's history since July, `diff.records-removed` and `diff.content-removed` report exactly the known incidents. `diff.values-changed` is left out of this historical check: before 1a, nightly runs rewrote star days in the 7-day re-read window by design.
@@ -274,14 +279,16 @@ Worktree `reliability/concatenation`. Depends on 1a (watermarks, and both change
 
 | Task | Files |
 |---|---|
-| Records for a period that's already concatenated are merged directly into its period file with newest-wins, instead of being written as daily files | `internal/store/jsonl.go` |
+| Records for a period that's already concatenated are written directly into its period file, instead of as daily files. Every write, to a daily file or a period file, replaces for each target and date it covers the stored records of the metrics or event types it contains | `internal/store/jsonl.go`, `internal/store/aggregate.go` |
 | A month is concatenated on or after the concatenation day (`[settings] concatenate_on_day`, default 8), once every target and series of the project in the current config has a watermark past its last day, or is further behind than its freshness limit; set through phase 0's concatenation policy | `internal/store/aggregate.go`, `internal/config/config.go` |
-| `data.freshness` from each target's watermark, with a limit for every source | `internal/check/freshness.go` |
+| `data.freshness` from each target's watermark, with the limits declared in the source metadata | `internal/check/freshness.go` |
 
 **Tests:**
 - **The calendar:** before the 8th nothing is concatenated; on or after the 8th the month is, and in January also the year.
 - **The data:** a project with one lagging target waits, until that target is further behind than its freshness limit. A target removed from the config doesn't count.
-- **Late records:** a backfill, a new target in an already concatenated project, and a replay all merge into the existing period files, and `data.integrity` finds no overlap.
+- **Late records:** a backfill, a new target in an already concatenated project, and a replay all go into the existing period files, and `data.integrity` finds no overlap.
+- **Replacing per metric:** a write of an event with a changed `Extra` into a concatenated month leaves only the new event. A star history write for a date leaves that date's `total_reactions` in place.
+- **Missed concatenation day:** a month whose run on the 8th is missed is concatenated on the next run.
 - **Freshness:**
   - Every registered source has a limit, defined as the most days allowed between its watermark and today in UTC.
   - Each source has a boundary test: at its limit nothing is reported, one day more is. For CRAN, three days behind is fine and four is reported.
@@ -319,14 +326,15 @@ Worktree `reliability/archive-storage`. Depends on 1b. Size: small.
 | Task | Files |
 |---|---|
 | A storage interface with one implementation: release assets in the data repository (`raw-YYYY-MM`), uploaded with the workflow token, kept forever. Releases are created with `prerelease: true` and `make_latest: false`. `[settings] archive = false` turns the archive off | `internal/archive/store.go`, `internal/archive/release.go` |
-| A failed upload is retried; if it still fails, the archive is saved as a workflow artifact, and the next run uploads pending artifacts found through the Actions API. An archive still pending after seven days is an error | `internal/archive/store.go`, `internal/archive/pending.go` |
+| A failed upload is retried; if it still fails, the gate sets an output with the archive's path, and the action saves it with an `actions/upload-artifact` step, kept for 7 days. The next run uploads every artifact that has no matching release asset, idempotently by asset name. An archive pending for six days is an error. An archive in which a secret is found is neither uploaded nor saved, and is reported as an error naming the source | `internal/archive/store.go`, `internal/archive/pending.go`, `action.yml` |
 | `velocirepo download-archive <run-id>`, for replays, named verb-first like the other commands | `cmd/velocirepo/cmd/download_archive.go` |
 
 **Tests:**
 - **Upload and download:** both go through an httptest server that imitates GitHub's release API.
 - **Release parameters:** every release is created as a pre-release that isn't the latest.
 - **Errors:** a 403 becomes a warning that names the missing permission.
-- **Catching up:** starting from a fresh workspace, a run after a failed upload finds the pending artifact and uploads both runs. An archive pending for seven days is an error.
+- **Catching up:** starting from a fresh workspace, a run after a failed upload finds the pending artifact and uploads both runs. An archive that was already uploaded is skipped. An archive pending for six days is an error.
+- **Secrets:** an archive containing a secret is neither uploaded nor saved, and is reported.
 
 **Acceptance:** a devrel-io archive is uploaded as a release asset, downloaded with `download-archive`, and replayed.
 
@@ -345,7 +353,7 @@ Worktree `reliability/gate`. Depends on everything in phase 2. Size: large. Desi
 
 | Task | Files |
 |---|---|
-| `velocirepo gate --report-only`. It checks the commits since `refs/velocirepo/checked`, runs the fetch itself (so that phase 4 can overlay held-back data), runs `check`, uploads the archive, concatenates on the concatenation day in its own commit, makes the data commit, pushes, moves the checked ref, updates the tracking issue, and writes the job summary and annotations. It only enforces with `[settings] gate = "enforce"`; otherwise, and in this phase always, it commits everything, as today, and reports what it would restore, keep and hold back | `internal/gate/*.go`, `cmd/velocirepo/cmd/gate.go` |
+| `velocirepo gate`. It checks the commits since `refs/velocirepo/checked`, runs the fetch and `check` in-process (so that phase 4 can overlay held-back data), uploads the archive, concatenates on or after the concatenation day in its own commit, makes the data commit, pushes, moves the checked ref, updates the tracking issue, and writes the job summary and annotations. It only enforces with `[settings] gate = "enforce"`, which is the only switch; in this phase it always commits everything, as today, and reports what it would restore, keep and hold back | `internal/gate/*.go`, `cmd/velocirepo/cmd/gate.go` |
 | The gate's state: `velocirepo/gate-state.json`, committed when it changes, with the open findings and, for findings about commits made by hand, their commit. The first run creates the checked ref at `HEAD`; a ref that's no longer an ancestor of `main` is reported and reset | `internal/gate/state.go` |
 | A push rejected because someone pushed during the run: fetch the new `main`, check its new commits, rebase, rerun the checks for projects both touched, push, and only then move the checked ref | `internal/gate/push.go` |
 | Commit messages: the run's date in the subject, and how far each source is stored in the body | `internal/gate/commit.go` |
@@ -353,7 +361,7 @@ Worktree `reliability/gate`. Depends on everything in phase 2. Size: large. Desi
 | `[settings] owners`, filled in by `install-ci`, which checks that owners have access | `internal/config/config.go`, `cmd/velocirepo/cmd/ci_install.go` |
 | Tokens: `GITHUB_TOKEN` keeps meaning the personal access token. The gate gets the workflow token through `--repo-token` or `VELOCIREPO_REPO_TOKEN`, from the action's new `repo-token` input, which defaults to `github.token` | `internal/gate/*.go`, `action.yml` |
 | The action's modes: `mode` defaults to `fetch`, which runs `velocirepo fetch` as today; `gate`, `check-heartbeat` and `digest` run those commands | `action.yml` |
-| The nightly workflow template: `mode: gate`, its own concurrency group, the history back to the checked ref, and the permissions `contents: write`, `issues: write` and `actions: read` | `cmd/velocirepo/cmd/ci_install.go` |
+| The nightly workflow template: `mode: gate`, its own concurrency group, the history back to the checked ref, the permissions `contents: write`, `issues: write` and `actions: read`, and the `release`, `discard` and `repair` inputs. Until 4a, those inputs only report that they're available from v1.4.0 | `cmd/velocirepo/cmd/ci_install.go` |
 
 **Tests:**
 - **GitHub's API** (issues, assignees, comments, releases) is an httptest server, as in the existing `sync-secrets` tests. Git operations run against a real temporary repository.
@@ -367,7 +375,8 @@ Worktree `reliability/gate`. Depends on everything in phase 2. Size: large. Desi
 - **Old workflows:** the old workflow template, rendered against the new `action.yml`, still fetches, concatenates and commits as before.
 - **Report-only mode:** it commits everything, and the summary lists what enforcing would have done. A config without `[settings] gate` reports, also with a later binary.
 - **State:** the first run creates the checked ref at `HEAD`; a force-pushed `main` makes the ref a non-ancestor, which is reported and reset; findings keep their state across runs.
-- **Concatenation:** it happens on the 8th in its own commit, checked by `concatenate.records-moved`.
+- **Concatenation:** it happens on or after the 8th, in its own commit, checked by `concatenate.records-moved`; a missed 8th is caught up the next night.
+- **The switch:** a v1.3.0 template with `[settings] gate = "enforce"` enforces on v1.4.0, and without the setting it reports.
 - **Workflows:** the generated workflows match golden files. CI also runs `actionlint` (MIT) on them.
 
 **Acceptance:**
@@ -381,13 +390,14 @@ Worktree `reliability/heartbeat`. Depends on 3a: branch off `main` after 3a is m
 
 | Task | Files |
 |---|---|
-| `velocirepo check-heartbeat`. It asks GitHub's Actions API whether the nightly workflow has started a run since its scheduled time that day (a run in progress counts), and fails and comments on the issue (or opens it) if not. Once the issue has been open for three days, it adds one escalation comment. It never rewrites the issue's body | `internal/gate/heartbeat.go`, `cmd/velocirepo/cmd/check_heartbeat.go` |
+| `velocirepo check-heartbeat`. It asks GitHub's Actions API whether the nightly workflow has started a scheduled run (`event=schedule`) since its scheduled time that day (a run in progress counts, manual runs don't), and fails and comments on the issue (or opens it) if not. Once the issue has been open for three days, it adds one escalation comment. It never rewrites the issue's body | `internal/gate/heartbeat.go`, `cmd/velocirepo/cmd/check_heartbeat.go` |
 | The heartbeat workflow template, scheduled by `install-ci` three hours after the nightly run, running the action with `mode: check-heartbeat`, with `issues: write` and `actions: read` | `cmd/velocirepo/cmd/ci_install.go` |
 
 **Tests:**
 - **A single missed night:** with no nightly run since that day's scheduled time, the heartbeat fails and reports it the same day.
 - **An open issue:** it doesn't fail the heartbeat. The escalation comment is added once, after three days.
 - **A long nightly run:** a run still in progress counts as present.
+- **Manual runs:** a `release` run on a day without a scheduled run doesn't hide the missed night.
 - **Permissions:** the generated workflow grants what its calls need, checked with golden files and `actionlint`.
 - **The schedule:** `install-ci` puts the heartbeat after the nightly run, also when the nightly run is late because of the UTC−12 fallback.
 
@@ -413,9 +423,9 @@ Worktree `reliability/gate-enforce`. Size: medium. Design: [the rule](2026-10-re
 |---|---|
 | The rule: removed records are restored from `HEAD`, and changed values keep their stored value, both reported | `internal/gate/rule.go` |
 | Holding back: for a source and project with an error finding about the night's new records, everything the night changed for it (new records, watermark entries, content changes) goes into `velocirepo/held-back/<source>/<project>/`, and its paths in `data/` stay as on `HEAD` | `internal/gate/holdback.go` |
-| Overlaying: before the fetch, a held-back project's records are overlaid on its stored data, so its watermarks, resume points and the filter for unchanged totals include them; after the fetch, its new records are checked as a whole, and land through the store with newest-wins once they pass | `internal/gate/holdback.go` |
+| Overlaying: before the fetch, a held-back project's records are overlaid on its stored data through the store's write path, so they go into period files that were concatenated in the meantime, so its watermarks, resume points and the filter for unchanged totals include them; after the fetch, its new records are checked as a whole, and land through the store with newest-wins once they pass | `internal/gate/holdback.go` |
 | Manual runs: `release: <source>/<project>` lands held-back data regardless of findings; `discard: <source>/<project>` deletes it, watermarks included; both are recorded in the issue | `internal/gate/release.go`, `cmd/velocirepo/cmd/ci_install.go` |
-| Repairs: `repair: <source> <project> <from> <to>` re-fetches the range, or replays it where it's archived and the API no longer has it, reports the changes in scope as `diff.repaired`, and commits them with a `Velocirepo-Repair:` trailer | `internal/gate/repair.go`, `cmd/velocirepo/cmd/ci_install.go` |
+| Repairs: `repair: <source> <project> <from> <to>` re-fetches the requests of the range that can be re-fetched, replays the archived ones from the runs in the range (or skips them without an archive), never re-fetches snapshots for a past range, reports the changes in scope as `diff.repaired`, and commits them with a `Velocirepo-Repair:` trailer | `internal/gate/repair.go` |
 | Which findings block: only errors about the night's new records, attributed by the keys added that night, per source and project; errors that don't belong to a project hold back everything; warnings never block | `internal/gate/rule.go` |
 | Enforcing only with `[settings] gate = "enforce"` | `internal/gate/rule.go` |
 
@@ -428,7 +438,9 @@ Worktree `reliability/gate-enforce`. Size: medium. Design: [the rule](2026-10-re
 - **Totals that change back:** a total that goes from 100 to 105 on the first held-back night and back to 100 on the second lands as 100.
 - **Continuing from held-back data:** the second night of a held-back project doesn't re-fetch the first night's days.
 - **New targets in concatenated projects:** a target added to a project whose months are concatenated lands its history in the period files.
-- **Repairs:** the October `total_reactions` incident is repaired by replay, and the Plausible pagination incident by re-fetch, from start to finish.
+- **Repairs:** the October `total_reactions` incident is repaired by replay, and the Plausible pagination incident by re-fetch, from start to finish. Re-fetching a past GitHub range leaves the stored `total_stars` and `total_reactions` unchanged, or replays them from the archive.
+- **Held back across the 8th:** a project held back before the concatenation day and passing after it lands its records in the new monthly file.
+- **Failed jobs:** a GitHub job that fails stores nothing, holds nothing back, and is fetched again the next night.
 - **Manual runs:** `release` lands held-back data, and `discard` makes the next run re-fetch it.
 - **Opt-in:** without `[settings] gate = "enforce"`, the v1.4.0 gate still only reports.
 - **Global findings:** a global error holds back everything, and a global warning holds back nothing.
