@@ -17,6 +17,7 @@ user_guide:
       - querying.qmd
       - exporting.qmd
       - indicators.qmd
+      - reliability.qmd
   - section: "Features"
     contents:
       - badges.qmd

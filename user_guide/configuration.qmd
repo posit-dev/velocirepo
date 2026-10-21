@@ -63,7 +63,33 @@ velocirepo uses API tokens to authenticate with external services. Tokens can be
 | **OpenVSX** | Total downloads, reviews, ratings |
 | **YouTube** | Views, likes, comments, subscribers (channel and per-video) |
 
-By default each fetch runs through yesterday (UTC). Plausible is the exception: it reports days in each site's own time zone, and at an early-morning UTC run yesterday is still in progress for sites in the Americas. So Plausible is fetched through the day before yesterday, which is complete everywhere. An explicit `--end-date` overrides both.
+## Which days are fetched
+
+Every source counts its days in a time zone of its own: GitHub's star history in US Pacific time, Plausible in each site's time zone, the others in UTC. A day is fetched once it has ended in its time zone, plus an hour for the source to finish counting it, and never again. CRAN and PyPI publish late; they're fetched through the last day they've published. So nothing is stored while it's still in progress, and a day that wasn't fetched is fetched by the next run.
+
+Each target remembers how far it has been fetched in its project's `_watermark.json` (`_watermark-stars.json` for the star history), and the next fetch continues from there. An explicit `--start-date` and `--end-date` override that.
+
+`install-ci` schedules the nightly run an hour after the last of those days has ended, at half past: 09:30 UTC with GitHub's star history, later with Plausible sites in the Americas.
+
+## Settings
+
+```toml
+[settings]
+# Report what the gate would do (the default), or enforce it.
+gate = "enforce"
+# The day of the month from which the previous month is concatenated.
+concatenate_on_day = 8
+# Archive the responses of data that can't be fetched again (on by default).
+archive = true
+# Assigned to (users) or mentioned in (teams) the tracking issue.
+owners = ["jeroenjanssens", "@posit-dev/devrel"]
+
+# A Plausible site's time zone, for accounts without access to the Sites API.
+[settings.timezones]
+"example.com" = "America/New_York"
+```
+
+See [Keeping the data right](reliability.qmd) for the gate, the archive and the tracking issue.
 
 ## Next steps
 

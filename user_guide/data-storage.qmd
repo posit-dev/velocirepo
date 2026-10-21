@@ -75,25 +75,13 @@ LinkedIn writes post metadata to `velocirepo/data/content/linkedin/<project-id>/
 
 ## Concatenation
 
-After every fetch, daily files are concatenated into monthly files, and monthly files into yearly files, to keep the file count manageable for long-running histories. A month is concatenated once it has ended *and* its last day has been stored. For example, `2026-01.jsonl` is written once data for 31 January 2026 (or a later day) is in place; a year needs 31 December. If the last day is still missing — the fetch failed that night, or the source publishes its data a day late, as CRAN does — the month stays as daily files and the next fetch fills the gap first. The original files are removed after concatenation.
+Daily files are concatenated into monthly files, and monthly files into yearly files, to keep the file count manageable for long-running histories. A month is concatenated on or after the 8th of the following month (`[settings] concatenate_on_day`), once every target and series of the project in the current config has been fetched past the month's end. A target that's further behind than its source's freshness limit doesn't hold the others up: `velocirepo check` reports it as `data.freshness`. A year is concatenated with its December, and yearly files are kept.
 
-The next fetch resumes the day after the latest stored date, and a monthly or yearly file counts as stored through the last day of its period.
+Waiting a week keeps corrections small: most problems surface in the first days, and while the month is still in daily files, a correction only touches those. A missed concatenation day is caught up by the next run. In the nightly workflow, concatenation is a commit of its own, checked to move records between files without changing them.
 
-### Backfilling and repairing
+Data for a day whose month or year is already concatenated, from a backfill, a repair or a new target, is written into that period file. velocirepo never creates daily files next to one; `validate-data` reports such an overlap as something made outside velocirepo.
 
-Use `--start-date` and `--end-date` to fetch a past range again, for example to backfill a target you just added or to fill a gap:
-
-```bash
-velocirepo fetch-cran --start-date 2026-07-31 --end-date 2026-07-31
-```
-
-Data for a period that has already been concatenated is merged into its monthly or yearly file. When the same record (same metric, target, date and `extra`) exists twice, the more recently written one wins, so a re-fetch corrects earlier values.
-
-::: {.callout-warning}
-Versions of velocirepo before this one replaced a monthly or yearly file with whatever daily files were present. They also concatenated months whose last day was missing, which then never got fetched. Upgrade before backfilling into past months. If a monthly or yearly file shrank after a backfill, restore it from git history.
-:::
-
-`velocirepo validate-data` reports daily files next to their month's file, monthly files next to their year's file, and temp files left by interrupted writes. Queries count overlapping data twice until it's merged; `--fix` merges or removes them.
+A write replaces, for every target and day it covers, the stored records of the metrics or event types it contains; other metrics of the same target and day stay. So a re-fetch corrects earlier values, and a repair can also remove an event that's gone.
 
 ## Migrating data
 
@@ -120,6 +108,15 @@ This is safe to run repeatedly — all migrations are idempotent. To merge data 
 ## Repository layout
 
 You can either keep metrics in the same repository as your code, or create a dedicated metrics repository. A separate repo is useful when you want to track multiple projects in one place or keep metric history out of your main codebase.
+
+Next to the data, `velocirepo/` holds:
+
+- `data/`, the data directory, which queries, views and `build-db` read;
+- `checks.toml`, the findings you've accepted;
+- `gate-state.json`, the findings the nightly gate keeps open;
+- `held-back/<source>/<project>/`, data the gate holds back, in the same format as the data and invisible to queries.
+
+Raw API responses archived for replays aren't committed: they're stored as release assets (see [Keeping the data right](reliability.qmd#the-archive)).
 
 ## Next steps
 
