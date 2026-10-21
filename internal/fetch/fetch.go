@@ -31,6 +31,23 @@ type Options struct {
 	// compaction may close, so tests can run the orchestrator on a simulated
 	// clock.
 	Now func() time.Time
+	// WrapTransport wraps the HTTP transport every source uses, for example
+	// to capture responses for the archive.
+	WrapTransport func(http.RoundTripper) http.RoundTripper
+	// OnJob is called for every job with its resolved options, before it
+	// runs.
+	OnJob func(JobInfo)
+	// Concatenate replaces the concatenation after the fetch; nil uses
+	// store.Aggregate. It isn't called with NoConcatenate.
+	Concatenate func(dataDir string, now time.Time) error
+}
+
+// JobInfo describes a fetch job and the options it runs with.
+type JobInfo struct {
+	Source  string
+	Project string
+	Targets []string
+	Options source.FetchOptions
 }
 
 func (o Options) now() time.Time {
@@ -230,7 +247,7 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 			jobEnd = endDate.AddDate(0, 0, -settleDays[job.sourceName])
 		}
 		g.Go(func() error {
-			resultsCh <- runJob(gctx, dataDir, jobEnd, job)
+			resultsCh <- runJob(gctx, dataDir, jobEnd, job, opts.OnJob)
 			return nil
 		})
 	}
@@ -257,7 +274,11 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	<-done
 
 	if !opts.NoConcatenate {
-		if err := store.Aggregate(dataDir, opts.now()); err != nil {
+		concatenate := store.Aggregate
+		if opts.Concatenate != nil {
+			concatenate = opts.Concatenate
+		}
+		if err := concatenate(dataDir, opts.now()); err != nil {
 			return results, fmt.Errorf("concatenation: %w", err)
 		}
 	}
@@ -265,7 +286,7 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	return results, nil
 }
 
-func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob) []Result {
+func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob, onJob func(JobInfo)) []Result {
 	started := time.Now()
 	if job.startErr != nil {
 		return []Result{{
@@ -295,13 +316,15 @@ func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob
 				Error:     fmt.Sprintf("read stored stars: %v", err),
 			}}
 		}
-		return runEventJob(ctx, dataDir, job, source.FetchOptions{
+		opts := source.FetchOptions{
 			ProjectID:           job.projectID,
 			StartDate:           job.startDate,
 			EndDate:             endDate,
 			DataDir:             dataDir,
 			StarHistoryBackfill: backfill,
-		}, started)
+		}
+		notifyJob(onJob, job, opts)
+		return runEventJob(ctx, dataDir, job, opts, started)
 	}
 
 	if len(job.sources) == 0 {
@@ -313,12 +336,22 @@ func runJob(ctx context.Context, dataDir string, endDate time.Time, job fetchJob
 		}}
 	}
 
-	return runMetricJob(ctx, dataDir, job, source.FetchOptions{
+	opts := source.FetchOptions{
 		ProjectID: job.projectID,
 		StartDate: job.startDate,
 		EndDate:   endDate,
 		DataDir:   dataDir,
-	}, started)
+	}
+	notifyJob(onJob, job, opts)
+	return runMetricJob(ctx, dataDir, job, opts, started)
+}
+
+func notifyJob(onJob func(JobInfo), job fetchJob, opts source.FetchOptions) {
+	if onJob == nil {
+		return
+	}
+	targets := append([]string(nil), job.eventTargets...)
+	onJob(JobInfo{Source: job.sourceName, Project: job.projectID, Targets: targets, Options: opts})
 }
 
 // starHistoryBackfill returns the job's repositories that have no daily_stars
@@ -599,10 +632,18 @@ func missingToken(token, reason string) string {
 }
 
 func clientForOpts(opts *Options) *http.Client {
+	client := &http.Client{Timeout: 30 * time.Second}
 	if opts.Stats != nil {
-		return CountingClient(opts.Stats)
+		client = CountingClient(opts.Stats)
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	if opts.WrapTransport != nil {
+		base := client.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		client.Transport = opts.WrapTransport(base)
+	}
+	return client
 }
 
 func All(ctx context.Context, cfg *config.Config, tokens Tokens, opts Options) ([]Result, error) {

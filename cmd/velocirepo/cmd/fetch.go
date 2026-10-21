@@ -22,6 +22,7 @@ var (
 	fetchStartDate string
 	fetchEndDate   string
 	noConcatenate  bool
+	fetchResults   string
 )
 
 func addFetchFlags(cmd *cobra.Command) {
@@ -29,6 +30,7 @@ func addFetchFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&fetchStartDate, "start-date", "", "start date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&fetchEndDate, "end-date", "", "end date (YYYY-MM-DD, default: yesterday)")
 	cmd.Flags().BoolVar(&noConcatenate, "no-concatenate", false, "skip concatenation after fetch")
+	cmd.Flags().StringVar(&fetchResults, "results", "", "write what every job did to this JSON file")
 	cmd.GroupID = "fetch"
 }
 
@@ -100,6 +102,11 @@ func renderFetchResults(results []fetch.Result) {
 func finishFetch(opts fetch.Options, results []fetch.Result, fetchErr error, command string) error {
 	renderFetchResults(results)
 	writeFetchLog(results, command)
+	if fetchResults != "" {
+		if err := fetch.WriteResults(fetchResults, results, time.Now()); err != nil {
+			slog.Warn("write results", "error", err)
+		}
+	}
 
 	if opts.Stats != nil {
 		ui.FetchSummary(ui.FetchStats{

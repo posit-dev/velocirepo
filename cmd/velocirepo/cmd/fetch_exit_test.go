@@ -46,3 +46,23 @@ func TestWarningsAreShownByDefault(t *testing.T) {
 		t.Error("info messages are shown without --verbose")
 	}
 }
+
+// fetch --results writes what every job did, also when one failed, so that
+// check and gate can read it.
+func TestFetchWritesResults(t *testing.T) {
+	cfgPath := setupTestConfig(t, `[data]
+dir = "data"
+
+[projects.broken]
+github = "not-a-repo"
+`)
+	path := filepath.Join(t.TempDir(), "results.json")
+	_, _, err := execCmd(cfgPath, "fetch-github", "--results", path)
+	if err == nil {
+		t.Fatal("expected the failed job to fail the command")
+	}
+	results := readFileString(t, path)
+	if !strings.Contains(results, `"project_id": "broken"`) || !strings.Contains(results, "invalid github repo") {
+		t.Errorf("results = %s", results)
+	}
+}
