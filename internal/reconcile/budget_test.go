@@ -76,6 +76,7 @@ func (monthly) ReferenceTotals(context.Context, []string) ([]source.ReferenceTot
 	return nil, nil
 }
 func (m monthly) MonthlyRequests() int { return 4 }
+func (m monthly) MonthlyQuota() string { return SearchQuota }
 func (m monthly) MonthlyReferenceTotals(_ context.Context, targets []string, from, through time.Time, _ func(context.Context) error) ([]source.ReferenceTotal, error) {
 	var out []source.ReferenceTotal
 	for _, t := range m.totals {

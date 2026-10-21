@@ -71,8 +71,11 @@ func init() {
 		Name:      "pypi",
 		Freshness: map[string]int{"": 2},
 		// pypistats keeps about 180 days.
-		Archive:           ArchiveFull,
-		NoReferenceTotals: "not implemented yet",
+		Archive: ArchiveFull,
+		// pypistats' recent totals of a week and a month don't add up to
+		// its daily data, which they're computed over other windows than;
+		// its last day is the data itself.
+		NoReferenceTotals: "pypistats' recent totals aren't computed over the daily data's windows",
 	})
 }
 

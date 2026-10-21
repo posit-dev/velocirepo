@@ -201,7 +201,7 @@ func init() {
 		Name:      "plausible",
 		Freshness: map[string]int{"": 2},
 		// Plausible keeps the full history.
-		Archive:           NotArchived,
-		NoReferenceTotals: "not implemented yet",
+		Archive:    NotArchived,
+		Reconciles: true,
 	})
 }

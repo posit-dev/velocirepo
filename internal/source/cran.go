@@ -73,8 +73,8 @@ func init() {
 		Name:      "cran",
 		Freshness: map[string]int{"": 3},
 		// cranlogs keeps the full history and publishes two days late.
-		Archive:           NotArchived,
-		NoReferenceTotals: "not implemented yet",
+		Archive:    NotArchived,
+		Reconciles: true,
 	})
 }
 

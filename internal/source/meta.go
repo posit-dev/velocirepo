@@ -188,4 +188,7 @@ type MonthlyReconciler interface {
 	MonthlyReferenceTotals(ctx context.Context, targets []string, from, through time.Time, wait func(context.Context) error) ([]ReferenceTotal, error)
 	// MonthlyRequests is how many requests a target takes.
 	MonthlyRequests() int
+	// MonthlyQuota is the quota those requests use, as fetch --results
+	// names it; "" if there's none.
+	MonthlyQuota() string
 }

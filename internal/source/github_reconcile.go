@@ -119,6 +119,9 @@ var _ MonthlyReconciler = (*GitHubEvents)(nil)
 // MonthlyRequests is how many searches one repository's month takes.
 func (g *GitHubEvents) MonthlyRequests() int { return len(githubMonthlySearches) }
 
+// MonthlyQuota is the search API's, which only reconciliation uses.
+func (g *GitHubEvents) MonthlyQuota() string { return "api.github.com/search" }
+
 // MonthlyReferenceTotals returns, per repository, the numbers of issues and
 // pull requests opened, closed and merged from one day through another, in
 // UTC, from the search API. They find gaps that all-time totals don't, such

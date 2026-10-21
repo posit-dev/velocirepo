@@ -195,3 +195,33 @@ func TestLiveYouTube(t *testing.T) {
 func TestLiveLinkedIn(t *testing.T) {
 	t.Skip("skipped: LinkedIn has no public target, and its tokens expire after 60 days")
 }
+
+// The reference endpoints, so a change in their shape is noticed as a
+// broken reference, not as a mismatch in the data.
+func TestLiveReferenceTotals(t *testing.T) {
+	from, through := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	t.Run("github", func(t *testing.T) {
+		g := &GitHubEvents{Client: liveClient(), Token: liveSecret(t, "GITHUB_TOKEN")}
+		totals, err := g.ReferenceTotals(context.Background(), []string{"posit-dev/velocirepo", "tidyverse/ggplot2"})
+		if err != nil || len(totals) != 10 {
+			t.Fatalf("totals = %+v, %v", totals, err)
+		}
+		monthly, err := g.MonthlyReferenceTotals(context.Background(), []string{"tidyverse/ggplot2"}, from, through, nil)
+		if err != nil || len(monthly) != 4 || monthly[0].Unavailable != "" {
+			t.Errorf("monthly = %+v, %v", monthly, err)
+		}
+	})
+	t.Run("cran", func(t *testing.T) {
+		totals, err := (&CRAN{Client: liveClient()}).MonthlyReferenceTotals(context.Background(), []string{"dplyr"}, from, through, nil)
+		if err != nil || len(totals) != 1 || totals[0].Value == 0 {
+			t.Errorf("totals = %+v, %v", totals, err)
+		}
+	})
+	t.Run("plausible", func(t *testing.T) {
+		p := &Plausible{Client: liveClient(), APIKey: liveSecret(t, "PLAUSIBLE_TOKEN")}
+		totals, err := p.MonthlyReferenceTotals(context.Background(), []string{liveSecret(t, "PLAUSIBLE_TEST_SITE")}, from, through, nil)
+		if err != nil || len(totals) != 2 || totals[0].Unavailable != "" {
+			t.Errorf("totals = %+v, %v", totals, err)
+		}
+	})
+}

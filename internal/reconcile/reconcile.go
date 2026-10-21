@@ -126,22 +126,29 @@ func Run(ctx context.Context, cfg *config.Config, dataDir string, opts Options, 
 		if !ok {
 			continue
 		}
+		quota := monthly.MonthlyQuota()
 		var tonight, over []string
 		for _, t := range Tonight(targets, opts.Now) {
-			if budget.Allow(SearchQuota, monthly.MonthlyRequests()) {
+			if budget.Allow(quota, monthly.MonthlyRequests()) {
 				tonight = append(tonight, t)
 			} else {
 				over = append(over, t)
 			}
 		}
 		if len(over) > 0 {
-			skipped = append(skipped, Skipped{Source: name, Quota: SearchQuota, Targets: over, Monthly: true})
+			skipped = append(skipped, Skipped{Source: name, Quota: quota, Targets: over, Monthly: true})
 		}
 		if len(tonight) == 0 {
 			continue
 		}
 		from, through := LastCompleteMonth(opts.Now)
-		refs, err := monthly.MonthlyReferenceTotals(ctx, tonight, from, through, wait)
+		// Only the search API is paced; it's the only one with a per-minute
+		// limit of its own.
+		var pace func(context.Context) error
+		if quota == SearchQuota {
+			pace = wait
+		}
+		refs, err := monthly.MonthlyReferenceTotals(ctx, tonight, from, through, pace)
 		results, err := compare(dataDir, name, projectsOf, tonight, refs, err, opts.Now, from, through)
 		if err != nil {
 			return out, skipped, err

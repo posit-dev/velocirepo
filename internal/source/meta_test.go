@@ -31,6 +31,22 @@ func TestEverySourceDeclaresItsMetadata(t *testing.T) {
 	}
 }
 
+// A source that declares reference totals implements them, and one that
+// implements them declares them.
+func TestReconcilersAreDeclared(t *testing.T) {
+	sources := map[string]any{
+		"github": &GitHubEvents{}, "github-traffic": &GitHubTraffic{}, "pypi": &PyPI{}, "cran": &CRAN{}, "homebrew": &Homebrew{},
+		"plausible": &Plausible{}, "openvsx": &OpenVSX{}, "youtube": &YouTube{}, "linkedin": &LinkedIn{}, "rss": &RSS{},
+	}
+	for name, src := range sources {
+		m, _ := MetaFor(name)
+		_, implements := src.(Reconciler)
+		if m.Reconciles != implements {
+			t.Errorf("%s declares Reconciles = %v, but implementing Reconciler is %v", name, m.Reconciles, implements)
+		}
+	}
+}
+
 func TestFreshnessLimitFallsBackToTheMainSeries(t *testing.T) {
 	if limit, ok := FreshnessLimit("github", "stars"); !ok || limit != 2 {
 		t.Errorf("github stars limit = %d, %v; want 2", limit, ok)
