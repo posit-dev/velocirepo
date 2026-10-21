@@ -46,6 +46,8 @@ type Options struct {
 	BuildDB func()
 	// Reconcilers give reference totals; nil means none.
 	Reconcilers map[string]source.Reconciler
+	// Checks are the checks of the night's changes; nil means check.Default.
+	Checks []check.Checker
 	// ArchiveDir is where the run's archive is written, outside the work
 	// tree; "" means no archive.
 	ArchiveDir string
@@ -176,7 +178,11 @@ func Run(ctx context.Context, opts Options) (Outcome, error) {
 	// 4. The night's changes.
 	c := &check.Context{Config: r.cfg, DataDir: r.dataDir, Now: r.now, Diff: &diff, Reconcilers: opts.Reconcilers,
 		Results: &fetch.RunResults{RunTime: r.now, Results: results, Quota: stats.QuotaSnapshot(), Deprecations: stats.DeprecationsSnapshot()}}
-	night, err := check.Run(ctx, c, check.Default(), r.accepted)
+	checks := opts.Checks
+	if checks == nil {
+		checks = check.Default()
+	}
+	night, err := check.Run(ctx, c, checks, r.accepted)
 	if err != nil {
 		return out, fmt.Errorf("check: %w", err)
 	}
@@ -440,6 +446,9 @@ func (r *run) checkHandCommits(ctx context.Context, head string, state State) ([
 // diffCommit runs the diff checks between two versions, with the findings
 // tied to a commit made by hand, so they keep their IDs from night to night.
 func (r *run) diffCommit(ctx context.Context, base, head, commit string) ([]check.Finding, error) {
+	if r.opts.Checks != nil && !hasCheck(r.opts.Checks, "diff") {
+		return nil, nil
+	}
 	diffs, repairs, err := check.CompareData(ctx, r.dataDir, check.Diff{Base: base, Head: head})
 	if err != nil {
 		return nil, err
@@ -747,4 +756,13 @@ func heldBackNotes(keys []string, night check.Report, veloRel string) []string {
 		out = append(out, fmt.Sprintf("%s (%s), see %s/", key, strings.Join(checks, ", "), joinRel(veloRel, HeldBackDir+"/"+key)))
 	}
 	return out
+}
+
+func hasCheck(checks []check.Checker, name string) bool {
+	for _, c := range checks {
+		if c.Name() == name {
+			return true
+		}
+	}
+	return false
 }
