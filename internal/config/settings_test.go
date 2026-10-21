@@ -53,3 +53,20 @@ func TestTimezoneSettings(t *testing.T) {
 		t.Errorf("an invalid time zone loaded: %v", err)
 	}
 }
+
+func TestConcatenationDay(t *testing.T) {
+	cfg, err := loadConfigText(t, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Settings.ConcatenationDay(); got != DefaultConcatenateOnDay {
+		t.Errorf("default concatenation day = %d", got)
+	}
+	cfg, err = loadConfigText(t, "[settings]\nconcatenate_on_day = 2\n")
+	if err != nil || cfg.Settings.ConcatenationDay() != 2 {
+		t.Errorf("concatenation day = %v, %v; want 2", cfg, err)
+	}
+	if _, err := loadConfigText(t, "[settings]\nconcatenate_on_day = 31\n"); err == nil || !strings.Contains(err.Error(), "concatenate_on_day") {
+		t.Errorf("day 31 loaded: %v", err)
+	}
+}

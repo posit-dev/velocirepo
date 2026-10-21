@@ -41,7 +41,7 @@ type Options struct {
 	// its source, for example to collect what the archive's manifest needs.
 	OnTargetDone func(JobInfo, any)
 	// Concatenate replaces the concatenation after the fetch; nil uses
-	// store.Aggregate. It isn't called with NoConcatenate.
+	// ConcatenationPolicy. It isn't called with NoConcatenate.
 	Concatenate func(dataDir string, now time.Time) error
 }
 
@@ -268,7 +268,9 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	<-done
 
 	if !opts.NoConcatenate {
-		concatenate := store.Aggregate
+		concatenate := func(dataDir string, now time.Time) error {
+			return store.AggregateWithPolicy(dataDir, now, ConcatenationPolicy(cfg, dataDir, now))
+		}
 		if opts.Concatenate != nil {
 			concatenate = opts.Concatenate
 		}

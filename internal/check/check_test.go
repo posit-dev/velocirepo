@@ -148,3 +148,17 @@ func TestSummaryIsStable(t *testing.T) {
 		t.Errorf("empty summary = %q", Summary(Report{}))
 	}
 }
+
+func TestFreshness(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := &config.Config{Projects: map[string]config.Project{"proj": {PyPI: config.StringList{"fresh", "stale"}}}}
+	for target, date := range map[string]string{"fresh": "2026-10-19", "stale": "2026-10-01"} {
+		if err := store.MarkFetchedSeries(dataDir, "pypi", "proj", "", date, []string{target}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := findingsOf(run(t, &Context{Config: cfg, DataDir: dataDir}, nil), "data.freshness")
+	if len(got) != 1 || got[0].Target != "stale" || got[0].Severity != Warning {
+		t.Errorf("data.freshness = %+v, want only the stale target", got)
+	}
+}

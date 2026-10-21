@@ -59,6 +59,12 @@ func LastDate(dataDir, sourceName, projectID string) (time.Time, error) {
 	return t, nil
 }
 
+// StoredThrough returns the latest day stored for a project's source in a
+// category ("metrics" or "events"), from its files and main watermark, or "".
+func StoredThrough(dataDir, category, sourceName, projectID string) (string, error) {
+	return latestStoredDate(filepath.Join(dataDir, category, sourceName, projectID), WatermarkFilePath(dataDir, sourceName, projectID))
+}
+
 // latestStoredDate returns the latest date among dir's data file names and the
 // watermark file, or "" if there is none.
 func latestStoredDate(dir, watermarkPath string) (string, error) {

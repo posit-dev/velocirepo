@@ -31,7 +31,7 @@ type Checker interface {
 
 // Default are the checks velocirepo check runs.
 func Default() []Checker {
-	return []Checker{fetchFailed{}, deprecations{}, integrity{}, volume{}}
+	return []Checker{fetchFailed{}, deprecations{}, integrity{}, volume{}, freshness{}}
 }
 
 // Run runs checks, marks accepted findings, and returns them sorted by

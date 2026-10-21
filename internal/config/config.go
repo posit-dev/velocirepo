@@ -155,6 +155,22 @@ type SettingsConfig struct {
 	// Timezones maps a Plausible site to the time zone its days end in, for
 	// accounts without access to Plausible's Sites API.
 	Timezones map[string]string `toml:"timezones"`
+	// ConcatenateOnDay is the day of the month from which the previous month
+	// is concatenated; 8 by default, so late corrections of a month's last
+	// days don't rewrite its monthly file.
+	ConcatenateOnDay int `toml:"concatenate_on_day"`
+}
+
+// DefaultConcatenateOnDay is the concatenation day without a setting.
+const DefaultConcatenateOnDay = 8
+
+// ConcatenationDay returns the day of the month from which the previous
+// month is concatenated.
+func (s SettingsConfig) ConcatenationDay() int {
+	if s.ConcatenateOnDay == 0 {
+		return DefaultConcatenateOnDay
+	}
+	return s.ConcatenateOnDay
 }
 
 // Enforce reports whether the gate enforces rather than only reports.
@@ -172,6 +188,9 @@ func (s SettingsConfig) validate() error {
 	case "", "report", "enforce":
 	default:
 		return fmt.Errorf("settings.gate is %q; use \"report\" or \"enforce\"", s.Gate)
+	}
+	if s.ConcatenateOnDay < 0 || s.ConcatenateOnDay > 28 {
+		return fmt.Errorf("settings.concatenate_on_day is %d; use a day from 1 to 28", s.ConcatenateOnDay)
 	}
 	for site, zone := range s.Timezones {
 		if _, err := time.LoadLocation(zone); err != nil {
