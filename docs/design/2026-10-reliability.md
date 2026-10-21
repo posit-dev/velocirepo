@@ -12,7 +12,7 @@ What went wrong in devrel-io in 2026, and how long it went unnoticed:
 |---|---|---|
 | GitHub stopped listing stargazers. The fetch got an empty list with HTTP 200 and stored no stars. | Silent: the API changed | ~3 months |
 | A full re-fetch (devrel-io `03f2f5e66`) failed for positron, quarto and rstudio on GitHub's 300-page comment limit. Their whole event history was deleted in the same commit. | Silent: data deleted | ~3 months |
-| CRAN lost the last day of every month in compaction. | Silent: incomplete data | months |
+| CRAN lost the last day of every month in concatenation. | Silent: incomplete data | months |
 | Plausible backfills repeated some rows and missed others across pages. | Silent: wrong values | found by chance |
 | Star history backfill replaced daily files and dropped 44,619 `total_reactions` records. | Silent: data deleted | caught by a manual check |
 | After v0.9.0, the nightly run failed four nights in a row (2026-10-17 to 10-20) on the same three projects. | Loud, but nobody saw it | 4 days |
@@ -40,7 +40,7 @@ Eight measures. This document designs the first two in detail, because they chan
 1. **Raw response archive:** every API response is kept, so any processing error can be repaired by replaying it.
 2. **Data gate:** the nightly run checks its own output and only pushes what passes to `main`. What fails is held back in a pull request, and a tracking issue says why.
 3. **Reconciliation** against totals the APIs compute themselves.
-4. **Settle days** instead of re-fetch windows, and a quota budget.
+4. **Fetch each day once it has ended** in its source's time zone, instead of re-fetch windows, and a quota budget.
 5. **Live API tests and upstream change monitoring.**
 6. **Heartbeat** with escalation.
 7. **Weekly digest** for a human.
@@ -57,7 +57,7 @@ fetch ──► raw archive (1) ──► stored data
                 pass: data commit to main      fail: hold back in PR,
                               │                update tracking issue ──► heartbeat (6)
                               ▼
-               on the 8th: compaction commit
+               on the 8th: concatenation commit
 ```
 
 ## 1. Raw response archive
@@ -145,16 +145,16 @@ The nightly run fetches, commits everything, and pushes to `main`, even when job
 All in the nightly job:
 
 1. Check out `main`.
-2. Fetch, without compacting (`--no-concatenate`). The raw archive is written alongside the data.
+2. Fetch, without concatenating (`--no-concatenate`). The raw archive is written alongside the data.
 3. Upload the archive, also when the fetch failed.
 4. Run `velocirepo check`. It compares the working tree with `HEAD` and the stored data with its rules, then writes `check.json` and a Markdown summary.
 5. Decide, for each source and project:
    - If it has no blocking findings, its changes go into the **data commit** on `main`.
    - If it has blocking findings, its changes go into a commit on the `velocirepo/held-back` branch. A pull request from that branch to `main` lists the reasons.
-6. On the compaction day, run `velocirepo compact` and make a separate **compaction commit** (see [Compaction](#compaction)).
+6. On the concatenation day, concatenate and make a separate **concatenation commit** (see [Concatenation](#concatenation)).
 7. Push `main`, update the tracking issue and write the job summary.
 
-Keeping new data and compaction in separate commits gives each a check that fits it. The data commit should only add records, so the diff guard can be strict. The compaction commit should only move records between files, so the set of records before and after it must be identical.
+Keeping new data and concatenation in separate commits gives each a check that fits it. The data commit should only add records, so the diff guard can be strict. The concatenation commit should only move records between files, so the set of records before and after it must be identical.
 
 The gate runs in the same job rather than as required status checks on a pull request. The reason: pushes and pull requests made with the workflow's `GITHUB_TOKEN` don't start other workflows. Required checks on a bot's pull request would never run without a personal token or a GitHub App. In the same job, the gate also has the fetch results and the archive at hand.
 
@@ -169,28 +169,46 @@ One broken repository shouldn't hold back everything. Findings refer to a source
 - **If the findings are wrong,** merge the pull request by hand, and accept the findings (see below) so they don't come back.
 - **For sources that can't be re-fetched,** the held-back commits and the raw archive keep the data until it's released.
 
-### Compaction
+### Concatenation
 
-Today a month is compacted in the same run that stores its last day, as part of `fetch`. Instead, compaction becomes its own command, `velocirepo compact`, and its own commit, once a month.
+Today a month is concatenated in the same run that stores its last day, as part of `fetch`. In the workflow, the nightly `fetch` runs with `--no-concatenate` instead, and concatenation becomes a step of the gate with its own commit, once a month. It's not a separate command: nobody needs to run it by hand. A `fetch` without the gate, such as a local run, still concatenates automatically, using the first two conditions below.
 
-A project's month is compacted when all of these hold:
+A project's month is concatenated when all of these hold:
 
-1. **The calendar:** it's the compaction day, the 8th of the following month by default (`[settings] compact_on_day`).
-2. **The data:** a day after the month's last day has been stored, so every daily file of the month has been committed at least once. For CRAN, PyPI and GitHub that's on the 2nd; for Plausible and stars, with their settle day, on the 3rd.
+1. **The calendar:** it's the concatenation day, the 8th of the following month by default (`[settings] concatenate_on_day`).
+2. **The data:** a day after the month's last day has been stored, so every daily file of the month has been committed at least once. With the nightly run scheduled after every source's day has ended, that's on the 2nd for every source.
 3. **The gate:** the project has no open findings and no held-back data for that month.
 
-A year is compacted when December is, and in the same run: December's daily files become `YYYY-12.jsonl`, and then the twelve monthly files become `YYYY.jsonl`. Yearly files are kept as they are.
+A year is concatenated when December is, and in the same run: December's daily files become `YYYY-12.jsonl`, and then the twelve monthly files become `YYYY.jsonl`. Yearly files are kept as they are.
 
 Why one week after the month ends:
 
-- **Corrections stay small.** Most problems surface in the first days: a held-back pull request, a failed night, a source running behind. Fixed before compaction, a correction only touches daily files. After compaction, it rewrites a monthly or yearly file.
+- **Corrections stay small.** Most problems surface in the first days: a held-back pull request, a failed night, a source running behind. Fixed before concatenation, a correction only touches daily files. After concatenation, it rewrites a monthly or yearly file.
 - **It covers every source delay.** A source that's still behind on the 8th has a freshness problem, which `data.freshness` reports long before then.
-- **It's predictable.** One compaction commit per month, "Compact October 2026", on a known day. January's also compacts the previous year.
+- **It's predictable.** One concatenation commit per month, "Concatenate October 2026", on a known day. January's also concatenates the previous year.
 - **It's cheap.** At most about 38 daily files per project at a time, and every record still moves into a period file exactly once, and into a yearly file once more.
 
-A month that misses its compaction day, because one of the conditions doesn't hold yet, is compacted on the first run where all three hold.
+A month that misses its concatenation day, because one of the conditions doesn't hold yet, is concatenated on the first run where all three hold.
 
 The resume point and `LastDate` work as they do now: a monthly or yearly file still counts as stored through the last day of its period.
+
+### Commit messages
+
+The gate writes the commit messages, instead of the workflow's shell. Today the two disagree: devrel-io's workflow dates its commits with yesterday, while the workflow `install-ci` generates uses today.
+
+The subject carries the date of the run, in UTC, since that's the one date that's the same for every source and always true. The body lists how far each source's data now goes, because that can differ per source:
+
+```
+Fetch metrics on 2026-10-21
+
+Stored through:
+- cran, pypi, plausible, github, github-traffic: 2026-10-20
+- homebrew: 2026-10-21 (snapshot)
+
+Held back: positron/github (diff.records-removed), see #12.
+```
+
+The other commits follow the same pattern: "Concatenate October 2026" for concatenation, and "Hold back metrics fetched on 2026-10-21" on the held-back branch, with the findings in the body.
 
 ### Findings
 
@@ -211,11 +229,11 @@ Each check produces findings of this shape:
 | Check | Error when | Would have caught |
 |---|---|---|
 | `fetch.failed` | a job failed | the four failed nights |
-| `diff.records-removed` | stored records disappear, compared by key over each changed project (not by file, since compaction moves records between files) | the July deletion; the 44,619 `total_reactions` |
-| `diff.values-changed` | a stored value changes. Nightly runs don't re-read stored days (see [Settle days instead of re-fetch windows](#4-settle-days-instead-of-re-fetch-windows)), so a changed value is either a repair, which goes through a pull request, or a bug. Records dated within the run's own window, such as a second run on the same day, are exempt. | the Plausible duplicates, which changed stored values |
-| `compact.records-moved` | the compaction commit changes the set of records instead of only moving them between files | the CRAN month ends and the overwritten months (A1) |
+| `diff.records-removed` | stored records disappear, compared by key over each changed project (not by file, since concatenation moves records between files) | the July deletion; the 44,619 `total_reactions` |
+| `diff.values-changed` | a stored value changes. Nightly runs don't re-read stored days (see [Fetch each day once it has ended](#4-fetch-each-day-once-it-has-ended)), so a changed value is either a repair, which goes through a pull request, or a bug. Records dated within the run's own window, such as a second run on the same day, are exempt. | the Plausible duplicates, which changed stored values |
+| `concatenate.records-moved` | the concatenation commit changes the set of records instead of only moving them between files | the CRAN month ends and the overwritten months (A1) |
 | `data.integrity` | `validate-data` finds duplicates, overlapping period files or temp files | Plausible duplicates |
-| `data.freshness` | a target's latest stored day is further behind today than the source allows: CRAN and PyPI 2 days, Plausible and the star history 3 (they have a settle day), GitHub events 1, GitHub traffic 1 | stalled sources |
+| `data.freshness` | a target's latest stored day is further behind today than the source allows: CRAN and PyPI 2 days, Plausible and the star history 2, GitHub events 1, GitHub traffic 1 | stalled sources |
 | `data.volume` | a series that usually has data has none for several days, or drops far below its 28-day median | positron's missing events |
 | `data.completeness` | a day is missing inside a stored range (month ends) | CRAN month ends |
 | `reconcile.*` | stored totals differ from the API's own totals (measure 3) | stars, positron, Plausible, CRAN |
@@ -246,7 +264,7 @@ Errors and warnings also become `::error::` and `::warning::` annotations, so th
 
 ### Where it lives
 
-- **Gate logic:** in velocirepo. That's `velocirepo check` and `velocirepo compact`, plus `velocirepo gate`, which does steps 5 to 7 using `gh`.
+- **Gate logic:** in velocirepo. That's `velocirepo check`, plus `velocirepo gate`, which does steps 5 to 7 using `gh`, including concatenation.
 - **Workflow:** the action runs them, and `install-ci` generates the new workflows, so every user gets the gate, not just devrel-io.
 - **Permissions:** the workflow needs `contents: write` (commits and the archive releases), `pull-requests: write` and `issues: write`.
 
@@ -257,9 +275,9 @@ Everything in this design ships with velocirepo, so it works for any project tha
 | Measure | Setup |
 |---|---|
 | Raw archive | None. Capture is part of `fetch`, and the archive is stored as artifacts and release assets in the user's own data repository. |
-| Data gate, compaction and tracking issue | Regenerate the workflow with `install-ci` once, for the new steps and permissions. Optionally, list owners in `velocirepo.toml` to be assigned to the tracking issue. |
+| Data gate, concatenation and tracking issue | Regenerate the workflow with `install-ci` once, for the new steps and permissions. Optionally, list owners in `velocirepo.toml` to be assigned to the tracking issue. |
 | Reconciliation and other checks | None. They're part of `velocirepo check`. |
-| Settle days, quota budget | None. |
+| Day ends per time zone, quota budget | None. `install-ci` schedules the nightly run after the latest time zone of the configured sources. |
 | Live API tests, changelog monitoring | None. They run in velocirepo's own CI, and protect users through releases. |
 | Heartbeat workflow | None; `install-ci` generates it. The external heartbeat is optional and needs a Healthchecks instance. |
 | Weekly digest | None; `install-ci` generates it. |
@@ -286,7 +304,7 @@ Each source can provide reference totals that the API computes independently of 
 
 Tolerances belong to each source: stars, for example, differ by the stars given since the end date.
 
-### 4. Settle days instead of re-fetch windows
+### 4. Fetch each day once it has ended
 
 An earlier version of this design re-read every source's last days on each run. That's dropped, because the problems it would fix are already handled better:
 
@@ -294,11 +312,23 @@ An earlier version of this design re-read every source's last days on each run. 
 |---|---|
 | A failed night | The resume point. A failed job doesn't move it, so the next run fetches the missing days. |
 | Data that's published late | The same: a day that isn't available yet isn't stored, so it's fetched the next night. |
-| A day that's still in progress when it's fetched | Settle days: the source is only fetched through a day that's complete in every time zone. |
+| A day that's still in progress when it's fetched | Fetching a day only once it has ended in the source's time zone (below). |
 
-Stored values don't change once their day is complete. In the October repair, re-fetched CRAN month ends were identical to the stored ones, and 206,477 of about 210,000 re-fetched Plausible records were. The rest were partial days and sampled values. Re-reading would also cost API quota and rewrite compacted files, which grows the data repository's history.
+Stored values don't change once their day is complete. In the October repair, re-fetched CRAN month ends were identical to the stored ones, and 206,477 of about 210,000 re-fetched Plausible records were. The rest were partial days and sampled values. Re-reading would also cost API quota and rewrite concatenated files, which grows the data repository's history.
 
-**Settle days.** `settleDays` (`internal/fetch/fetch.go`) moves a source's default end date back, so that the day before yesterday is the last one fetched. Plausible has one, because its days end in each site's time zone. The star history gets one too, inside the GitHub source, because its days end in US Pacific time. It replaces the current 7-day re-read. Issues, pull requests and comments stay in UTC and aren't delayed.
+**Days end in different time zones.** Most sources count days in UTC, but not all:
+
+| Source | Days end in | Yesterday is over at |
+|---|---|---|
+| CRAN, PyPI, GitHub events and traffic, Open VSX, YouTube | UTC | 00:00 UTC |
+| GitHub star history | US Pacific time | 07:00 UTC in summer, 08:00 UTC in winter |
+| Plausible | each site's own time zone, from the Sites API (`GET /api/v1/sites/{site}`) | depends on the site; for devrel-io's 15 sites, the latest is `plotnine.org` on `America/Los_Angeles` |
+
+A fetch stores a source's day only once that day has ended in the source's time zone, plus a margin of an hour for processing. The default end date becomes the latest day that has ended, per source and site, instead of "yesterday" for every source. This replaces `settleDays` (`internal/fetch/fetch.go`), which delays Plausible by a whole day regardless of the time of the run, and it replaces the star history's 7-day re-read. When a site's time zone can't be read, the fetch assumes UTC−12, the latest time zone there is.
+
+**The nightly schedule.** `install-ci` schedules the nightly run after the latest time zone among the configured sources, plus the margin: 09:30 UTC for devrel-io, which covers US Pacific time in winter. At that time every source's yesterday has ended, so a nightly run fetches all sources through the same day. Runs at other times, such as manual ones, still only store days that have ended, so they never store a partial day either.
+
+devrel-io's schedule moves from 06:00 to 09:30 UTC, so its data arrives three and a half hours later than now.
 
 **Accepted drift.** GitHub lowers a past day of the star history when a star given that day is removed. Those corrections aren't fetched, so summed `daily_stars` slowly drifts above `total_stars`, by a few stars a year for a large repository. `total_stars` stays exact, and `reconcile.stars` allows for the drift.
 
@@ -340,10 +370,10 @@ Mutation testing of the checks themselves (removing a check must fail a test) is
 
 ## Rollout
 
-1. **Star history settle day:** replace the 7-day re-read with a settle day. It's independent of everything else and stops stored star days from changing.
+1. **Fetch days once they've ended:** per-source time zones (UTC, US Pacific for the star history, each Plausible site's own), replacing `settleDays` and the star history's 7-day re-read, and the later nightly schedule in `install-ci`. It's independent of everything else and stops stored days from changing.
 2. **Measure:** archive capture behind a flag, uploaded as an artifact only. Measure size and redaction for a week.
 3. **Replay:** add `velocirepo replay`, and test it against the measured archives. It must rebuild the stored records exactly.
-4. **Compaction:** `velocirepo compact` with the three conditions, and the compaction commit with its `compact.records-moved` check.
+4. **Concatenation:** the three conditions as a step of the gate, and the concatenation commit with its `concatenate.records-moved` check.
 5. **Report-only gate:** `check` and the tracking issue, with the gate reporting findings but holding nothing back. Thresholds are tuned for two weeks, and false positives are accepted or fixed.
 6. **Enforcing gate:** holding back per project, with the held-back branch and its pull request.
 7. **Further measures:** reconciliation, the quota budget, live tests, the heartbeat workflow and the digest, each with its tests from the table above.
