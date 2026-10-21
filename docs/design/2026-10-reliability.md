@@ -202,11 +202,13 @@ The subject carries the date of the run, in UTC, since that's the one date that'
 Fetch metrics on 2026-10-21
 
 Stored through:
-- cran, pypi, plausible, github, github-traffic: 2026-10-20
-- homebrew: 2026-10-21 (snapshot)
+- cran, pypi, homebrew, github, github-traffic: 2026-10-20
+- github star history, plausible (plotnine.org): 2026-10-19
 
 Held back: positron/github (diff.records-removed), see #12.
 ```
+
+This example is a manual run at 06:00 UTC, when 2026-10-20 hadn't ended yet in US Pacific time. The scheduled run at 09:30 UTC has the same date for every source.
 
 The other commits follow the same pattern: "Concatenate October 2026" for concatenation, and "Hold back metrics fetched on 2026-10-21" on the held-back branch, with the findings in the body.
 
