@@ -133,14 +133,7 @@ func installCICmd() *cobra.Command {
 			}
 			defer func() { _ = f.Close() }()
 
-			// Normalize version to a ref suitable for uses:
-			actionRef := ver
-			if !strings.HasPrefix(ver, "v") && ver != "latest" {
-				actionRef = "v" + ver
-			}
-			if ver == "latest" {
-				actionRef = "v0"
-			}
+			actionRef := actionRef(ver, version.Version)
 
 			err = tmpl.Execute(f, struct {
 				Cron           string
@@ -163,4 +156,24 @@ func installCICmd() *cobra.Command {
 	}
 
 	return cmd
+}
+
+// defaultActionMajor is the action's major version for development builds,
+// which have no version of their own.
+const defaultActionMajor = "v1"
+
+// actionRef returns the ref of the velocirepo action for a workflow. "latest"
+// means the floating tag of the binary's own major version, such as v1.
+func actionRef(ver, binaryVersion string) string {
+	if ver != "latest" {
+		if !strings.HasPrefix(ver, "v") {
+			return "v" + ver
+		}
+		return ver
+	}
+	major, _, _ := strings.Cut(strings.TrimPrefix(binaryVersion, "v"), ".")
+	if major == "" || strings.Trim(major, "0123456789") != "" {
+		return defaultActionMajor
+	}
+	return "v" + major
 }

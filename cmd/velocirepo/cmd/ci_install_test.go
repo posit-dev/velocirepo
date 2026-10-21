@@ -135,3 +135,19 @@ func TestWorkflowTemplateRendersToFile(t *testing.T) {
 		t.Fatal("workflow file is empty")
 	}
 }
+
+// "latest" means the action of the binary's own major version. It used to
+// be hard-coded as v0, so workflows generated with v1 referenced v0.
+func TestActionRef(t *testing.T) {
+	for _, tt := range []struct{ ver, binary, want string }{
+		{"latest", "v1.0.0", "v1"},
+		{"latest", "v2.3.4", "v2"},
+		{"latest", "dev", "v1"},
+		{"1.2.3", "v1.0.0", "v1.2.3"},
+		{"v1.2.3", "v1.0.0", "v1.2.3"},
+	} {
+		if got := actionRef(tt.ver, tt.binary); got != tt.want {
+			t.Errorf("actionRef(%q, %q) = %q, want %q", tt.ver, tt.binary, got, tt.want)
+		}
+	}
+}
