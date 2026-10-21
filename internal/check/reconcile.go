@@ -3,9 +3,10 @@ package check
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/posit-dev/velocirepo/internal/fetch"
 	"github.com/posit-dev/velocirepo/internal/reconcile"
-	"github.com/posit-dev/velocirepo/internal/source"
 )
 
 // suspiciousStored is how many stored items make a reference total of zero
@@ -22,20 +23,28 @@ func (reconciliation) Run(ctx context.Context, c *Context) ([]Finding, error) {
 	if len(c.Reconcilers) == 0 || c.Config == nil {
 		return nil, nil
 	}
-	var out []Finding
-	reconcilers := map[string]source.Reconciler{}
-	for name, r := range c.Reconcilers {
-		if f, low := quotaLow(c, name); low {
-			out = append(out, f)
-			continue
-		}
-		reconcilers[name] = r
+	var quotas map[string]fetch.Quota
+	if c.Results != nil {
+		quotas = c.Results.Quota
 	}
-	results, err := reconcile.Run(ctx, c.Config, c.DataDir, c.Now, reconcilers)
+	results, skipped, err := reconcile.Run(ctx, c.Config, c.DataDir, reconcile.Options{Now: c.Now, Budget: reconcile.NewBudget(quotas), Wait: c.ReconcileWait}, c.Reconcilers)
 	if err != nil {
 		return nil, err
 	}
 
+	var out []Finding
+	for _, s := range skipped {
+		what := "reconciliation"
+		if s.Monthly {
+			what = "the per-month reconciliation"
+		}
+		names := s.Targets
+		if len(names) > 10 {
+			names = append(append([]string(nil), names[:10]...), fmt.Sprintf("%d more", len(s.Targets)-10))
+		}
+		out = append(out, NewFinding("quota.low", Warning, s.Source, "", "", s.Quota,
+			fmt.Sprintf("%s of %s was skipped to leave %s for everything else; they're checked on a later night", what, strings.Join(names, ", "), s.Quota)))
+	}
 	unavailable := map[string]bool{}
 	for _, r := range results {
 		ref := r.Reference
@@ -61,19 +70,4 @@ func (reconciliation) Run(ctx context.Context, c *Context) ([]Finding, error) {
 		}
 	}
 	return out, nil
-}
-
-// quotaLow reports whether a source's quota, as the fetch run left it, is
-// below the 10% that reconciliation leaves for everything else.
-func quotaLow(c *Context, sourceName string) (Finding, bool) {
-	meta, ok := source.MetaFor(sourceName)
-	if !ok || meta.ReferenceQuota == "" || c.Results == nil {
-		return Finding{}, false
-	}
-	q, ok := c.Results.Quota[meta.ReferenceQuota]
-	if !ok || q.Limit == 0 || q.Remaining*10 >= q.Limit {
-		return Finding{}, false
-	}
-	return NewFinding("quota.low", Warning, sourceName, "", "", "reconcile",
-		fmt.Sprintf("reconciliation skipped: %d of %d left of %s", q.Remaining, q.Limit, meta.ReferenceQuota)), true
 }

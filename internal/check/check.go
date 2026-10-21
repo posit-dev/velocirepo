@@ -27,6 +27,9 @@ type Context struct {
 	// Reconcilers give the reference totals of the sources that have them;
 	// without them, nothing is reconciled.
 	Reconcilers map[string]source.Reconciler
+	// ReconcileWait paces the per-month reference requests; nil means the
+	// search API's pace.
+	ReconcileWait func(context.Context) error
 }
 
 // Checker is one check.

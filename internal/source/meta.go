@@ -180,3 +180,12 @@ func RequestInfoOf(ctx context.Context) (RequestInfo, bool) {
 	info, ok := ctx.Value(requestInfoKey{}).(RequestInfo)
 	return info, ok
 }
+
+// MonthlyReconciler is implemented by sources that can report per-month
+// reference totals, such as GitHub's search counts. wait is called before
+// every request, to keep to the API's rate.
+type MonthlyReconciler interface {
+	MonthlyReferenceTotals(ctx context.Context, targets []string, from, through time.Time, wait func(context.Context) error) ([]ReferenceTotal, error)
+	// MonthlyRequests is how many requests a target takes.
+	MonthlyRequests() int
+}

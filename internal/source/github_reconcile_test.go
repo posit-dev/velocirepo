@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // GitHub's batched totals, with a repository that no longer exists.
@@ -71,5 +72,35 @@ func TestGitHubReferenceTotalsBatches(t *testing.T) {
 	}
 	if requests > 15 {
 		t.Errorf("465 repositories took %d requests, more than 15", requests)
+	}
+}
+
+func TestGitHubMonthlyReferenceTotals(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		queries = append(queries, q)
+		if strings.Contains(q, "repo:org/gone") {
+			http.Error(w, `{"message":"Validation Failed"}`, http.StatusUnprocessableEntity)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"total_count": %d}`, len(queries))
+	}))
+	defer srv.Close()
+	from, through := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	waits := 0
+	totals, err := (&GitHubEvents{Client: srv.Client(), BaseURL: srv.URL}).MonthlyReferenceTotals(context.Background(), []string{"org/repo", "org/gone"}, from, through,
+		func(context.Context) error { waits++; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queries[0] != "repo:org/repo is:issue created:2026-09-01..2026-09-30" || queries[3] != "repo:org/repo is:pr merged:2026-09-01..2026-09-30" {
+		t.Errorf("queries = %q", queries)
+	}
+	if waits != 8 || len(totals) != 8 {
+		t.Errorf("%d waits, %d totals", waits, len(totals))
+	}
+	if totals[0].Metric != "issue_open" || totals[0].Value != 1 || totals[4].Unavailable == "" {
+		t.Errorf("totals = %+v", totals)
 	}
 }

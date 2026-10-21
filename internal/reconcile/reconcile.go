@@ -42,10 +42,45 @@ func (r Result) Differs() bool {
 // recentDays is how far back the busiest day of a target is looked for.
 const recentDays = 30
 
-// Run asks each source's reconciler for the reference totals of the targets
-// in the config, and compares them with the stored data. A source whose
-// reference request fails gets unavailable results, never a match.
-func Run(ctx context.Context, cfg *config.Config, dataDir string, now time.Time, reconcilers map[string]source.Reconciler) ([]Result, error) {
+// Options are a reconciliation run's clock, budget and pacing.
+type Options struct {
+	Now time.Time
+	// Budget limits the requests; nil means no limit.
+	Budget *Budget
+	// Wait paces the per-month requests; nil means the search API's pace.
+	Wait func(context.Context) error
+}
+
+// Skipped are targets that weren't reconciled because the budget ran out.
+type Skipped struct {
+	Source  string
+	Quota   string
+	Targets []string
+	// Monthly is set for the per-month check.
+	Monthly bool
+}
+
+// referenceRequests is implemented by reconcilers that know how many
+// requests their all-time totals take.
+type referenceRequests interface {
+	ReferenceRequests(targets int) int
+}
+
+// Run asks each source's reconciler for the all-time reference totals of
+// the targets in the config, and for the sources with per-month totals, for
+// tonight's share of the targets' last complete month. It compares them with
+// the stored data. A source whose reference request fails gets unavailable
+// results, never a match. What doesn't fit the budget is skipped, and
+// returned.
+func Run(ctx context.Context, cfg *config.Config, dataDir string, opts Options, reconcilers map[string]source.Reconciler) ([]Result, []Skipped, error) {
+	budget := opts.Budget
+	if budget == nil {
+		budget = NewBudget(nil)
+	}
+	wait := opts.Wait
+	if wait == nil {
+		wait = NewSearchPacer().Wait
+	}
 	names := make([]string, 0, len(reconcilers))
 	for name := range reconcilers {
 		names = append(names, name)
@@ -53,6 +88,7 @@ func Run(ctx context.Context, cfg *config.Config, dataDir string, now time.Time,
 	sort.Strings(names)
 
 	var out []Result
+	var skipped []Skipped
 	for _, name := range names {
 		projectsOf := map[string][]string{}
 		var targets []string
@@ -68,31 +104,49 @@ func Run(ctx context.Context, cfg *config.Config, dataDir string, now time.Time,
 			continue
 		}
 		sort.Strings(targets)
+		rec := reconcilers[name]
+		meta, _ := source.MetaFor(name)
 
-		refs, err := reconcilers[name].ReferenceTotals(ctx, targets)
-		if err != nil {
-			for _, t := range targets {
-				for _, p := range projectsOf[t] {
-					out = append(out, Result{Source: name, Project: p, Reference: source.ReferenceTotal{Target: t}, Unavailable: err.Error()})
-				}
+		requests := len(targets)
+		if rr, ok := rec.(referenceRequests); ok {
+			requests = rr.ReferenceRequests(len(targets))
+		}
+		if budget.Allow(meta.ReferenceQuota, requests) {
+			refs, err := rec.ReferenceTotals(ctx, targets)
+			results, err := compare(dataDir, name, projectsOf, targets, refs, err, opts.Now, time.Time{}, time.Time{})
+			if err != nil {
+				return out, skipped, err
 			}
+			out = append(out, results...)
+		} else {
+			skipped = append(skipped, Skipped{Source: name, Quota: meta.ReferenceQuota, Targets: targets})
+		}
+
+		monthly, ok := rec.(source.MonthlyReconciler)
+		if !ok {
 			continue
 		}
-		stored, err := storedTotals(dataDir, name, refs, now)
-		if err != nil {
-			return out, err
-		}
-		for _, ref := range refs {
-			for _, p := range projectsOf[ref.Target] {
-				r := Result{Source: name, Project: p, Reference: ref, Unavailable: ref.Unavailable}
-				key := storedKey{p, ref.Target, ref.Kind, ref.Metric}
-				r.Stored = stored[key].total
-				// An all-time total includes today, which isn't fetched
-				// yet: allow for two of the target's busiest recent days.
-				r.Reference.Tolerance += 2 * stored[key].busiestDay
-				out = append(out, r)
+		var tonight, over []string
+		for _, t := range Tonight(targets, opts.Now) {
+			if budget.Allow(SearchQuota, monthly.MonthlyRequests()) {
+				tonight = append(tonight, t)
+			} else {
+				over = append(over, t)
 			}
 		}
+		if len(over) > 0 {
+			skipped = append(skipped, Skipped{Source: name, Quota: SearchQuota, Targets: over, Monthly: true})
+		}
+		if len(tonight) == 0 {
+			continue
+		}
+		from, through := LastCompleteMonth(opts.Now)
+		refs, err := monthly.MonthlyReferenceTotals(ctx, tonight, from, through, wait)
+		results, err := compare(dataDir, name, projectsOf, tonight, refs, err, opts.Now, from, through)
+		if err != nil {
+			return out, skipped, err
+		}
+		out = append(out, results...)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
@@ -104,6 +158,38 @@ func Run(ctx context.Context, cfg *config.Config, dataDir string, now time.Time,
 		}
 		return a.Reference.Target < b.Reference.Target
 	})
+	return out, skipped, nil
+}
+
+// compare puts reference totals next to the stored totals of the same
+// period; zero from and through mean all time.
+func compare(dataDir, name string, projectsOf map[string][]string, targets []string, refs []source.ReferenceTotal, refErr error, now, from, through time.Time) ([]Result, error) {
+	var out []Result
+	if refErr != nil {
+		for _, t := range targets {
+			for _, p := range projectsOf[t] {
+				out = append(out, Result{Source: name, Project: p, Reference: source.ReferenceTotal{Target: t, From: from, Through: through}, Unavailable: refErr.Error()})
+			}
+		}
+		return out, nil
+	}
+	stored, err := storedTotals(dataDir, name, refs, now, from, through)
+	if err != nil {
+		return nil, err
+	}
+	for _, ref := range refs {
+		for _, p := range projectsOf[ref.Target] {
+			r := Result{Source: name, Project: p, Reference: ref, Unavailable: ref.Unavailable}
+			key := storedKey{p, ref.Target, ref.Kind, ref.Metric}
+			r.Stored = stored[key].total
+			if from.IsZero() {
+				// An all-time total includes today, which isn't fetched
+				// yet: allow for two of the target's busiest recent days.
+				r.Reference.Tolerance += 2 * stored[key].busiestDay
+			}
+			out = append(out, r)
+		}
+	}
 	return out, nil
 }
 
@@ -117,7 +203,8 @@ type storedTotal struct {
 
 // storedTotals sums a source's stored data per project, target and metric,
 // as DuckDB aggregates over all of it.
-func storedTotals(dataDir, sourceName string, refs []source.ReferenceTotal, now time.Time) (map[storedKey]storedTotal, error) {
+// A non-zero from and through limit them to those days.
+func storedTotals(dataDir, sourceName string, refs []source.ReferenceTotal, now, from, through time.Time) (map[storedKey]storedTotal, error) {
 	kinds := map[string]map[string]bool{}
 	for _, r := range refs {
 		if r.Unavailable != "" {
@@ -129,6 +216,12 @@ func storedTotals(dataDir, sourceName string, refs []source.ReferenceTotal, now 
 		kinds[r.Kind][r.Metric] = true
 	}
 	since := quote(now.AddDate(0, 0, -recentDays).Format("2006-01-02"))
+	eventsPeriod, recordsPeriod := "", ""
+	if !from.IsZero() {
+		f, t := quote(from.Format("2006-01-02")), quote(through.Format("2006-01-02"))
+		eventsPeriod = fmt.Sprintf(" AND CAST(datetime AS DATE) BETWEEN DATE %s AND DATE %s", f, t)
+		recordsPeriod = fmt.Sprintf(" AND date BETWEEN DATE %s AND DATE %s", f, t)
+	}
 	out := map[storedKey]storedTotal{}
 	for kind, metrics := range kinds {
 		var query string
@@ -136,12 +229,12 @@ func storedTotals(dataDir, sourceName string, refs []source.ReferenceTotal, now 
 		case "events":
 			query = `WITH daily AS (
 				SELECT project, target, type AS metric, CAST(datetime AS DATE) AS day, count(*) AS n
-				FROM events WHERE source = %[1]s AND type IN (%[2]s) GROUP BY ALL)
+				FROM events WHERE source = %[1]s AND type IN (%[2]s)%[4]s GROUP BY ALL)
 				SELECT project, target, metric, sum(n) AS total, coalesce(max(n) FILTER (WHERE day >= DATE %[3]s), 0) AS busiest
 				FROM daily GROUP BY ALL`
 		case "records":
 			query = `SELECT project, target, metric, sum(value) AS total, coalesce(max(value) FILTER (WHERE date >= DATE %[3]s), 0) AS busiest
-				FROM metrics WHERE source = %[1]s AND metric IN (%[2]s) GROUP BY ALL`
+				FROM metrics WHERE source = %[1]s AND metric IN (%[2]s)%[5]s GROUP BY ALL`
 		default:
 			return nil, fmt.Errorf("unknown kind of reference total %q", kind)
 		}
@@ -150,7 +243,7 @@ func storedTotals(dataDir, sourceName string, refs []source.ReferenceTotal, now 
 			list = append(list, quote(m))
 		}
 		sort.Strings(list)
-		rows, _, err := store.QueryLive(dataDir, nil, nil, fmt.Sprintf(query, quote(sourceName), strings.Join(list, ", "), since))
+		rows, _, err := store.QueryLive(dataDir, nil, nil, fmt.Sprintf(query, quote(sourceName), strings.Join(list, ", "), since, eventsPeriod, recordsPeriod))
 		if err != nil {
 			if strings.Contains(err.Error(), "does not exist") {
 				continue
