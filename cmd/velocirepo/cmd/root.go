@@ -124,6 +124,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(checkCmd())
 	rootCmd.AddCommand(replayCmd())
 	rootCmd.AddCommand(gateCmd())
+	rootCmd.AddCommand(checkHeartbeatCmd())
 	rootCmd.AddCommand(uploadArchiveCmd())
 	rootCmd.AddCommand(downloadArchiveCmd())
 
