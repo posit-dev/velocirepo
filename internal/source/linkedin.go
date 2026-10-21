@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -311,16 +312,35 @@ func init() {
 	Register(Meta{
 		Name:      "linkedin",
 		Freshness: map[string]int{"": 2},
-		// Statistics are snapshots. The posts endpoint also returns drafts and
-		// non-public posts, so only what velocirepo stores is archived.
+		// Statistics are snapshots. Only the fields velocirepo reads are
+		// archived, so the archive holds nothing beyond the stored data.
 		Archive:           ArchiveReadFields,
 		Reduce:            reduceLinkedInResponse,
 		NoReferenceTotals: "its statistics are the data itself",
 	})
 }
 
-// reduceLinkedInResponse keeps only what velocirepo stores of a LinkedIn
-// response. Until that's implemented, nothing is archived.
+// reduceLinkedInResponse keeps only the fields velocirepo reads of a LinkedIn
+// response, by re-encoding it through the types the source decodes it with.
+// Responses of other endpoints, or that don't parse, aren't archived.
 func reduceLinkedInResponse(url string, body []byte) ([]byte, bool) {
-	return nil, false
+	var v any
+	switch {
+	case strings.Contains(url, "/rest/posts"):
+		v = &postsResponse{}
+	case strings.Contains(url, "/rest/organizationalEntityShareStatistics"):
+		v = &statsResponse{}
+	case strings.Contains(url, "/rest/networkSizes"):
+		v = &followerResponse{}
+	default:
+		return nil, false
+	}
+	if err := json.Unmarshal(body, v); err != nil {
+		return nil, false
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
