@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,5 +75,45 @@ func TestWriteResults(t *testing.T) {
 	}
 	if len(back.Results) != 1 || back.Results[0].Error != "boom" || back.RunTime.Hour() != 9 {
 		t.Errorf("results = %+v", back)
+	}
+}
+
+// The counting transport tracks the quota left per API from rate-limit
+// headers, and notes endpoints that announce their removal.
+func TestStatsTrackQuotaAndDeprecations(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "4321")
+		w.Header().Set("X-RateLimit-Resource", "graphql")
+		if r.URL.Path == "/old" {
+			w.Header().Set("Deprecation", "true")
+			w.Header().Set("Sunset", "Wed, 01 Apr 2027 00:00:00 GMT")
+		}
+	}))
+	defer srv.Close()
+
+	stats := NewStats(0)
+	client := CountingClient(stats)
+	for _, path := range []string{"/new", "/old"} {
+		resp, err := client.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+
+	quota := stats.QuotaSnapshot()
+	var q Quota
+	for key, v := range quota {
+		if strings.HasSuffix(key, "/graphql") {
+			q = v
+		}
+	}
+	if q.Limit != 5000 || q.Remaining != 4321 {
+		t.Errorf("quota = %+v, want 4321 of 5000", quota)
+	}
+	deps := stats.DeprecationsSnapshot()
+	if len(deps) != 1 || !strings.Contains(deps[0], "/old") || !strings.Contains(deps[0], "2027") {
+		t.Errorf("deprecations = %v", deps)
 	}
 }

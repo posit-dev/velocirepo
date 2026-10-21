@@ -148,7 +148,7 @@ func finishFetch(opts fetch.Options, results []fetch.Result, fetchErr error, com
 	writeFetchLog(results, command)
 	closeArchive()
 	if fetchResults != "" {
-		if err := fetch.WriteResults(fetchResults, results, time.Now()); err != nil {
+		if err := fetch.WriteResults(fetchResults, results, time.Now(), opts.Stats); err != nil {
 			slog.Warn("write results", "error", err)
 		}
 	}
