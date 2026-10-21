@@ -50,7 +50,8 @@ func LoadAcceptances(path string) (Acceptances, error) {
 	return f.Accept, nil
 }
 
-func (as Acceptances) match(f Finding, now time.Time) (Acceptance, bool) {
+// Match returns the acceptance of a finding that hasn't expired, if any.
+func (as Acceptances) Match(f Finding, now time.Time) (Acceptance, bool) {
 	for _, a := range as {
 		if a.ID != f.ID {
 			continue

@@ -52,7 +52,7 @@ func Run(ctx context.Context, c *Context, checks []Checker, accepted Acceptances
 		report.Findings = append(report.Findings, findings...)
 	}
 	for i := range report.Findings {
-		if a, ok := accepted.match(report.Findings[i], c.Now); ok {
+		if a, ok := accepted.Match(report.Findings[i], c.Now); ok {
 			report.Findings[i].Accepted = true
 			report.Findings[i].Reason = a.Reason
 		}

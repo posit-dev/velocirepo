@@ -123,6 +123,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(validateDataCmd())
 	rootCmd.AddCommand(checkCmd())
 	rootCmd.AddCommand(replayCmd())
+	rootCmd.AddCommand(gateCmd())
 	rootCmd.AddCommand(uploadArchiveCmd())
 	rootCmd.AddCommand(downloadArchiveCmd())
 

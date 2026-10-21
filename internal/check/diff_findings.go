@@ -27,7 +27,7 @@ func (diffChecks) Run(ctx context.Context, c *Context) ([]Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	return diffFindings(c.Config, diffs, repairs), nil
+	return DiffFindings(c.Config, diffs, repairs), nil
 }
 
 // tally counts the items of one finding.
@@ -109,7 +109,9 @@ func noun(category string) string {
 	return "records"
 }
 
-func diffFindings(cfg *config.Config, diffs []ProjectDiff, repairs []Repair) []Finding {
+// DiffFindings turns the differences between two versions of the data into
+// findings.
+func DiffFindings(cfg *config.Config, diffs []ProjectDiff, repairs []Repair) []Finding {
 	tallies := map[string]*tally{}
 	var order []string
 	count := func(pd ProjectDiff, check string, severity Severity, key, what, note string, it item) {

@@ -159,6 +159,9 @@ type SettingsConfig struct {
 	// is concatenated; 8 by default, so late corrections of a month's last
 	// days don't rewrite its monthly file.
 	ConcatenateOnDay int `toml:"concatenate_on_day"`
+	// Owners are assigned to the tracking issue (GitHub users) or mentioned
+	// in it (teams, @org/team).
+	Owners []string `toml:"owners"`
 }
 
 // DefaultConcatenateOnDay is the concatenation day without a setting.
