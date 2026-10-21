@@ -64,3 +64,13 @@ func (p *PyPI) Fetch(ctx context.Context, opts FetchOptions) ([]Record, error) {
 
 	return records, nil
 }
+
+func init() {
+	Register(Meta{
+		Name:      "pypi",
+		Freshness: map[string]int{"": 2},
+		// pypistats keeps about 180 days.
+		Archive:           ArchiveFull,
+		NoReferenceTotals: "not implemented yet",
+	})
+}

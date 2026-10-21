@@ -125,3 +125,13 @@ func (g *GitHubTraffic) get(ctx context.Context, url string, result interface{})
 		StatusError:  "github traffic API returned",
 	}, result)
 }
+
+func init() {
+	Register(Meta{
+		Name:      "github-traffic",
+		Freshness: map[string]int{"": 1},
+		// GitHub only keeps 14 days of traffic.
+		Archive:           ArchiveFull,
+		NoReferenceTotals: "GitHub reports no traffic totals beyond the daily counts",
+	})
+}

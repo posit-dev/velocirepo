@@ -1125,3 +1125,15 @@ func updatedBeforeWindow(opts FetchOptions, updatedAt, createdAt string, others 
 	}
 	return t.Before(opts.StartDate)
 }
+
+func init() {
+	Register(Meta{
+		Name:      "github",
+		Freshness: map[string]int{"": 1, "stars": 2},
+		// Events, comments and the star history can be fetched again. The
+		// snapshot requests (repository info and reaction counts) mark themselves
+		// with WithArchiveMode, since their values can't be fetched for a past day.
+		Archive:           NotArchived,
+		NoReferenceTotals: "not implemented yet",
+	})
+}

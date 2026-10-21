@@ -61,3 +61,13 @@ func (o *OpenVSX) Fetch(ctx context.Context, opts FetchOptions) ([]Record, error
 
 	return records, nil
 }
+
+func init() {
+	Register(Meta{
+		Name:      "openvsx",
+		Freshness: map[string]int{"": 2},
+		// Download and review totals are snapshots.
+		Archive:           ArchiveFull,
+		NoReferenceTotals: "its totals are the data itself",
+	})
+}

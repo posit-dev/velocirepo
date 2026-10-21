@@ -306,3 +306,21 @@ type statsResponse struct {
 type followerResponse struct {
 	FirstDegreeSize int64 `json:"firstDegreeSize"`
 }
+
+func init() {
+	Register(Meta{
+		Name:      "linkedin",
+		Freshness: map[string]int{"": 2},
+		// Statistics are snapshots. The posts endpoint also returns drafts and
+		// non-public posts, so only what velocirepo stores is archived.
+		Archive:           ArchiveReadFields,
+		Reduce:            reduceLinkedInResponse,
+		NoReferenceTotals: "its statistics are the data itself",
+	})
+}
+
+// reduceLinkedInResponse keeps only what velocirepo stores of a LinkedIn
+// response. Until that's implemented, nothing is archived.
+func reduceLinkedInResponse(url string, body []byte) ([]byte, bool) {
+	return nil, false
+}

@@ -142,3 +142,13 @@ func (p *Plausible) query(ctx context.Context, payload interface{}, result inter
 		StatusError:  "plausible returned",
 	}, result)
 }
+
+func init() {
+	Register(Meta{
+		Name:      "plausible",
+		Freshness: map[string]int{"": 2},
+		// Plausible keeps the full history.
+		Archive:           NotArchived,
+		NoReferenceTotals: "not implemented yet",
+	})
+}
