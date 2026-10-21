@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -17,7 +18,94 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// workflowTemplate is the nightly workflow: the gate, which fetches, checks,
+// commits and pushes, and reports in the tracking issue.
 const workflowTemplate = `name: Fetch Metrics
+
+on:
+  schedule:
+    - cron: '{{.Cron}}'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Land a project's held-back data: <source>/<project>"
+        required: false
+        default: ""
+      discard:
+        description: "Discard a project's held-back data: <source>/<project>"
+        required: false
+        default: ""
+      repair:
+        description: "Re-fetch or replay a range: <source>/<project> <from>..<to>"
+        required: false
+        default: ""
+
+# One run at a time: a run that is in progress is allowed to finish.
+concurrency:
+  group: velocirepo-gate
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # commit the data, and store the archive as release assets
+  issues: write    # the tracking issue
+  actions: read    # archives saved as artifacts by earlier runs
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The history back to the last commit the gate checked.
+          fetch-depth: 0
+
+      - uses: posit-dev/velocirepo@{{.Version}}
+        with:
+          mode: gate
+          github-token: ${{"{{"}} secrets.GH_TOKEN {{"}}"}}
+{{- if .NeedsPlausible}}
+          plausible-token: ${{"{{"}} secrets.PLAUSIBLE_TOKEN {{"}}"}}
+{{- end}}
+{{- if .NeedsYouTube}}
+          youtube-token: ${{"{{"}} secrets.YOUTUBE_TOKEN {{"}}"}}
+{{- end}}
+          release: ${{"{{"}} inputs.release {{"}}"}}
+          discard: ${{"{{"}} inputs.discard {{"}}"}}
+          repair: ${{"{{"}} inputs.repair {{"}}"}}
+`
+
+// heartbeatTemplate checks every day that the nightly workflow ran, since a
+// workflow that doesn't run can't report that itself.
+const heartbeatTemplate = `name: Check the nightly run
+
+on:
+  schedule:
+    - cron: '{{.HeartbeatCron}}'
+  workflow_dispatch:
+
+permissions:
+  contents: read  # the nightly workflow's schedule
+  issues: write   # the tracking issue
+  actions: read   # the nightly workflow's runs
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/workflows
+
+      - uses: posit-dev/velocirepo@{{.Version}}
+        with:
+          mode: check-heartbeat
+          fetch-args: --workflow {{.Workflow}}
+`
+
+// legacyWorkflowTemplate is the workflow install-ci generated before the
+// gate. Workflows made from it keep working: the action's mode defaults to
+// fetch.
+const legacyWorkflowTemplate = `name: Fetch Metrics
 
 on:
   schedule:
@@ -62,10 +150,60 @@ jobs:
           git push
 `
 
+// workflowData fills in the templates.
+type workflowData struct {
+	Cron           string
+	HeartbeatCron  string
+	Version        string
+	Workflow       string
+	NeedsPlausible bool
+	NeedsYouTube   bool
+}
+
+// heartbeatDelay is how many hours after the nightly run's scheduled time
+// the heartbeat checks that it started.
+const heartbeatDelay = 3
+
+// heartbeatCron returns the heartbeat's schedule: three hours after the
+// nightly run's, which must be daily at a fixed time.
+func heartbeatCron(cron string) (string, error) {
+	fields := strings.Fields(cron)
+	bad := fmt.Errorf(`the heartbeat needs a daily schedule at a fixed time, such as "30 9 * * *"; got %q`, cron)
+	if len(fields) != 5 || fields[2] != "*" || fields[3] != "*" || fields[4] != "*" {
+		return "", bad
+	}
+	minute, err1 := strconv.Atoi(fields[0])
+	hour, err2 := strconv.Atoi(fields[1])
+	if err1 != nil || err2 != nil {
+		return "", bad
+	}
+	return fmt.Sprintf("%d %d * * *", minute, (hour+heartbeatDelay)%24), nil
+}
+
+// renderWorkflow writes a template to path.
+func renderWorkflow(path, text string, data workflowData) error {
+	tmpl, err := template.New("workflow").Parse(text)
+	if err != nil {
+		return fmt.Errorf("parse template: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create workflow file: %w", err)
+	}
+	if err := tmpl.Execute(f, data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("render template: %w", err)
+	}
+	return f.Close()
+}
+
 func installCICmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "install-ci",
-		Short:   "Generate GitHub Actions workflow for nightly metric fetching",
+		Short:   "Generate GitHub Actions workflows for the nightly run and its heartbeat",
 		GroupID: "ci",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !isInteractive() {
@@ -77,6 +215,10 @@ func installCICmd() *cobra.Command {
 
 			defaultCron, reason := suggestSchedule(cfg, plausibleZoneLookup(cmd.Context(), cfg))
 			cron, err := prompt(out, reader, "Cron schedule", defaultCron, reason)
+			if err != nil {
+				return err
+			}
+			hbCron, err := heartbeatCron(cron)
 			if err != nil {
 				return err
 			}
@@ -97,65 +239,39 @@ func installCICmd() *cobra.Command {
 				return err
 			}
 
-			outPath := filepath.Join(cfg.Dir, filename)
+			data := workflowData{Cron: cron, HeartbeatCron: hbCron, Version: actionRef(ver, version.Version), Workflow: filepath.Base(filename)}
+			for _, p := range cfg.Projects {
+				data.NeedsPlausible = data.NeedsPlausible || !p.Plausible.IsEmpty()
+				data.NeedsYouTube = data.NeedsYouTube || !p.YouTube.IsEmpty()
+			}
 
-			if _, err := os.Stat(outPath); err == nil {
-				ok, err := confirm(out, reader, fmt.Sprintf("File %s already exists. Overwrite?", filename))
-				if err != nil {
+			files := []struct{ path, text string }{
+				{filepath.Join(cfg.Dir, filename), workflowTemplate},
+				{filepath.Join(cfg.Dir, filepath.Dir(filename), "velocirepo-heartbeat.yml"), heartbeatTemplate},
+			}
+			for _, f := range files {
+				if _, err := os.Stat(f.path); err == nil {
+					ok, err := confirm(out, reader, fmt.Sprintf("File %s already exists. Overwrite?", f.path))
+					if err != nil {
+						return err
+					}
+					if !ok {
+						_, _ = fmt.Fprintln(out, "Cancelled.")
+						return nil
+					}
+				}
+			}
+			for _, f := range files {
+				if err := renderWorkflow(f.path, f.text, data); err != nil {
 					return err
 				}
-				if !ok {
-					_, _ = fmt.Fprintln(out, "Cancelled.")
-					return nil
-				}
+				_, _ = fmt.Fprintf(out, "Created %s\n", f.path)
 			}
 
-			needsPlausible := false
-			needsYouTube := false
-			projects := cfg.Projects
-			for _, p := range projects {
-				if !p.Plausible.IsEmpty() {
-					needsPlausible = true
-				}
-				if !p.YouTube.IsEmpty() {
-					needsYouTube = true
-				}
+			if err := promptOwners(cmd.Context(), out, reader); err != nil {
+				return err
 			}
-
-			tmpl, err := template.New("workflow").Parse(workflowTemplate)
-			if err != nil {
-				return fmt.Errorf("parse template: %w", err)
-			}
-
-			outDir := filepath.Dir(outPath)
-			if err := os.MkdirAll(outDir, 0755); err != nil {
-				return fmt.Errorf("create directory: %w", err)
-			}
-
-			f, err := os.Create(outPath)
-			if err != nil {
-				return fmt.Errorf("create workflow file: %w", err)
-			}
-			defer func() { _ = f.Close() }()
-
-			actionRef := actionRef(ver, version.Version)
-
-			err = tmpl.Execute(f, struct {
-				Cron           string
-				Version        string
-				NeedsPlausible bool
-				NeedsYouTube   bool
-			}{
-				Cron:           cron,
-				Version:        actionRef,
-				NeedsPlausible: needsPlausible,
-				NeedsYouTube:   needsYouTube,
-			})
-			if err != nil {
-				return fmt.Errorf("render template: %w", err)
-			}
-
-			_, _ = fmt.Fprintf(out, "Created %s\n", outPath)
+			_, _ = fmt.Fprintln(out, "No repository settings need to change: the workflow's own token commits, keeps the tracking issue and stores the archive.")
 			return nil
 		},
 	}

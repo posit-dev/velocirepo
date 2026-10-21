@@ -70,3 +70,28 @@ func TestConcatenationDay(t *testing.T) {
 		t.Errorf("day 31 loaded: %v", err)
 	}
 }
+
+func TestSetSettingList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "velocirepo.toml")
+	original := "# My projects\n\n[projects.a]\npypi = \"a\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSettingList(path, "owners", []string{"jeroenjanssens", "@posit-dev/devrel"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Settings.Owners) != 2 || cfg.Settings.Owners[1] != "@posit-dev/devrel" || cfg.Projects["a"].PyPI[0] != "a" {
+		t.Errorf("settings = %+v, projects = %+v", cfg.Settings, cfg.Projects)
+	}
+	if err := SetSettingList(path, "owners", []string{"someone"}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Count(string(data), "owners") != 1 || !strings.HasPrefix(string(data), "# My projects") {
+		t.Errorf("config =\n%s", data)
+	}
+}

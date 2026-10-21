@@ -79,8 +79,10 @@ GITHUB_TOKEN is the token velocirepo fetches with. The tracking issue and the ar
 	cmd.Flags().StringVar(&archiveDir, "archive", "", "archive the responses in this directory (default: $RUNNER_TEMP/velocirepo-archive)")
 	cmd.Flags().BoolVar(&noConcatenate, "no-concatenate", false, "don't concatenate")
 	cmd.Flags().BoolVar(&noReconcile, "no-reconcile", false, "don't compare stored totals with the APIs' own totals")
-	cmd.Flags().StringVar(&release, "release", "", "land a project's held-back data: <source>/<project> (from v1.4.0)")
-	cmd.Flags().StringVar(&discard, "discard", "", "discard a project's held-back data: <source>/<project> (from v1.4.0)")
-	cmd.Flags().StringVar(&repair, "repair", "", "re-fetch or replay a range: <source>/<project> <from>..<to> (from v1.4.0)")
+	// The workflow's manual inputs come through the environment, since they
+	// contain spaces.
+	cmd.Flags().StringVar(&release, "release", os.Getenv("VELOCIREPO_RELEASE"), "land a project's held-back data: <source>/<project> (from v1.4.0; default: $VELOCIREPO_RELEASE)")
+	cmd.Flags().StringVar(&discard, "discard", os.Getenv("VELOCIREPO_DISCARD"), "discard a project's held-back data: <source>/<project> (from v1.4.0; default: $VELOCIREPO_DISCARD)")
+	cmd.Flags().StringVar(&repair, "repair", os.Getenv("VELOCIREPO_REPAIR"), "re-fetch or replay a range: <source>/<project> <from>..<to> (from v1.4.0; default: $VELOCIREPO_REPAIR)")
 	return cmd
 }

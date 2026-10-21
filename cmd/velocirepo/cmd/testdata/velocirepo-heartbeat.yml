@@ -1,0 +1,24 @@
+name: Check the nightly run
+
+on:
+  schedule:
+    - cron: '30 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read  # the nightly workflow's schedule
+  issues: write   # the tracking issue
+  actions: read   # the nightly workflow's runs
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/workflows
+
+      - uses: posit-dev/velocirepo@v1
+        with:
+          mode: check-heartbeat
+          fetch-args: --workflow velocirepo.yml

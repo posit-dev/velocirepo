@@ -12,12 +12,12 @@ import (
 	"github.com/posit-dev/velocirepo/internal/config"
 )
 
-// renderTestWorkflow renders the workflow template with the given data and
-// returns the YAML string. It uses the package-level workflowTemplate const
-// directly so that any change to the template is automatically covered.
+// renderTestWorkflow renders the legacy workflow template with the given
+// data and returns the YAML string. Workflows made from it must keep
+// working.
 func renderTestWorkflow(t *testing.T, data interface{}) string {
 	t.Helper()
-	tmpl, err := template.New("workflow").Parse(workflowTemplate)
+	tmpl, err := template.New("workflow").Parse(legacyWorkflowTemplate)
 	if err != nil {
 		t.Fatalf("parse workflow template: %v", err)
 	}
@@ -28,7 +28,7 @@ func renderTestWorkflow(t *testing.T, data interface{}) string {
 	return buf.String()
 }
 
-func TestWorkflowTemplateHasConcurrencyGroup(t *testing.T) {
+func TestLegacyWorkflowTemplateHasConcurrencyGroup(t *testing.T) {
 	yaml := renderTestWorkflow(t, struct {
 		Cron           string
 		Version        string
@@ -41,7 +41,7 @@ func TestWorkflowTemplateHasConcurrencyGroup(t *testing.T) {
 	assertContains(t, yaml, "cancel-in-progress: false")
 }
 
-func TestWorkflowTemplateCommitStepHasIfNotCancelled(t *testing.T) {
+func TestLegacyWorkflowTemplateCommitStepHasIfNotCancelled(t *testing.T) {
 	yaml := renderTestWorkflow(t, struct {
 		Cron           string
 		Version        string
@@ -63,7 +63,7 @@ func TestWorkflowTemplateCommitStepHasIfNotCancelled(t *testing.T) {
 	assertContains(t, stepYAML, "!cancelled()")
 }
 
-func TestWorkflowTemplateCommitStepPullsBeforePush(t *testing.T) {
+func TestLegacyWorkflowTemplateCommitStepPullsBeforePush(t *testing.T) {
 	yaml := renderTestWorkflow(t, struct {
 		Cron           string
 		Version        string
@@ -84,7 +84,7 @@ func TestWorkflowTemplateCommitStepPullsBeforePush(t *testing.T) {
 	}
 }
 
-func TestWorkflowTemplateOptionalTokens(t *testing.T) {
+func TestLegacyWorkflowTemplateOptionalTokens(t *testing.T) {
 	withBoth := renderTestWorkflow(t, struct {
 		Cron           string
 		Version        string
