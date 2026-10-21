@@ -40,3 +40,16 @@ func TestGateAndArchiveSettings(t *testing.T) {
 		t.Errorf("an invalid gate value loaded: %v", err)
 	}
 }
+
+func TestTimezoneSettings(t *testing.T) {
+	cfg, err := loadConfigText(t, "[settings.timezones]\n\"plotnine.org\" = \"America/Los_Angeles\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Settings.Timezones["plotnine.org"] != "America/Los_Angeles" {
+		t.Errorf("timezones = %v", cfg.Settings.Timezones)
+	}
+	if _, err := loadConfigText(t, "[settings.timezones]\n\"plotnine.org\" = \"Mars/Olympus\"\n"); err == nil || !strings.Contains(err.Error(), "plotnine.org") {
+		t.Errorf("an invalid time zone loaded: %v", err)
+	}
+}

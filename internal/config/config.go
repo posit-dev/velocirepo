@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/posit-dev/velocirepo/internal/sourceinfo"
@@ -151,6 +152,9 @@ type SettingsConfig struct {
 	Gate string `toml:"gate"`
 	// Archive turns the raw response archive on or off; it's on by default.
 	Archive *bool `toml:"archive"`
+	// Timezones maps a Plausible site to the time zone its days end in, for
+	// accounts without access to Plausible's Sites API.
+	Timezones map[string]string `toml:"timezones"`
 }
 
 // Enforce reports whether the gate enforces rather than only reports.
@@ -168,6 +172,11 @@ func (s SettingsConfig) validate() error {
 	case "", "report", "enforce":
 	default:
 		return fmt.Errorf("settings.gate is %q; use \"report\" or \"enforce\"", s.Gate)
+	}
+	for site, zone := range s.Timezones {
+		if _, err := time.LoadLocation(zone); err != nil {
+			return fmt.Errorf("settings.timezones: %s: unknown time zone %q", site, zone)
+		}
 	}
 	return nil
 }

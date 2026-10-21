@@ -554,58 +554,58 @@ type fetchSourceDescriptor struct {
 	sourceinfo.Descriptor
 	missingToken  func(Tokens) string
 	beforeFetch   func(context.Context, Tokens)
-	metricFactory func(*http.Client, Tokens, string) source.Source
-	eventFactory  func(*http.Client, Tokens, string) source.EventSource
+	metricFactory func(*http.Client, Tokens, *config.Config, string) source.Source
+	eventFactory  func(*http.Client, Tokens, *config.Config, string) source.EventSource
 }
 
 var fetchSourceDescriptors = []fetchSourceDescriptor{
 	{
 		Descriptor: sourceinfo.Must("github-traffic"),
-		metricFactory: func(client *http.Client, tokens Tokens, target string) source.Source {
+		metricFactory: func(client *http.Client, tokens Tokens, _ *config.Config, target string) source.Source {
 			return &source.GitHubTraffic{Client: client, Token: tokens.GitHub, Repo: target}
 		},
 	},
 	{
 		Descriptor: sourceinfo.Must("github"),
-		eventFactory: func(client *http.Client, tokens Tokens, target string) source.EventSource {
+		eventFactory: func(client *http.Client, tokens Tokens, _ *config.Config, target string) source.EventSource {
 			return &source.GitHubEvents{Client: client, Token: tokens.GitHub, Repo: target}
 		},
 	},
 	{
 		Descriptor: sourceinfo.Must("pypi"),
-		metricFactory: func(client *http.Client, _ Tokens, target string) source.Source {
+		metricFactory: func(client *http.Client, _ Tokens, _ *config.Config, target string) source.Source {
 			return &source.PyPI{Client: client, Package: target}
 		},
 	},
 	{
 		Descriptor: sourceinfo.Must("cran"),
-		metricFactory: func(client *http.Client, _ Tokens, target string) source.Source {
+		metricFactory: func(client *http.Client, _ Tokens, _ *config.Config, target string) source.Source {
 			return &source.CRAN{Client: client, Package: target}
 		},
 	},
 	{
 		Descriptor: sourceinfo.Must("homebrew"),
-		metricFactory: func(client *http.Client, _ Tokens, target string) source.Source {
+		metricFactory: func(client *http.Client, _ Tokens, _ *config.Config, target string) source.Source {
 			return &source.Homebrew{Client: client, Formula: target}
 		},
 	},
 	{
 		Descriptor:   sourceinfo.Must("plausible"),
 		missingToken: func(tokens Tokens) string { return missingToken(tokens.Plausible, "PLAUSIBLE_TOKEN not set") },
-		metricFactory: func(client *http.Client, tokens Tokens, target string) source.Source {
-			return &source.Plausible{Client: client, APIKey: tokens.Plausible, SiteID: target}
+		metricFactory: func(client *http.Client, tokens Tokens, cfg *config.Config, target string) source.Source {
+			return &source.Plausible{Client: client, APIKey: tokens.Plausible, SiteID: target, TimeZone: cfg.Settings.Timezones[target]}
 		},
 	},
 	{
 		Descriptor: sourceinfo.Must("openvsx"),
-		metricFactory: func(client *http.Client, _ Tokens, target string) source.Source {
+		metricFactory: func(client *http.Client, _ Tokens, _ *config.Config, target string) source.Source {
 			return &source.OpenVSX{Client: client, ExtensionID: target}
 		},
 	},
 	{
 		Descriptor:   sourceinfo.Must("youtube"),
 		missingToken: func(tokens Tokens) string { return missingToken(tokens.YouTube, "YOUTUBE_TOKEN not set") },
-		metricFactory: func(client *http.Client, tokens Tokens, target string) source.Source {
+		metricFactory: func(client *http.Client, tokens Tokens, _ *config.Config, target string) source.Source {
 			return &source.YouTube{Client: client, APIKey: tokens.YouTube, Target: target}
 		},
 	},
@@ -615,13 +615,13 @@ var fetchSourceDescriptors = []fetchSourceDescriptor{
 		beforeFetch: func(ctx context.Context, tokens Tokens) {
 			auth.CheckLinkedInTokenExpiry(ctx, tokens.LinkedIn, os.Getenv("LINKEDIN_CLIENT_ID"), os.Getenv("LINKEDIN_CLIENT_SECRET"))
 		},
-		metricFactory: func(client *http.Client, tokens Tokens, target string) source.Source {
+		metricFactory: func(client *http.Client, tokens Tokens, _ *config.Config, target string) source.Source {
 			return &source.LinkedIn{Client: client, Token: tokens.LinkedIn, Target: target}
 		},
 	},
 	{
 		Descriptor: sourceinfo.Must("rss"),
-		metricFactory: func(client *http.Client, _ Tokens, target string) source.Source {
+		metricFactory: func(client *http.Client, _ Tokens, _ *config.Config, target string) source.Source {
 			return &source.RSS{Client: client, FeedURL: target}
 		},
 	},
@@ -666,7 +666,7 @@ func All(ctx context.Context, cfg *config.Config, tokens Tokens, opts Options) (
 		}
 		desc.runBeforeFetch(ctx, tokens)
 		for id, proj := range projects {
-			desc.addJobs(jobsByKey, &jobOrder, client, tokens, id, proj)
+			desc.addJobs(jobsByKey, &jobOrder, client, tokens, cfg, id, proj)
 		}
 	}
 
@@ -691,13 +691,13 @@ func (d fetchSourceDescriptor) runBeforeFetch(ctx context.Context, tokens Tokens
 	}
 }
 
-func (d fetchSourceDescriptor) addJobs(jobs map[jobKey]*fetchJob, order *[]jobKey, client *http.Client, tokens Tokens, projectID string, proj config.Project) {
+func (d fetchSourceDescriptor) addJobs(jobs map[jobKey]*fetchJob, order *[]jobKey, client *http.Client, tokens Tokens, cfg *config.Config, projectID string, proj config.Project) {
 	for _, target := range proj.SourceValues(d.Name) {
 		if d.eventFactory != nil {
-			addEventJob(jobs, order, d.Name, projectID, target, d.eventFactory(client, tokens, target))
+			addEventJob(jobs, order, d.Name, projectID, target, d.eventFactory(client, tokens, cfg, target))
 			continue
 		}
-		addMetricJob(jobs, order, d.Name, projectID, d.metricFactory(client, tokens, target))
+		addMetricJob(jobs, order, d.Name, projectID, d.metricFactory(client, tokens, cfg, target))
 	}
 }
 
@@ -729,7 +729,7 @@ func runDescriptor(ctx context.Context, cfg *config.Config, tokens Tokens, opts 
 	jobsByKey := make(map[jobKey]*fetchJob)
 	var jobOrder []jobKey
 	for id, proj := range projects {
-		desc.addJobs(jobsByKey, &jobOrder, client, tokens, id, proj)
+		desc.addJobs(jobsByKey, &jobOrder, client, tokens, cfg, id, proj)
 	}
 
 	jobs := orderedJobs(jobsByKey, jobOrder)
