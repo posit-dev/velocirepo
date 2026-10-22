@@ -2,46 +2,66 @@
 title: Exporting Data
 ---
 
-## Export to Parquet or CSV
+## Export to Parquet, CSV or DuckDB
 
-Export metrics, events, and project metadata to Parquet or CSV for use in other tools:
+Export the data as plain tables for use in other tools:
 
 ```bash
 velocirepo export ./out/
 ```
 
-This writes one file per table:
+This writes one Parquet file per table:
 
 ```
-  out/metrics.parquet (257 KB)
-  out/events.parquet (2.9 MB)
-  out/content.parquet (15 KB)
-  out/indicators.parquet (42 KB)
-  out/projects.parquet (2 KB)
+  out/projects.parquet (13 KB)
+  out/targets.parquet (12 KB)
+  out/metrics.parquet (9.3 MB)
+  out/metrics_filled.parquet (35.0 MB)
+  out/indicators.parquet (20.0 MB)
+  out/events.parquet (6.8 MB)
+  out/content.parquet (87.7 MB)
+  out/meta.parquet (324 B)
 ```
 
-Use `--format csv` for CSV output, and `--source` or `--project` to filter:
+Use `--format csv` for CSV files, or `--format duckdb` for one standalone DuckDB database, `out/velocirepo.duckdb`. Use `--source` or `--project` to filter:
 
 ```bash
 velocirepo export ./out/ --format csv
+velocirepo export ./out/ --format duckdb
 velocirepo export ./out/ --source github
 velocirepo export ./out/ --project quarto
 ```
 
+Add `--data-dict` to also write `data-dict.yaml`, a data dictionary of the database; it implies `--format duckdb`. See [Data Dictionary](data-dict.qmd).
+
+### The tables
+
+Every format has the same tables and columns:
+
+| Table | One row per |
+|---|---|
+| `projects` | project in `velocirepo.toml` |
+| `targets` | project, source and target in `velocirepo.toml`; `canonical` is false for a copy of a target another project keeps |
+| `metrics` | project, source, target, metric and date (and page, video, post or issue) |
+| `metrics_filled` | the same, with every `total_*` series carried forward to every day |
+| `indicators` | daily metric, date and indicator |
+| `events` | event |
+| `content` | issue, pull request, repository, video, post or feed item |
+| `meta` | export: `as_of`, the latest day of the metrics, and `built_at` |
+
+The tables are plain data:
+
+- The source-specific fields that sources declare are columns of their own: `page`, `video_id`, `post_id` and `ref` in the metrics tables, `author` and `state` in `content`. A column is there when the exported rows have it. All the source-specific fields are also in `extra`.
+- `extra` is JSON text, not a JSON-typed column, so DuckDB reads the export without its json extension; `tags` is a list of strings.
+- Project fields that the config leaves out are NULL.
+
 ## Using the data with other tools
 
-velocirepo provides two ways to access your metrics data from external tools:
+velocirepo provides three ways to access your metrics data from external tools:
 
-1. **DuckDB file** — a persistent `velocirepo/data/velocirepo.duckdb` file with views over the raw JSONL data and a `projects` table. Open it directly from any tool that supports DuckDB.
-2. **Parquet export** — use `velocirepo export ./out/` to write Parquet (or CSV) files that any data tool can read.
-
-The DuckDB file is rebuilt automatically after every `fetch` and project mutation command. You can also rebuild it manually:
-
-```bash
-velocirepo build-db
-```
-
-> **Note:** The DuckDB file uses relative paths, so external tools must open it from the data directory (or set DuckDB's working directory to it).
+1. **Live DuckDB file**: `velocirepo/data/velocirepo.duckdb`, with views over the JSONL files and the `projects` and `targets` tables. It's rebuilt after every `fetch` and project command, and with `velocirepo build-db`. Every query reads the JSONL files again, and the views hold the absolute path of the data directory, so it only works on the machine that built it.
+2. **Standalone DuckDB file**: `velocirepo export ./out/ --format duckdb` writes the tables as plain data. Copy it anywhere.
+3. **Parquet export**: `velocirepo export ./out/` writes Parquet (or CSV) files that any data tool can read.
 
 ## Tool compatibility
 
@@ -62,18 +82,15 @@ velocirepo build-db
 **DuckDB CLI:**
 
 ```bash
-cd velocirepo/data
-duckdb velocirepo.duckdb "SELECT project, target, arg_max(value, date) AS stars FROM metrics WHERE metric = 'total_stars' GROUP BY ALL ORDER BY stars DESC"
+duckdb out/velocirepo.duckdb "SELECT project, target, arg_max(value, date) AS stars FROM metrics WHERE metric = 'total_stars' GROUP BY ALL ORDER BY stars DESC"
 ```
 
 **Python (`duckdb`):**
 
 ```python
 import duckdb
-import os
 
-os.chdir("velocirepo/data")
-con = duckdb.connect("velocirepo.duckdb", read_only=True)
+con = duckdb.connect("out/velocirepo.duckdb", read_only=True)
 df = con.sql("SELECT * FROM metrics WHERE source = 'pypi' ORDER BY date DESC LIMIT 10").df()
 ```
 
@@ -93,5 +110,6 @@ stars = (
 
 ## Next steps
 
+- [Write a data dictionary of the export](data-dict.qmd)
 - [Query data directly with SQL](querying.qmd)
 - [Build dashboards with Views](views.qmd)

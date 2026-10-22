@@ -65,6 +65,11 @@ type Project struct {
 	Tags        StringList `toml:"tags"`
 	Website     string     `toml:"website"`
 	Logo        string     `toml:"logo"`
+	// Notes say what the project is, for the data dictionary's glossary.
+	Notes string `toml:"notes"`
+	// DuplicateOf names the project that also tracks every target of this
+	// one, such as an old project id kept for its history.
+	DuplicateOf string `toml:"duplicate_of"`
 
 	GitHubEvents  StringList `toml:"github"`
 	GitHubTraffic StringList `toml:"github-traffic"`
@@ -218,6 +223,7 @@ type Config struct {
 	Views      ViewsConfig                `toml:"views"`
 	Indicators map[string]IndicatorConfig `toml:"indicators"`
 	Projects   map[string]Project         `toml:"projects"`
+	DataDict   DataDictConfig             `toml:"data_dict"`
 
 	// Computed fields
 	Dir string `toml:"-"`
@@ -258,6 +264,7 @@ func (c *Config) ProjectInfos() []store.ProjectInfo {
 		return nil
 	}
 	infos := make([]store.ProjectInfo, 0, len(c.Projects))
+	keepers := c.keepers()
 	for id, p := range c.Projects {
 		infos = append(infos, store.ProjectInfo{
 			ID:          id,
@@ -267,6 +274,7 @@ func (c *Config) ProjectInfos() []store.ProjectInfo {
 			Tags:        []string(p.Tags),
 			Website:     p.Website,
 			Logo:        p.Logo,
+			Targets:     c.projectTargets(id, keepers),
 		})
 	}
 	return infos
@@ -316,6 +324,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	if err := cfg.Settings.validate(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := cfg.validateDataDict(); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 

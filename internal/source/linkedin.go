@@ -317,6 +317,23 @@ func init() {
 		Archive:           ArchiveReadFields,
 		Reduce:            reduceLinkedInResponse,
 		NoReferenceTotals: "its statistics are the data itself",
+		Target:            "a LinkedIn organization or person, as a URN",
+		Metrics: []MetricInfo{
+			{Name: "total_followers", Kind: MetricTotal, Description: "the organization's followers"},
+			{Name: "total_impressions", Kind: MetricTotal, Key: "post_id", Description: "one post's impressions, all time"},
+			{Name: "total_likes", Kind: MetricTotal, Key: "post_id", Description: "one post's likes, all time"},
+			{Name: "total_comments", Kind: MetricTotal, Key: "post_id", Description: "comments on one post, all time"},
+			{Name: "total_shares", Kind: MetricTotal, Key: "post_id", Description: "one post's shares, all time"},
+			{Name: "total_clicks", Kind: MetricTotal, Key: "post_id", Description: "clicks on one post, all time"},
+		},
+		Content: []ContentInfo{
+			{Name: "post", Description: "a LinkedIn post; id is its URN"},
+			{Name: "article", Description: "a LinkedIn post that shares an article"},
+			{Name: "media", Description: "a LinkedIn post with media"},
+		},
+		Columns: []ColumnInfo{
+			{Table: "metrics", Key: "post_id", Type: "string", Description: "the LinkedIn post URN of a per-post row", Identifies: "id"},
+		},
 	})
 }
 

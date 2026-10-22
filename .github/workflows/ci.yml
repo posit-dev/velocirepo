@@ -38,5 +38,12 @@ jobs:
         # The tests lint the workflows install-ci generates with it.
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install data-dict
+        # The tests validate the data dictionary export --data-dict writes,
+        # and the data against it, with it.
+        run: uv tool install data-dict-yaml==0.0.3
+
       - name: Test
         run: go test -race ./...

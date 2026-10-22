@@ -91,6 +91,37 @@ owners = ["jeroenjanssens", "@posit-dev/devrel"]
 
 See [Keeping the data right](reliability.qmd) for the gate, the archive and the tracking issue.
 
+## Data dictionary
+
+`velocirepo export --data-dict` writes a data dictionary of the export. Add what velocirepo can't know about your data to `velocirepo.toml`:
+
+```toml
+[projects.shiny]
+github = "rstudio/shiny"
+# An old project id kept for its history: every target is also tracked by shiny-r.
+duplicate_of = "shiny-r"
+
+[projects.tidyverse]
+cran = "tidyverse"
+# What the project is, for the dictionary's glossary.
+notes = "The tidyverse meta-package, not a rollup of all tidyverse packages."
+
+[data_dict]
+name = "acme-oss"
+description = "Adoption and engagement of Acme's open source projects."
+
+# The project that keeps a target that more than one project tracks.
+[data_dict.keep.plausible]
+"shiny.posit.co" = "shiny-python"
+
+[[data_dict.notes]]
+tables = ["metrics"]
+source = "cran"
+text = "The series misses 20 days since 2012."
+```
+
+See [Data Dictionary](data-dict.qmd) for every key.
+
 ## Next steps
 
 - [Understand the data storage format](data-storage.qmd)

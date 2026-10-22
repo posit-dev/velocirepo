@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/posit-dev/velocirepo/internal/config"
+	"github.com/posit-dev/velocirepo/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -71,6 +74,16 @@ func validateProjectsCmd() *cobra.Command {
 
 			_, _ = fmt.Fprintf(out, "%d projects, %d sources: %d passed, %d failed\n",
 				len(projects), totalSources, passed, failed)
+
+			// Shared targets are counted under one project in the data
+			// dictionary; the config should say which.
+			for _, st := range cfg.SharedTargets() {
+				if st.Resolved || (projectFilter != "" && !slices.Contains(st.Projects, projectFilter)) {
+					continue
+				}
+				ui.Warnf("%s %s is tracked by %s; say which project keeps it in [data_dict.keep.%s], or mark the copies with duplicate_of",
+					st.Source, st.Target, strings.Join(st.Projects, ", "), st.Source)
+			}
 
 			if failed > 0 {
 				return fmt.Errorf("%d source(s) failed validation", failed)

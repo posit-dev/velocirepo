@@ -75,6 +75,12 @@ func init() {
 		// cranlogs keeps the full history and publishes two days late.
 		Archive:    NotArchived,
 		Reconciles: true,
+		Target:     "a CRAN package name",
+		Metrics: []MetricInfo{
+			{Name: "daily_downloads", Kind: MetricDaily, Description: "package downloads that day from the Posit CRAN mirror (cranlogs)", Measure: "cran_downloads", MeasureDescription: "CRAN downloads from the Posit mirror. Includes automated traffic such as CI; indicates scale and trend, not users. Don't add to the downloads of another registry."},
+		},
+		Notes: "CRAN downloads come from cranlogs, which counts the downloads of the Posit CRAN mirror only. They include automated traffic, so they indicate scale and trend, not user counts. " +
+			"cranlogs publishes two days late and leaves out days without downloads, so a missing day means no downloads.",
 	})
 }
 

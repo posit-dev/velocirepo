@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/posit-dev/velocirepo/internal/badge"
 	"github.com/posit-dev/velocirepo/internal/config"
+	"github.com/posit-dev/velocirepo/internal/datadict"
 	"github.com/posit-dev/velocirepo/internal/fetch"
 	"github.com/posit-dev/velocirepo/internal/projectdata"
 	"github.com/posit-dev/velocirepo/internal/sourceinfo"
@@ -598,13 +599,21 @@ func (h *handlers) handleExport(ctx context.Context, req mcp.CallToolRequest) (*
 		return errorResult(fmt.Sprintf("invalid export directory: %v", err)), nil
 	}
 
-	format := req.GetString("format", "parquet")
+	dataDict := req.GetBool("data_dict", false)
+	format := req.GetString("format", "")
+	switch {
+	case format == "" && dataDict:
+		format = "duckdb"
+	case format == "":
+		format = "parquet"
+	case dataDict && format != "duckdb":
+		return errorResult("data_dict describes the duckdb format; leave out format or use duckdb"), nil
+	}
 	source := req.GetString("source", "")
 	project := req.GetString("project", "")
 
-	written, err := store.Export(store.ExportOptions{
+	x, err := store.Materialize(store.ExportOptions{
 		DataDir:    h.cfg.DataDir(),
-		OutDir:     outDir,
 		Format:     format,
 		Source:     source,
 		Project:    project,
@@ -614,13 +623,42 @@ func (h *handlers) handleExport(ctx context.Context, req mcp.CallToolRequest) (*
 	if err != nil {
 		return errorResult(fmt.Sprintf("export: %v", err)), nil
 	}
+	defer func() { _ = x.Close() }()
+	written, err := x.Write(outDir, format)
+	if err != nil {
+		return errorResult(fmt.Sprintf("export: %v", err)), nil
+	}
+
+	var notes []string
+	if dataDict {
+		dict, warnings, err := datadict.Generate(x, datadict.Options{
+			Config: h.cfg, Indicators: h.indicatorDefs(), Source: source, Project: project,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("data dictionary: %v", err)), nil
+		}
+		data, err := dict.YAML()
+		if err != nil {
+			return errorResult(fmt.Sprintf("data dictionary: %v", err)), nil
+		}
+		path := filepath.Join(outDir, datadict.FileName)
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			return errorResult(fmt.Sprintf("data dictionary: %v", err)), nil
+		}
+		written = append(written, path)
+		notes = warnings
+	}
 
 	var files []string
 	for _, path := range written {
 		files = append(files, filepath.Base(path))
 	}
 
-	return textResult(fmt.Sprintf("Exported %d files to %s: %s", len(files), outDir, strings.Join(files, ", "))), nil
+	text := fmt.Sprintf("Exported %d files to %s: %s", len(files), outDir, strings.Join(files, ", "))
+	for _, n := range notes {
+		text += "\nData dictionary: " + n
+	}
+	return textResult(text), nil
 }
 
 // resolveExportDir resolves and validates an export directory supplied by the

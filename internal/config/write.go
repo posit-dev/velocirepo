@@ -59,13 +59,14 @@ func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
 
 func FindSection(lines []string, header string) (start, end int, found bool) {
 	target := "[" + header + "]"
+	inString := multilineStringLines(lines)
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == target {
+		if trimmed == target && !inString[i] {
 			start = i
 			for j := i + 1; j < len(lines); j++ {
 				trimmed := strings.TrimSpace(lines[j])
-				if strings.HasPrefix(trimmed, "[") {
+				if strings.HasPrefix(trimmed, "[") && !inString[j] {
 					return start, j, true
 				}
 			}
@@ -73,6 +74,40 @@ func FindSection(lines []string, header string) (start, end int, found bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// multilineStringLines marks the lines after the first of a multi-line
+// string, such as a project's notes in triple quotes, so that text in them isn't
+// read as a key or a section header.
+func multilineStringLines(lines []string) []bool {
+	marks := make([]bool, len(lines))
+	delim := ""
+	for i, line := range lines {
+		if delim != "" {
+			marks[i] = true
+			if strings.Count(line, delim)%2 == 1 {
+				delim = ""
+			}
+			continue
+		}
+		for _, d := range []string{`"""`, "'''"} {
+			if strings.Count(line, d)%2 == 1 {
+				delim = d
+				break
+			}
+		}
+	}
+	return marks
+}
+
+// valueEnd returns the index after a key's last line: the line itself, or
+// the line that closes the multi-line string it opens.
+func valueEnd(lines []string, inString []bool, i int) int {
+	j := i + 1
+	for j < len(lines) && inString[j] {
+		j++
+	}
+	return j
 }
 
 func AppendProject(path string, id string, project Project) error {
@@ -145,17 +180,25 @@ func applyProjectUpdates(lines []string, start, end int, updates map[string]stri
 }
 
 func updateExistingProjectKeys(lines []string, start, end int, updates map[string]string, unsets map[string]bool) []string {
+	inString := multilineStringLines(lines)
 	for i := start + 1; i < end; i++ {
+		if inString[i] {
+			continue
+		}
 		key := extractKey(lines[i])
 		if key == "" {
 			continue
 		}
-		if unsets[key] {
-			lines[i] = ""
+		_, update := updates[key]
+		if !unsets[key] && !update {
 			continue
 		}
-		if val, ok := updates[key]; ok {
-			lines[i] = formatKeyValue(key, val)
+		last := valueEnd(lines, inString, i)
+		for j := i; j < last; j++ {
+			lines[j] = ""
+		}
+		if update {
+			lines[i] = formatKeyValue(key, updates[key])
 			delete(updates, key)
 		}
 	}

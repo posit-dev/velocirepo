@@ -70,6 +70,9 @@ func BuildDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDef) 
 	if err := createProjectsTable(db, projects); err != nil {
 		return err
 	}
+	if err := createTargets(db, "TABLE", projects); err != nil {
+		return err
+	}
 	if err := createIndicatorsView(db, indicators); err != nil {
 		return err
 	}

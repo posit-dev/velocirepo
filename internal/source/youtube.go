@@ -458,5 +458,21 @@ func init() {
 		// View, like and subscriber totals are snapshots.
 		Archive:           ArchiveFull,
 		NoReferenceTotals: "its totals are the data itself",
+		Target:            "a YouTube channel (@handle or channel id), playlist id or video id, as configured",
+		Metrics: []MetricInfo{
+			{Name: "total_subscribers", Kind: MetricTotal, Description: "the channel's subscribers, rounded by YouTube"},
+			{Name: "total_channel_views", Kind: MetricTotal, Description: "the channel's views, all time"},
+			{Name: "total_videos", Kind: MetricTotal, Description: "the channel's public videos"},
+			{Name: "total_views", Kind: MetricTotal, Key: "video_id", Description: "one video's views, all time"},
+			{Name: "total_likes", Kind: MetricTotal, Key: "video_id", Description: "one video's likes, all time"},
+			{Name: "total_comments", Kind: MetricTotal, Key: "video_id", Description: "comments on one video, all time"},
+		},
+		Content: []ContentInfo{
+			{Name: "video", Description: "a YouTube video; id is the video id"},
+		},
+		Columns: []ColumnInfo{
+			{Table: "metrics", Key: "video_id", Type: "string", Description: "the YouTube video id of a per-video row", Identifies: "id"},
+		},
+		Notes: "YouTube totals are lifetime values as of each fetch: they can't tell how many views a video had before collection began.",
 	})
 }
