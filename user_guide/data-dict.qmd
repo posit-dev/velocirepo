@@ -1,0 +1,182 @@
+---
+title: Data Dictionary
+---
+
+A data dictionary describes what the data means: every table and column, what each source, metric and event type is, how values combine, which tables to join and what to watch out for. velocirepo writes one in the [data-dict](https://data-dict.tidyverse.org) format, `data-dict.yaml`, for exactly the data it exports. Agents that answer questions about data, such as a [commons](https://github.com/posit-dev/commons) agent, read it to write correct queries; people read it to understand the data.
+
+## Export the data with its dictionary
+
+```bash
+velocirepo export ./agent --data-dict
+```
+
+```
+  agent/velocirepo.duckdb (442.0 MB)
+  agent/data-dict.yaml (42 KB)
+```
+
+`velocirepo.duckdb` is a standalone DuckDB database: plain tables, no views, no paths to your data directory and no JSON-typed columns, so you can copy it anywhere and open it without DuckDB's json extension. The dictionary describes this database, so `--data-dict` implies `--format duckdb`, and refuses `--format parquet` and `--format csv`.
+
+`--source` and `--project` filter both the data and the dictionary. See [Exporting Data](exporting.qmd) for the tables.
+
+## What velocirepo writes
+
+The dictionary is generated from four things:
+
+- **The schema**: every table and column, with its type, keys and the relationships between tables.
+- **The sources**: what a target is for each source, what every metric, event type and content type means, and caveats that hold for every instance, such as how CRAN counts downloads. Every source declares these, so a new metric can't go undocumented.
+- **The data**: example values and ranges of every column, the sources, metrics and content types that occur, coverage per source, and the projects that are tracked twice.
+- **Your config**: the `[data_dict]` section of `velocirepo.toml` and the `notes` and `duplicate_of` of projects. This is where you write what velocirepo can't know.
+
+It also writes definitions, named expressions an agent can use instead of writing its own:
+
+- `deduplicated`, a filter on every table, when more than one project tracks a target (see below);
+- measures such as `cran_downloads`, `pypi_downloads`, `pageviews` and `stars`: sums of the daily metrics, deduplicated;
+- `net_increase` on `metrics_filled`: how much a `total_*` value grew over a date range.
+
+## Add what velocirepo can't know
+
+Describe your instance in `velocirepo.toml`. Everything is optional.
+
+### The dataset
+
+```toml
+[data_dict]
+name = "acme-oss"
+label = "Acme open source metrics"
+description = "Adoption and engagement of Acme's open source projects."
+details = "Collected nightly by GitHub Actions."
+```
+
+The description comes before the one velocirepo writes, and the details after.
+
+### Projects
+
+Say what a project is when its id or name could mislead:
+
+```toml
+[projects.tidyverse]
+github = "tidyverse/tidyverse"
+cran = "tidyverse"
+notes = """
+The tidyverse meta-package and the tidyverse/tidyverse repo, not a rollup of \
+all tidyverse packages."""
+```
+
+Each project's notes become a glossary entry named after the project id.
+
+### Targets more than one project tracks
+
+When two projects track the same target, such as a website shared by the R and Python versions of a package, their rows hold the same values, and totals across projects count them twice. Say which project keeps the target:
+
+```toml
+[data_dict.keep.plausible]
+"shiny.posit.co" = "shiny-python"
+```
+
+Mark a project whose targets are all copies, such as an old id kept for its history, with `duplicate_of`:
+
+```toml
+[projects.shiny]
+github = "rstudio/shiny"
+duplicate_of = "shiny-r"
+```
+
+This sets `canonical` in the `targets` table and builds the `deduplicated` filter. Until the config says, velocirepo guesses (the project with the most targets) and warns, and the dictionary has a `todo` for it. `velocirepo validate-projects` lists the shared targets without a keeper too.
+
+### Notes on tables and columns
+
+Caveats about your data, such as days that are missing, go in a note:
+
+```toml
+[[data_dict.notes]]
+tables = ["metrics"]
+source = "cran"
+text = """
+The series misses 20 days since 2012, so range sums slightly undercount."""
+
+[[data_dict.notes]]
+tables = ["events"]
+column = "user"
+text = "Bots are included."
+```
+
+`tables` is required; `source` and `column` are optional. A note goes in the details of each table, or of the column, prefixed with the source's name. Delete it once the data is repaired.
+
+### Values
+
+Describe values of enum columns that velocirepo can't, such as the content types an RSS feed sets:
+
+```toml
+[data_dict.values.content.type]
+post = "a blog post on opensource.posit.co"
+resource = "a talk, book or video listed on the site"
+```
+
+A value nothing describes is a `todo` in the dictionary, with a warning.
+
+### Definitions and glossary
+
+Add filters and metrics of your own, in data-dict's [expression language](https://data-dict.tidyverse.org/expressions.html), and terms:
+
+```toml
+[[data_dict.definitions]]
+table = "metrics"
+name = "pre_migration"
+label = "before the 2026-06-23 migration"
+description = "Rows collected before the collection system changed."
+expr = "date <= '2026-06-22'"
+
+[data_dict.glossary]
+"migration" = "On 2026-06-23 the collection system changed."
+```
+
+A definition can't use the name of a column. One with the name of a definition velocirepo writes, such as `pageviews`, replaces it.
+
+## Check the dictionary
+
+Install the data-dict CLI:
+
+```bash
+uv tool install data-dict-yaml
+```
+
+Check the dictionary against the spec:
+
+```bash
+data-dict validate-spec ./agent
+```
+
+Warnings, such as the `todo`s of shared targets without a keeper, don't change the exit code; read the output, or the `status` of `--json`. data-dict checks data only in Parquet files, so it doesn't check the database; velocirepo's tests check that the dictionary describes every table and column of it.
+
+## Use it
+
+A [commons](https://github.com/posit-dev/commons) agent takes a database connection and the dictionary:
+
+```r
+con <- DBI::dbConnect(duckdb::duckdb(), "agent/velocirepo.duckdb", read_only = TRUE)
+
+agent <- commons::commons(
+  client = ellmer::chat_anthropic(),
+  data_sources = list(
+    metrics = commons::data_source(
+      con,
+      tables = c("projects", "targets", "metrics", "metrics_filled", "indicators", "events", "content", "meta"),
+      dictionary = "agent/data-dict.yaml"
+    )
+  )
+)
+```
+
+Rebuild both after every fetch, for example in the workflow that fetches:
+
+```bash
+velocirepo export agent --data-dict
+```
+
+Render the dictionary as a web page for people with `data-dict render agent/data-dict.yaml`.
+
+## Next steps
+
+- [Export data for other tools](exporting.qmd)
+- [Query the data directly with SQL](querying.qmd)

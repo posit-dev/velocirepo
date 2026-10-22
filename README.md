@@ -54,7 +54,8 @@ Full documentation is available at **[posit-dev.github.io/velocirepo](https://po
 - [Configuration](https://posit-dev.github.io/velocirepo/user-guide/configuration.html) — set up `velocirepo.toml` and authentication
 - [Data Storage](https://posit-dev.github.io/velocirepo/user-guide/data-storage.html) — how metrics, events, and content are stored
 - [Querying Data](https://posit-dev.github.io/velocirepo/user-guide/querying.html) — SQL queries with examples
-- [Exporting](https://posit-dev.github.io/velocirepo/user-guide/exporting.html) — Parquet/CSV export and tool integrations
+- [Exporting](https://posit-dev.github.io/velocirepo/user-guide/exporting.html) — Parquet, CSV and DuckDB export and tool integrations
+- [Data Dictionary](https://posit-dev.github.io/velocirepo/user-guide/data-dict.html) — a data-dict.yaml of the export, for agents and people
 - [Indicators](https://posit-dev.github.io/velocirepo/user-guide/indicators.html) — growth rate and trend computation
 - [Badges](https://posit-dev.github.io/velocirepo/user-guide/badges.html) — generate SVG badges
 - [Views](https://posit-dev.github.io/velocirepo/user-guide/views.html) — dashboards and reports

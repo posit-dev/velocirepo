@@ -7,10 +7,13 @@ The `query` command reads JSONL files directly using DuckDB and exposes these vi
 | View | Description |
 |------|-------------|
 | `metrics` | Unified time-series: all sources including aggregated events |
+| `metrics_filled` | Like `metrics`, with every `total_*` series carried forward to every day |
 | `indicators` | Derived growth rate and trend for daily metrics (28-day windows) |
-| `events` | Raw events with timestamp and tags (e.g., GitHub forks, issues, PRs, comments) |
-| `content` | Entity data from content providers (e.g., YouTube video metadata) |
+| `events` | Raw events with timestamp, user and issue or PR number (e.g., GitHub forks, issues, PRs, comments) |
+| `content` | Entity data from content providers (e.g., issues, YouTube videos, feed items) |
 | `projects` | Project metadata from your config |
+| `targets` | Every project, source and target in your config, with `canonical` saying which copy of a shared target counts |
+| `fetch_log` | One row per fetch, with its records and errors |
 
 ## Examples
 
@@ -129,49 +132,80 @@ velocirepo schema
 ```
 
 ```
-┌───────────────┬──────────────┬───────────┐
-│ TABLE         │ COLUMN       │ TYPE      │
-├───────────────┼──────────────┼───────────┤
-│ content       │ source       │ VARCHAR   │
-│ content       │ target       │ VARCHAR   │
-│ content       │ id           │ VARCHAR   │
-│ content       │ title        │ VARCHAR   │
-│ content       │ description  │ VARCHAR   │
-│ content       │ published_at │ TIMESTAMP │
-│ content       │ url          │ VARCHAR   │
-│ content       │ duration     │ BIGINT    │
-│ content       │ tags         │ JSON      │
-│ content       │ type         │ VARCHAR   │
-│ content       │ metadata     │ JSON      │
-│ events        │ project      │ VARCHAR   │
-│ events        │ source       │ VARCHAR   │
-│ events        │ type         │ VARCHAR   │
-│ events        │ target       │ VARCHAR   │
-│ events        │ datetime     │ TIMESTAMP │
-│ events        │ tags         │ JSON      │
-│ indicators    │ project      │ VARCHAR   │
-│ indicators    │ source       │ VARCHAR   │
-│ indicators    │ target       │ VARCHAR   │
-│ indicators    │ metric       │ VARCHAR   │
-│ indicators    │ indicator    │ VARCHAR   │
-│ indicators    │ date         │ DATE      │
-│ indicators    │ value        │ DOUBLE    │
-│ indicators    │ tags         │ JSON      │
-│ metrics       │ project      │ VARCHAR   │
-│ metrics       │ source       │ VARCHAR   │
-│ metrics       │ target       │ VARCHAR   │
-│ metrics       │ metric       │ VARCHAR   │
-│ metrics       │ date         │ DATE      │
-│ metrics       │ value        │ BIGINT    │
-│ metrics       │ tags         │ JSON      │
-│ projects      │ id           │ VARCHAR   │
-│ projects      │ name         │ VARCHAR   │
-│ projects      │ description  │ VARCHAR   │
-│ projects      │ color        │ VARCHAR   │
-│ projects      │ tags         │ VARCHAR[] │
-│ projects      │ website      │ VARCHAR   │
-│ projects      │ logo         │ VARCHAR   │
-└───────────────┴──────────────┴───────────┘
+┌────────────────┬──────────────┬───────────┐
+│ TABLE          │ COLUMN       │ TYPE      │
+├────────────────┼──────────────┼───────────┤
+│ content        │ project      │ VARCHAR   │
+│ content        │ source       │ VARCHAR   │
+│ content        │ target       │ VARCHAR   │
+│ content        │ id           │ VARCHAR   │
+│ content        │ ref          │ INTEGER   │
+│ content        │ title        │ VARCHAR   │
+│ content        │ description  │ VARCHAR   │
+│ content        │ content      │ VARCHAR   │
+│ content        │ published_at │ TIMESTAMP │
+│ content        │ updated_at   │ TIMESTAMP │
+│ content        │ url          │ VARCHAR   │
+│ content        │ duration     │ BIGINT    │
+│ content        │ tags         │ JSON      │
+│ content        │ type         │ VARCHAR   │
+│ content        │ extra        │ JSON      │
+│ events         │ project      │ VARCHAR   │
+│ events         │ source       │ VARCHAR   │
+│ events         │ type         │ VARCHAR   │
+│ events         │ target       │ VARCHAR   │
+│ events         │ datetime     │ TIMESTAMP │
+│ events         │ ref          │ INTEGER   │
+│ events         │ user         │ VARCHAR   │
+│ events         │ extra        │ JSON      │
+│ fetch_log      │ run_id       │ VARCHAR   │
+│ fetch_log      │ timestamp    │ TIMESTAMP │
+│ fetch_log      │ version      │ VARCHAR   │
+│ fetch_log      │ command      │ VARCHAR   │
+│ fetch_log      │ source       │ VARCHAR   │
+│ fetch_log      │ project      │ VARCHAR   │
+│ fetch_log      │ records      │ INTEGER   │
+│ fetch_log      │ files        │ INTEGER   │
+│ fetch_log      │ start_date   │ VARCHAR   │
+│ fetch_log      │ end_date     │ VARCHAR   │
+│ fetch_log      │ duration_ms  │ BIGINT    │
+│ fetch_log      │ status_code  │ INTEGER   │
+│ fetch_log      │ skipped      │ VARCHAR   │
+│ fetch_log      │ error        │ VARCHAR   │
+│ indicators     │ project      │ VARCHAR   │
+│ indicators     │ source       │ VARCHAR   │
+│ indicators     │ target       │ VARCHAR   │
+│ indicators     │ metric       │ VARCHAR   │
+│ indicators     │ indicator    │ VARCHAR   │
+│ indicators     │ date         │ DATE      │
+│ indicators     │ value        │ DOUBLE    │
+│ indicators     │ extra        │ JSON      │
+│ metrics        │ project      │ VARCHAR   │
+│ metrics        │ source       │ VARCHAR   │
+│ metrics        │ target       │ VARCHAR   │
+│ metrics        │ metric       │ VARCHAR   │
+│ metrics        │ date         │ DATE      │
+│ metrics        │ value        │ BIGINT    │
+│ metrics        │ extra        │ JSON      │
+│ metrics_filled │ project      │ VARCHAR   │
+│ metrics_filled │ source       │ VARCHAR   │
+│ metrics_filled │ target       │ VARCHAR   │
+│ metrics_filled │ metric       │ VARCHAR   │
+│ metrics_filled │ date         │ DATE      │
+│ metrics_filled │ value        │ BIGINT    │
+│ metrics_filled │ extra        │ JSON      │
+│ projects       │ id           │ VARCHAR   │
+│ projects       │ name         │ VARCHAR   │
+│ projects       │ description  │ VARCHAR   │
+│ projects       │ color        │ VARCHAR   │
+│ projects       │ tags         │ VARCHAR[] │
+│ projects       │ website      │ VARCHAR   │
+│ projects       │ logo         │ VARCHAR   │
+│ targets        │ project      │ VARCHAR   │
+│ targets        │ source       │ VARCHAR   │
+│ targets        │ target       │ VARCHAR   │
+│ targets        │ canonical    │ BOOLEAN   │
+└────────────────┴──────────────┴───────────┘
 ```
 
 ## Next steps

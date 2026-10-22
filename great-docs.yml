@@ -16,6 +16,7 @@ user_guide:
       - data-storage.qmd
       - querying.qmd
       - exporting.qmd
+      - data-dict.qmd
       - indicators.qmd
       - reliability.qmd
   - section: "Features"
