@@ -196,11 +196,12 @@ func validateProjectsTool() mcp.Tool {
 
 func exportTool() mcp.Tool {
 	return mcp.NewTool("export",
-		mcp.WithDescription("Export metrics data to Parquet or CSV files."),
+		mcp.WithDescription("Export the data as plain tables to Parquet or CSV files, or a standalone DuckDB database, optionally with a data dictionary (data-dict.yaml)."),
 		mcp.WithString("directory", mcp.Required(), mcp.Description("Output directory path")),
-		mcp.WithString("format", mcp.Description("Output format: parquet or csv (default: parquet)")),
+		mcp.WithString("format", mcp.Description("Output format: parquet, csv or duckdb (default: parquet, or duckdb with data_dict)")),
 		mcp.WithString("source", mcp.Description("Export only this source")),
 		mcp.WithString("project", mcp.Description("Export only this project")),
+		mcp.WithBoolean("data_dict", mcp.Description("Also write data-dict.yaml, a data dictionary of the export; only with the duckdb format")),
 	)
 }
 

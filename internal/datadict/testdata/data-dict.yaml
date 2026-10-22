@@ -1,0 +1,487 @@
+$version: 0.1.0
+$learn_more: https://data-dict.tidyverse.org/
+name: example
+label: Example metrics
+description: |-
+  Adoption metrics of an example portfolio.
+
+  Open source project metrics collected by velocirepo for 3 projects from CRAN, GitHub, Plausible, RSS/Atom and YouTube, through 2026-01-03.
+details: |-
+  Route questions by table: metrics for daily series; metrics_filled for anything total_*; indicators for 28-day growth and trend; events for per-user or per-timestamp detail; content for the titles, text, authors and states behind the counts; projects and targets to resolve project names and see which sources cover a project. Sources count differently, so compare levels across sources with caution.
+
+  Some targets are tracked by more than one project, with the same values: apply the deduplicated filter to any aggregate that spans projects.
+
+  CRAN: CRAN downloads come from cranlogs, which counts the downloads of the Posit CRAN mirror only. They include automated traffic, so they indicate scale and trend, not user counts. cranlogs publishes two days late and leaves out days without downloads, so a missing day means no downloads.
+
+  GitHub: Pull requests closed without merging have no event. An issue's or pull request's updated_at in content is when it was closed or merged, not its last activity. Star history is daily_stars; there are no star events.
+
+  Plausible: Days end in the site's time zone. Per-page pageviews add up to the site's pageviews, but per-page visitors don't add up to the site's visitors: a visitor of two pages counts once for the site. Daily unique visitors don't add up over days either.
+
+  RSS/Atom: A feed lists recent items only, so content holds the items seen since collection began, and total_items counts what the feed lists, not everything ever published. Feeds can set an item's type with a vr:type element; content.type is empty otherwise.
+
+  YouTube: YouTube totals are lifetime values as of each fetch: they can't tell how many views a video had before collection began.
+
+  Collected nightly.
+origin: https://github.com/posit-dev/velocirepo
+version:
+  date: "2026-01-03"
+tables:
+  - name: projects
+    description: 'One row per project in velocirepo.toml: its id, name, description, tags and website. Use it to resolve informal names to the project id that every other table uses.'
+    columns:
+      - name: id
+        type: string
+        constraints: [primary_key]
+        examples: [shiny, shiny-old, site]
+        description: Project id, used as project in every other table.
+      - name: name
+        type: string
+        examples: [Shiny, Site]
+        description: Display name.
+      - name: description
+        type: string
+        examples: [Web apps in R]
+        description: Short description.
+      - name: color
+        type: string
+        examples: []
+        description: Display color, as a hex code. Empty in this export.
+      - name: tags
+        type: list(string)
+        examples: [r]
+        description: Language or topic tags.
+      - name: website
+        type: string
+        examples: []
+        description: Website URL. Empty in this export.
+      - name: logo
+        type: string
+        examples: []
+        description: Logo URL or path. Empty in this export.
+  - name: targets
+    description: One row per project, source and target in velocirepo.toml. It says which sources cover a project, including targets without data yet, and which copy counts when more than one project tracks a target.
+    columns:
+      - name: project
+        type: string
+        constraints: [primary_key, foreign_key]
+        examples: [shiny, shiny-old, site]
+        description: Project id.
+      - name: source
+        type: enum
+        constraints: [primary_key]
+        values:
+          cran: CRAN; a target is a CRAN package name
+          github: GitHub; a target is a GitHub repository, as owner/repo
+          plausible: Plausible; a target is a Plausible site, as its domain
+          rss: RSS/Atom; a target is an RSS or Atom feed URL
+          youtube: YouTube; a target is a YouTube channel (@handle or channel id), playlist id or video id, as configured
+        description: Source of the target.
+      - name: target
+        type: string
+        constraints: [primary_key]
+        examples: ['@shiny', example.com, 'https://example.com/blog/index.xml', rstudio/shiny, shiny]
+        description: The source-specific identifier, such as a package name, repository or site.
+      - name: canonical
+        type: boolean
+        description: 'False for a copy of a target that another project keeps: counting only canonical rows counts every target once.'
+  - name: metrics
+    description: 'Daily time series of every source: one row per project, source, target, metric and date, and per page, video, post or issue for the series that have one. Includes the daily counts velocirepo derives from the events table.'
+    details: |-
+      Metric names say how values combine: daily_* values are amounts per day and can be summed over days; total_* values are running totals or snapshots, stored only on the days they change, so never sum them over days: read them from metrics_filled or take the increase over a range; window metrics (such as downloads_30d) are rolling-window snapshots stored on every day they're fetched, so read the latest value. A series starting on some date usually means collection started then, not that the project started then.
+
+      Coverage: cran, 1 target, 2026-01-01 to 2026-01-03; github, 1 target, 2026-01-01 to 2026-01-02; plausible, 1 target, 2026-01-01 to 2026-01-01; rss, 1 target, 2026-01-03 to 2026-01-03; youtube, 1 target, 2026-01-01 to 2026-01-01.
+
+      A total_reactions row's ref is an issue or pull request number: join it to content.ref on project, source and target too, since numbers repeat across repositories.
+
+      CRAN: 2026-01-02 is missing.
+    columns:
+      - name: project
+        type: string
+        constraints: [foreign_key]
+        examples: [shiny, shiny-old, site]
+        description: Project id.
+      - name: source
+        type: enum
+        values:
+          cran: CRAN; a target is a CRAN package name
+          github: GitHub; a target is a GitHub repository, as owner/repo
+          plausible: Plausible; a target is a Plausible site, as its domain
+          rss: RSS/Atom; a target is an RSS or Atom feed URL
+          youtube: YouTube; a target is a YouTube channel (@handle or channel id), playlist id or video id, as configured
+        description: Source of the value.
+      - name: target
+        type: string
+        examples: ['@shiny', example.com, 'https://example.com/blog/index.xml', rstudio/shiny, shiny]
+        description: The source-specific identifier the value is about, such as a package name, repository or site.
+      - name: metric
+        type: enum
+        values:
+          daily_comments: issue and pull request comments that day, counted from the comment events (github)
+          daily_downloads: package downloads that day from the Posit CRAN mirror (cranlogs) (cran)
+          daily_issues_opened: issues opened that day, counted from the issue_open events (github)
+          daily_pageviews: pageviews of one page that day (plausible)
+          daily_site_pageviews: pageviews of the whole site that day (plausible)
+          total_items: the items the feed lists (rss)
+          total_reactions: reactions on one issue or pull request and its comments, keyed by ref; updated when the item changes (github)
+          total_subscribers: the channel's subscribers, rounded by YouTube (youtube)
+          total_views: one video's views, all time (youtube)
+        description: 'What the value measures. The prefix says how values combine over days: daily, total or a rolling window.'
+      - name: date
+        type: date
+        range: ["2026-01-01", "2026-01-03"]
+        description: The day the value describes, in the source's time zone.
+      - name: value
+        type: number(quantity)
+        range: [1, 1000]
+        description: 'The value: an amount for the day (daily_*), a running total or snapshot (total_*) or a rolling-window count.'
+      - name: ref
+        type: number(id)
+        examples: [7]
+        description: The issue or pull request number of a total_reactions row; NULL for other rows.
+      - name: page
+        type: string
+        examples: [/]
+        description: The URL path of a per-page Plausible row; NULL for other rows.
+      - name: video_id
+        type: string
+        examples: [abc123def45]
+        description: The YouTube video id of a per-video row; NULL for other rows.
+      - name: extra
+        type: string
+        examples: ['{"page":"/"}', '{"ref":"7"}', '{"video_id":"abc123def45"}']
+        description: All source-specific fields of the row as JSON text, including those that are columns of their own.
+    definitions:
+      - name: deduplicated
+        label: apply to any cross-project aggregate
+        description: 'Counts every target once: some targets are tracked by more than one project, with the same values. Apply it to any total, ranking or count that spans projects.'
+        expr: project NOT IN ('shiny-old')
+      - name: cran_downloads
+        description: CRAN downloads from the Posit mirror. Includes automated traffic such as CI; indicates scale and trend, not users. Don't add to the downloads of another registry. Counts every target once.
+        expr: SUM(CASE WHEN source = 'cran' AND metric = 'daily_downloads' AND deduplicated THEN value ELSE 0 END)
+      - name: issues_opened
+        description: Issues opened. Counts every target once.
+        expr: SUM(CASE WHEN source = 'github' AND metric = 'daily_issues_opened' AND deduplicated THEN value ELSE 0 END)
+      - name: comments
+        description: Issue and pull request comments. Counts every target once.
+        expr: SUM(CASE WHEN source = 'github' AND metric = 'daily_comments' AND deduplicated THEN value ELSE 0 END)
+      - name: pageviews
+        description: Pageviews of the whole sites. Counts every target once.
+        expr: SUM(CASE WHEN source = 'plausible' AND metric = 'daily_site_pageviews' AND deduplicated THEN value ELSE 0 END)
+      - name: large
+        label: 100 or more
+        description: Rows with a value of 100 or more.
+        expr: value >= 100
+  - name: metrics_filled
+    description: 'Like metrics, but with every total_* series carried forward to every day through the latest day fetched. The table for any total_* question: the value on a date, or the latest value.'
+    details: daily_* rows pass through unchanged and aren't filled. A total_* series keyed by a page, video, post or issue is filled per key.
+    columns:
+      - name: project
+        type: string
+        constraints: [foreign_key]
+        examples: [shiny, shiny-old, site]
+        description: Project id.
+      - name: source
+        type: enum
+        values:
+          cran: CRAN; a target is a CRAN package name
+          github: GitHub; a target is a GitHub repository, as owner/repo
+          plausible: Plausible; a target is a Plausible site, as its domain
+          rss: RSS/Atom; a target is an RSS or Atom feed URL
+          youtube: YouTube; a target is a YouTube channel (@handle or channel id), playlist id or video id, as configured
+        description: Source of the value.
+      - name: target
+        type: string
+        examples: ['@shiny', example.com, 'https://example.com/blog/index.xml', rstudio/shiny, shiny]
+        description: The source-specific identifier the value is about, such as a package name, repository or site.
+      - name: metric
+        type: enum
+        values:
+          daily_comments: issue and pull request comments that day, counted from the comment events (github)
+          daily_downloads: package downloads that day from the Posit CRAN mirror (cranlogs) (cran)
+          daily_issues_opened: issues opened that day, counted from the issue_open events (github)
+          daily_pageviews: pageviews of one page that day (plausible)
+          daily_site_pageviews: pageviews of the whole site that day (plausible)
+          total_items: the items the feed lists (rss)
+          total_reactions: reactions on one issue or pull request and its comments, keyed by ref; updated when the item changes (github)
+          total_subscribers: the channel's subscribers, rounded by YouTube (youtube)
+          total_views: one video's views, all time (youtube)
+        description: 'What the value measures. The prefix says how values combine over days: daily, total or a rolling window.'
+      - name: date
+        type: date
+        range: ["2026-01-01", "2026-01-03"]
+        description: The day the value describes, in the source's time zone.
+      - name: value
+        type: number(quantity)
+        range: [1, 1000]
+        description: 'The value: an amount for the day (daily_*), a running total or snapshot (total_*) or a rolling-window count.'
+      - name: ref
+        type: number(id)
+        examples: [7]
+        description: The issue or pull request number of a total_reactions row; NULL for other rows.
+      - name: page
+        type: string
+        examples: [/]
+        description: The URL path of a per-page Plausible row; NULL for other rows.
+      - name: video_id
+        type: string
+        examples: [abc123def45]
+        description: The YouTube video id of a per-video row; NULL for other rows.
+      - name: extra
+        type: string
+        examples: ['{"page":"/"}', '{"ref":"7"}', '{"video_id":"abc123def45"}']
+        description: All source-specific fields of the row as JSON text, including those that are columns of their own.
+    definitions:
+      - name: deduplicated
+        label: apply to any cross-project aggregate
+        description: 'Counts every target once: some targets are tracked by more than one project, with the same values. Apply it to any total, ranking or count that spans projects.'
+        expr: project NOT IN ('shiny-old')
+      - name: net_increase
+        label: growth of a total_* over a date range
+        description: 'How much a total_* value grew over the queried range: last minus first, as totals only grow. Constrain it to one metric and group by target (or video, post or issue); never sum total_* values over days.'
+        expr: MAX(value) - MIN(value)
+  - name: indicators
+    description: 'Momentum of every daily_* series, computed over the metrics table: one row per project, source, target, metric, date and indicator.'
+    details: growth_rate compares the sum of the trailing 28 rows with the 28 rows before them ((sum - prior sum) / prior sum); trend is the per-day regression slope over the trailing 28 rows. Windows count rows, not days, so where a series leaves out days without a value they span more than 28 days.
+    columns:
+      - name: project
+        type: string
+        constraints: [foreign_key]
+        examples: [shiny, shiny-old, site]
+        description: Project id.
+      - name: source
+        type: enum
+        values:
+          cran: CRAN; a target is a CRAN package name
+          github: GitHub; a target is a GitHub repository, as owner/repo
+          plausible: Plausible; a target is a Plausible site, as its domain
+        description: Source of the value.
+      - name: target
+        type: string
+        examples: [example.com, rstudio/shiny, shiny]
+        description: The source-specific identifier the value is about, such as a package name, repository or site.
+      - name: metric
+        type: enum
+        values:
+          daily_comments: issue and pull request comments that day, counted from the comment events (github)
+          daily_downloads: package downloads that day from the Posit CRAN mirror (cranlogs) (cran)
+          daily_issues_opened: issues opened that day, counted from the issue_open events (github)
+          daily_pageviews: pageviews of one page that day (plausible)
+          daily_site_pageviews: pageviews of the whole site that day (plausible)
+        description: The daily_* metric the indicator is computed over.
+      - name: indicator
+        type: enum
+        values:
+          trend: 28-day linear trend (value per day via regression)
+        description: Which statistic the row holds.
+      - name: date
+        type: date
+        range: ["2026-01-01", "2026-01-03"]
+        description: The day the trailing windows end.
+      - name: value
+        type: number(quantity)
+        range: [10, 10]
+        description: growth_rate is a proportion (0.1 is up 10% on the prior window); trend is in metric units per day.
+      - name: page
+        type: string
+        examples: [/]
+        description: The URL path of a per-page Plausible row; NULL for other rows.
+      - name: extra
+        type: string
+        examples: ['{"page":"/"}']
+        description: All source-specific fields of the row as JSON text, including those that are columns of their own.
+    definitions:
+      - name: deduplicated
+        label: apply to any cross-project aggregate
+        description: 'Counts every target once: some targets are tracked by more than one project, with the same values. Apply it to any total, ranking or count that spans projects.'
+        expr: project NOT IN ('shiny-old')
+  - name: events
+    description: Individual events with a timestamp, the acting user and the issue or pull request they happened on. Use it for per-user or sub-daily detail; for counts over time, use the daily_* metrics derived from it.
+    details: Join ref to content.ref on project, source and target too for the issue or pull request an event happened on; numbers repeat across repositories.
+    columns:
+      - name: project
+        type: string
+        constraints: [foreign_key]
+        examples: [shiny, shiny-old]
+        description: Project id.
+      - name: source
+        type: enum
+        values:
+          github: GitHub; a target is a GitHub repository, as owner/repo
+        description: Source of the event.
+      - name: type
+        type: enum
+        values:
+          comment: a comment on an issue or pull request; user is the commenter (github)
+          issue_open: an issue was opened; user is its author (github)
+        description: What happened.
+      - name: target
+        type: string
+        examples: [rstudio/shiny]
+        description: The repository the event happened in.
+      - name: datetime
+        type: datetime
+        time_zone: UTC
+        range: ['2026-01-01T09:00:00', '2026-01-02T10:30:00']
+        description: When it happened.
+      - name: ref
+        type: number(id)
+        examples: [7]
+        description: The issue or pull request number the event happened on; NULL for events on the repository, such as forks.
+      - name: user
+        type: string
+        examples: [alice, bob]
+        description: Login of the acting user; NULL where the source no longer reports one, such as a deleted account. See the type for whose login it is.
+        details: Bots are included.
+      - name: extra
+        type: string
+        examples: []
+        description: Source-specific fields as JSON text. Empty in this export.
+    definitions:
+      - name: deduplicated
+        label: apply to any cross-project aggregate
+        description: 'Counts every target once: some targets are tracked by more than one project, with the same values. Apply it to any total, ranking or count that spans projects.'
+        expr: project NOT IN ('shiny-old')
+  - name: content
+    description: 'Catalog of the things the metrics count, such as issues, pull requests, repositories, videos, posts and feed items: one row per item, with its title, text, timestamps and URL.'
+    details: 'description and content can hold whole issue bodies and posts: search them with LIKE and select them only for a few rows. Content is updated at every fetch, so a state reflects the latest fetch, not the as-of date.'
+    columns:
+      - name: project
+        type: string
+        constraints: [primary_key, foreign_key]
+        examples: [shiny, site]
+        description: Project id.
+      - name: source
+        type: enum
+        constraints: [primary_key]
+        values:
+          github: GitHub; a target is a GitHub repository, as owner/repo
+          rss: RSS/Atom; a target is an RSS or Atom feed URL
+          youtube: YouTube; a target is a YouTube channel (@handle or channel id), playlist id or video id, as configured
+        description: Source of the item.
+      - name: target
+        type: string
+        constraints: [primary_key]
+        examples: ['@shiny', 'https://example.com/blog/index.xml', rstudio/shiny]
+        description: The target the item came from, as in metrics.
+      - name: id
+        type: string
+        constraints: [primary_key]
+        examples: [abc123def45, 'https://example.com/blog/hello', issue/7]
+        description: Source-specific id of the item; unique within a project, source and target.
+      - name: ref
+        type: number(id)
+        examples: [7]
+        description: Issue or pull request number; NULL for other items.
+      - name: title
+        type: string
+        examples: [A bug, Hello, Intro]
+        description: Title.
+      - name: description
+        type: string
+        examples: [It breaks.]
+        description: Body, summary or description. Long text.
+      - name: content
+        type: string
+        examples: [First post.]
+        description: Full text, where the source has it, with HTML removed. Long text.
+      - name: published_at
+        type: datetime
+        time_zone: UTC
+        range: ['2025-12-01T12:00:00', '2026-01-03T00:00:00']
+        description: When the item was created or published.
+      - name: updated_at
+        type: datetime
+        time_zone: UTC
+        range: [-.inf, .inf]
+        description: When the item last changed, where the source reports it.
+      - name: url
+        type: string
+        examples: ['https://example.com/blog/hello', 'https://github.com/rstudio/shiny/issues/7', 'https://youtube.com/watch?v=abc123def45']
+        description: Link to the item.
+      - name: duration
+        type: number(quantity)
+        units: seconds
+        range: [300, 300]
+        description: Length of a video, in seconds.
+      - name: tags
+        type: list(string)
+        examples: [bug]
+        description: Labels, topics or keywords.
+      - name: type
+        type: enum
+        values:
+          issue: a GitHub issue; id is issue/<number> (github)
+          post: a blog post on example.com
+          video: a YouTube video; id is the video id (youtube)
+        description: What kind of item the row is.
+      - name: author
+        type: string
+        examples: [alice]
+        description: The GitHub login that opened an issue or pull request; NULL for other rows.
+      - name: state
+        type: enum
+        values:
+          OPEN: open
+        description: The state of an issue (OPEN, CLOSED) or pull request (OPEN, CLOSED, MERGED) as of the last fetch; NULL for other rows.
+      - name: extra
+        type: string
+        examples: ['{"author":"alice","state":"OPEN"}']
+        description: Other source-specific fields as JSON text, which differ per source and type. Look at a row before relying on a key.
+    definitions:
+      - name: deduplicated
+        label: apply to any cross-project aggregate
+        description: 'Counts every target once: some targets are tracked by more than one project, with the same values. Apply it to any total, ranking or count that spans projects.'
+        expr: project NOT IN ('shiny-old')
+  - name: meta
+    description: 'One row: as_of, the latest day of the metrics, normally yesterday, and built_at, when this export was made. Check it before answering a question about the current or latest values.'
+    columns:
+      - name: as_of
+        type: date
+        range: ["2026-01-03", "2026-01-03"]
+        description: The latest day of the metrics.
+      - name: built_at
+        type: datetime
+        time_zone: UTC
+        range: ['2026-01-04T06:00:00', '2026-01-04T06:00:00']
+        description: When the export was made.
+relationships:
+  - join: targets.project = projects.id
+    cardinality: many-to-one
+  - join: metrics.project = projects.id
+    cardinality: many-to-one
+  - join: metrics_filled.project = projects.id
+    cardinality: many-to-one
+  - join: indicators.project = projects.id
+    cardinality: many-to-one
+  - join: events.project = projects.id
+    cardinality: many-to-one
+  - join: content.project = projects.id
+    cardinality: many-to-one
+  - join: metrics.project = targets.project AND metrics.source = targets.source AND metrics.target = targets.target
+    cardinality: many-to-one
+    description: The target as configured; rows of targets no longer in velocirepo.toml have no match.
+  - join: metrics_filled.project = targets.project AND metrics_filled.source = targets.source AND metrics_filled.target = targets.target
+    cardinality: many-to-one
+    description: The target as configured; rows of targets no longer in velocirepo.toml have no match.
+  - join: indicators.project = targets.project AND indicators.source = targets.source AND indicators.target = targets.target
+    cardinality: many-to-one
+    description: The target as configured; rows of targets no longer in velocirepo.toml have no match.
+  - join: events.project = targets.project AND events.source = targets.source AND events.target = targets.target
+    cardinality: many-to-one
+    description: The target as configured; rows of targets no longer in velocirepo.toml have no match.
+  - join: content.project = targets.project AND content.source = targets.source AND content.target = targets.target
+    cardinality: many-to-one
+    description: The target as configured; rows of targets no longer in velocirepo.toml have no match.
+  - join: metrics.project = content.project AND metrics.source = content.source AND metrics.target = content.target AND metrics.video_id = content.id
+    cardinality: many-to-one
+    description: Rows keyed by video_id to the item in content.
+  - join: metrics_filled.project = content.project AND metrics_filled.source = content.source AND metrics_filled.target = content.target AND metrics_filled.video_id = content.id
+    cardinality: many-to-one
+    description: Rows keyed by video_id to the item in content.
+glossary:
+  project: A tracked open source project, identified by projects.id. One project can be measured by several sources; the source column tells them apart.
+  source vs target: source is where a value came from, such as cran or github; target is the source-specific identifier there, such as a package name, repository, site or feed URL.
+  daily_* vs total_*: 'daily_* is an amount per day, which can be summed over days; total_* is a running total or snapshot, which can''t: use metrics_filled, or the difference between two days.'
+  deduplicated: The filter that counts every target once, where more than one project tracks a target; targets.canonical says which copy counts.
+  shiny: The Shiny package for R.
+  portfolio: The projects of the example organization.
