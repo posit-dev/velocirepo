@@ -76,6 +76,12 @@ func init() {
 		// its daily data, which they're computed over other windows than;
 		// its last day is the data itself.
 		NoReferenceTotals: "pypistats' recent totals aren't computed over the daily data's windows",
+		Target:            "a PyPI package name",
+		Metrics: []MetricInfo{
+			{Name: "daily_downloads", Kind: MetricDaily, Description: "package downloads that day, without known mirrors (pypistats)", Measure: "pypi_downloads", MeasureDescription: "PyPI downloads without known mirrors. Includes automated traffic such as CI; indicates scale and trend, not users. Don't add to the downloads of another registry."},
+		},
+		Notes: "PyPI downloads come from pypistats, without known mirrors. They include automated traffic such as CI and caching, so they indicate scale and trend, not user counts. " +
+			"pypistats keeps about 180 days, so a series starts at most 180 days before collection began.",
 	})
 }
 

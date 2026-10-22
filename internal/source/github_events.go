@@ -1177,5 +1177,38 @@ func init() {
 		ReferenceQuota: "api.github.com/graphql",
 		// Comments and forks are deleted by their authors.
 		RemovableEvents: []string{"comment", "fork"},
+		Target:          "a GitHub repository, as owner/repo",
+		Metrics: []MetricInfo{
+			{Name: "daily_stars", Kind: MetricDaily, Description: "stars given that day, from GitHub's star history (days end in US Pacific time)", Measure: "stars", MeasureDescription: "Stars given, from GitHub's star history."},
+			{Name: "daily_forks", Kind: MetricDaily, Description: "forks created that day, counted from the fork events", Measure: "forks", MeasureDescription: "Forks created."},
+			{Name: "daily_issues_opened", Kind: MetricDaily, Description: "issues opened that day, counted from the issue_open events", Measure: "issues_opened", MeasureDescription: "Issues opened."},
+			{Name: "daily_issues_closed", Kind: MetricDaily, Description: "issues closed that day, counted from the issue_close events", Measure: "issues_closed", MeasureDescription: "Issues closed."},
+			{Name: "daily_prs_opened", Kind: MetricDaily, Description: "pull requests opened that day, counted from the pr_open events", Measure: "prs_opened", MeasureDescription: "Pull requests opened."},
+			{Name: "daily_prs_merged", Kind: MetricDaily, Description: "pull requests merged that day, counted from the pr_merge events", Measure: "prs_merged", MeasureDescription: "Pull requests merged."},
+			{Name: "daily_comments", Kind: MetricDaily, Description: "issue and pull request comments that day, counted from the comment events", Measure: "comments", MeasureDescription: "Issue and pull request comments."},
+			{Name: "total_stars", Kind: MetricTotal, Description: "the repository's star count"},
+			{Name: "total_reactions", Kind: MetricTotal, Key: "ref", Description: "reactions on one issue or pull request and its comments, keyed by ref; updated when the item changes"},
+		},
+		Events: []EventInfo{
+			{Name: "fork", Description: "a fork was created; user is its owner"},
+			{Name: "issue_open", Description: "an issue was opened; user is its author"},
+			{Name: "issue_close", Description: "an issue was closed; user is the issue's author, not who closed it"},
+			{Name: "pr_open", Description: "a pull request was opened; user is its author"},
+			{Name: "pr_merge", Description: "a pull request was merged; user is its author"},
+			{Name: "comment", Description: "a comment on an issue or pull request; user is the commenter"},
+		},
+		Content: []ContentInfo{
+			{Name: "issue", Description: "a GitHub issue; id is issue/<number>"},
+			{Name: "pr", Description: "a GitHub pull request; id is pr/<number>"},
+			{Name: "repo", Description: "a GitHub repository; id is owner/repo"},
+		},
+		Columns: []ColumnInfo{
+			{Table: "metrics", Key: "ref", Type: "integer", Description: "the issue or pull request number of a total_reactions row", Identifies: "ref"},
+			{Table: "content", Key: "author", Type: "string", Description: "the GitHub login that opened an issue or pull request"},
+			{Table: "content", Key: "state", Type: "string", Description: "the state of an issue (OPEN, CLOSED) or pull request (OPEN, CLOSED, MERGED) as of the last fetch"},
+		},
+		Notes: "Pull requests closed without merging have no event. " +
+			"An issue's or pull request's updated_at in content is when it was closed or merged, not its last activity. " +
+			"Star history is daily_stars; there are no star events.",
 	})
 }

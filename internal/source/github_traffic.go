@@ -133,5 +133,14 @@ func init() {
 		// GitHub only keeps 14 days of traffic.
 		Archive:           ArchiveFull,
 		NoReferenceTotals: "GitHub reports no traffic totals beyond the daily counts",
+		Target:            "a GitHub repository, as owner/repo; needs a token with push access",
+		Metrics: []MetricInfo{
+			{Name: "daily_views", Kind: MetricDaily, Description: "views of the repository's pages that day", Measure: "repo_views", MeasureDescription: "Views of the repositories' GitHub pages."},
+			{Name: "daily_unique_views", Kind: MetricDaily, Description: "unique visitors of the repository's pages that day"},
+			{Name: "daily_clones", Kind: MetricDaily, Description: "clones of the repository that day", Measure: "repo_clones", MeasureDescription: "Clones of the repositories."},
+			{Name: "daily_unique_clones", Kind: MetricDaily, Description: "unique cloners of the repository that day"},
+		},
+		Notes: "GitHub keeps 14 days of traffic, so the series starts at most 14 days before collection began. " +
+			"Unique visitors and cloners don't add up over days.",
 	})
 }

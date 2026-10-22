@@ -69,5 +69,11 @@ func init() {
 		// Download and review totals are snapshots.
 		Archive:           ArchiveFull,
 		NoReferenceTotals: "its totals are the data itself",
+		Target:            "an Open VSX extension, as namespace/extension",
+		Metrics: []MetricInfo{
+			{Name: "total_downloads", Kind: MetricTotal, Description: "the extension's downloads, all time"},
+			{Name: "total_reviews", Kind: MetricTotal, Description: "the extension's reviews, all time"},
+			{Name: "total_ratings", Kind: MetricTotal, Description: "the extension's average rating times 100, truncated (450 is 4.5 stars)"},
+		},
 	})
 }

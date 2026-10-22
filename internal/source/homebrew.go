@@ -67,5 +67,12 @@ func init() {
 		// Install counts are snapshots.
 		Archive:           ArchiveFull,
 		NoReferenceTotals: "its install counts are the data itself",
+		Target:            "a Homebrew formula name",
+		Metrics: []MetricInfo{
+			{Name: "downloads_30d", Kind: MetricWindow, Description: "installs in the 30 days before the fetch"},
+			{Name: "downloads_90d", Kind: MetricWindow, Description: "installs in the 90 days before the fetch"},
+			{Name: "downloads_365d", Kind: MetricWindow, Description: "installs in the 365 days before the fetch"},
+		},
+		Notes: "Homebrew reports installs over rolling windows, stored on every day they're fetched. Read the latest value; never sum them over days.",
 	})
 }

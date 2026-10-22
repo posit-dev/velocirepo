@@ -203,5 +203,19 @@ func init() {
 		// Plausible keeps the full history.
 		Archive:    NotArchived,
 		Reconciles: true,
+		Target:     "a Plausible site, as its domain",
+		Metrics: []MetricInfo{
+			{Name: "daily_site_pageviews", Kind: MetricDaily, Description: "pageviews of the whole site that day", Measure: "pageviews", MeasureDescription: "Pageviews of the whole sites."},
+			{Name: "daily_site_visitors", Kind: MetricDaily, Description: "unique visitors of the whole site that day", Measure: "visitors", MeasureDescription: "Daily unique visitors of the whole sites, summed: visitor-days, not distinct people."},
+			{Name: "daily_site_visits", Kind: MetricDaily, Description: "visits (sessions) of the whole site that day", Measure: "visits", MeasureDescription: "Visits (sessions) of the whole sites."},
+			{Name: "daily_pageviews", Kind: MetricDaily, Key: "page", Description: "pageviews of one page that day"},
+			{Name: "daily_visitors", Kind: MetricDaily, Key: "page", Description: "unique visitors of one page that day"},
+			{Name: "daily_visits", Kind: MetricDaily, Key: "page", Description: "visits (sessions) that included one page that day"},
+		},
+		Columns: []ColumnInfo{
+			{Table: "metrics", Key: "page", Type: "string", Description: "the URL path of a per-page Plausible row"},
+		},
+		Notes: "Days end in the site's time zone. Per-page pageviews add up to the site's pageviews, but per-page visitors don't add up to the site's visitors: a visitor of two pages counts once for the site. " +
+			"Daily unique visitors don't add up over days either.",
 	})
 }

@@ -669,5 +669,14 @@ func init() {
 		// Feeds only list recent items.
 		Archive:           ArchiveFull,
 		NoReferenceTotals: "feeds have no totals beyond their items",
+		Target:            "an RSS or Atom feed URL",
+		Metrics: []MetricInfo{
+			{Name: "total_items", Kind: MetricTotal, Description: "the items the feed lists"},
+		},
+		Content: []ContentInfo{
+			{Name: "", Description: "a feed item whose feed sets no type"},
+		},
+		Notes: "A feed lists recent items only, so content holds the items seen since collection began, and total_items counts what the feed lists, not everything ever published. " +
+			"Feeds can set an item's type with a vr:type element; content.type is empty otherwise.",
 	})
 }

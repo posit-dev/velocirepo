@@ -52,6 +52,24 @@ type Meta struct {
 	// as deleted comments, so a re-fetch that no longer has them isn't an
 	// error.
 	RemovableEvents []string
+
+	// What the source writes, for the data dictionary (see dictionary.go).
+
+	// Target says what a target of the source is, such as "a CRAN package
+	// name".
+	Target string
+	// Metrics are the metrics the source writes, including those velocirepo
+	// derives from its events.
+	Metrics []MetricInfo
+	// Events are the event types it writes.
+	Events []EventInfo
+	// Content are the content types it writes.
+	Content []ContentInfo
+	// Columns are the extra keys exported as columns of their own.
+	Columns []ColumnInfo
+	// Notes are caveats about the source's data that hold for every
+	// instance, such as how a registry counts downloads.
+	Notes string
 }
 
 var (
