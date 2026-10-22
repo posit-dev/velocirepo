@@ -25,6 +25,16 @@ type ProjectInfo struct {
 	Tags        []string
 	Website     string
 	Logo        string
+	Targets     []ProjectTarget
+}
+
+// ProjectTarget is a target a project tracks. Canonical is false for the
+// copies of a target that another project keeps, so cross-project totals
+// count every target once.
+type ProjectTarget struct {
+	Source    string
+	Target    string
+	Canonical bool
 }
 
 func QueryLive(dataDir string, projects []ProjectInfo, indicators []IndicatorDef, query string) ([]map[string]interface{}, []string, error) {
@@ -73,7 +83,7 @@ func SchemaLive(dataDir string, projects []ProjectInfo, indicators []IndicatorDe
 	}
 	defer func() { _ = db.Close() }()
 
-	rows, err := db.Query("SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name IN ('content', 'events', 'fetch_log', 'indicators', 'metrics', 'metrics_filled', 'projects') ORDER BY table_name, ordinal_position")
+	rows, err := db.Query("SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name IN ('content', 'events', 'fetch_log', 'indicators', 'metrics', 'metrics_filled', 'projects', 'targets') ORDER BY table_name, ordinal_position")
 	if err != nil {
 		return nil, fmt.Errorf("query schema: %w", err)
 	}
@@ -133,6 +143,11 @@ func openLiveDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDe
 		return nil, err
 	}
 
+	if err := createTargets(db, "VIEW", projects); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	if err := createIndicatorsView(db, indicators); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -147,7 +162,7 @@ func openLiveDB(dataDir string, projects []ProjectInfo, indicators []IndicatorDe
 }
 
 func materializeRestrictedTables(db *sql.DB) error {
-	tables := []string{"events", "fetch_log", "metrics", "metrics_filled", "content", "projects", "indicators"}
+	tables := []string{"events", "fetch_log", "metrics", "metrics_filled", "content", "projects", "targets", "indicators"}
 	for _, table := range tables {
 		query := fmt.Sprintf("CREATE TABLE __velocirepo_%s AS SELECT * FROM %s", table, table)
 		if _, err := db.Exec(query); err != nil {
@@ -155,7 +170,7 @@ func materializeRestrictedTables(db *sql.DB) error {
 		}
 	}
 
-	for _, view := range []string{"indicators", "projects", "content", "metrics_filled", "metrics", "fetch_log", "events"} {
+	for _, view := range []string{"indicators", "targets", "projects", "content", "metrics_filled", "metrics", "fetch_log", "events"} {
 		if _, err := db.Exec("DROP VIEW IF EXISTS " + view); err != nil {
 			return fmt.Errorf("drop %s view: %w", view, err)
 		}
@@ -464,6 +479,30 @@ func createProjectsView(db *sql.DB, projects []ProjectInfo) error {
 
 	if _, err := db.Exec(query); err != nil {
 		return fmt.Errorf("create projects view: %w", err)
+	}
+	return nil
+}
+
+// createTargets creates the targets view or table: one row per project and
+// target in the config, saying whether the project's copy of a target that
+// several projects track is the one that counts.
+func createTargets(db *sql.DB, kind string, projects []ProjectInfo) error {
+	var rows []string
+	for _, p := range projects {
+		for _, t := range p.Targets {
+			rows = append(rows, fmt.Sprintf("(%s, %s, %s, %t)",
+				SQLStringLiteral(p.ID), SQLStringLiteral(t.Source), SQLStringLiteral(t.Target), t.Canonical))
+		}
+	}
+	query := fmt.Sprintf(`CREATE OR REPLACE %s targets AS
+		SELECT NULL::VARCHAR AS project, NULL::VARCHAR AS source, NULL::VARCHAR AS target, NULL::BOOLEAN AS canonical
+		WHERE false`, kind)
+	if len(rows) > 0 {
+		query = fmt.Sprintf(`CREATE OR REPLACE %s targets AS
+		SELECT * FROM (VALUES %s) AS t(project, source, target, canonical)`, kind, strings.Join(rows, ", "))
+	}
+	if _, err := db.Exec(query); err != nil {
+		return fmt.Errorf("create targets %s: %w", strings.ToLower(kind), err)
 	}
 	return nil
 }
