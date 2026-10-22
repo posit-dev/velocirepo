@@ -457,10 +457,13 @@ jobs:
     steps:
       - uses: astral-sh/setup-uv@v6
 
+      # --refresh: PyPI's index pages may be cached for 10 minutes, and uv
+      # honours that, so without it every attempt after a first one that came
+      # too early reads the same page without the new version.
       - name: Wait for PyPI availability
         run: |
           for i in $(seq 1 30); do
-            if uv tool install "velocirepo==$VERSION" 2>/dev/null; then
+            if uv tool install --refresh "velocirepo==$VERSION"; then
               echo "Installed successfully on attempt $i"
               exit 0
             fi
