@@ -661,3 +661,13 @@ func shortHash(s string) string {
 	sum := sha1.Sum([]byte(s))
 	return fmt.Sprintf("%x", sum[:8])
 }
+
+func init() {
+	Register(Meta{
+		Name:      "rss",
+		Freshness: map[string]int{"": 2},
+		// Feeds only list recent items.
+		Archive:           ArchiveFull,
+		NoReferenceTotals: "feeds have no totals beyond their items",
+	})
+}

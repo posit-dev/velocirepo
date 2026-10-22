@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/posit-dev/velocirepo/internal/source"
 )
@@ -50,7 +52,15 @@ func mergeMetricWatermarks(dataDir, sourceName, projectID string, updates []metr
 		return nil
 	}
 
-	path := WatermarkFilePath(dataDir, sourceName, projectID)
+	return mergeWatermarksAt(WatermarkFilePath(dataDir, sourceName, projectID), MetricsProjectDir(dataDir, sourceName, projectID), updates)
+}
+
+// mergeWatermarksAt moves the given targets' watermarks in one watermark file
+// forward.
+func mergeWatermarksAt(path, dir string, updates []metricWatermark) error {
+	if len(updates) == 0 {
+		return nil
+	}
 
 	existing, err := readMetricWatermarks(path)
 	if err != nil {
@@ -73,7 +83,7 @@ func mergeMetricWatermarks(dataDir, sourceName, projectID string, updates []metr
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Target < merged[j].Target })
 
-	if err := os.MkdirAll(MetricsProjectDir(dataDir, sourceName, projectID), 0755); err != nil {
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 	return writeJSONLAtomic(path, merged, "metric watermark")
@@ -148,4 +158,52 @@ func metricWatermarks(sourceName, projectID, date string, records []source.Recor
 		watermarks = append(watermarks, seen[target])
 	}
 	return watermarks
+}
+
+// SeriesWatermarkFilePath is the watermark file of a series. The main series
+// ("") uses _watermark.json, which older binaries read and write. Other series,
+// such as GitHub's star history, get their own file: older binaries merge
+// watermark entries by target only, so sharing a file would mix them up.
+func SeriesWatermarkFilePath(dataDir, sourceName, projectID, series string) string {
+	if series == "" {
+		return WatermarkFilePath(dataDir, sourceName, projectID)
+	}
+	return filepath.Join(MetricsProjectDir(dataDir, sourceName, projectID), "_watermark-"+series+".json")
+}
+
+// IsWatermarkFile reports whether a file name is a watermark file of any
+// series.
+func IsWatermarkFile(name string) bool {
+	if name == WatermarkFileName {
+		return true
+	}
+	series, ok := strings.CutPrefix(name, "_watermark-")
+	if !ok {
+		return false
+	}
+	series, ok = strings.CutSuffix(series, ".json")
+	return ok && series != ""
+}
+
+// MarkFetchedSeries records that a series of the given targets has been
+// fetched through date. A watermark never moves backwards.
+func MarkFetchedSeries(dataDir, sourceName, projectID, series, date string, targets []string) error {
+	updates := make([]metricWatermark, 0, len(targets))
+	for _, target := range targets {
+		updates = append(updates, metricWatermark{Source: sourceName, ProjectID: projectID, Target: target, Date: date})
+	}
+	return mergeWatermarksAt(SeriesWatermarkFilePath(dataDir, sourceName, projectID, series), MetricsProjectDir(dataDir, sourceName, projectID), updates)
+}
+
+// SeriesWatermarks returns how far each target of a series has been fetched.
+func SeriesWatermarks(dataDir, sourceName, projectID, series string) (map[string]string, error) {
+	watermarks, err := readMetricWatermarks(SeriesWatermarkFilePath(dataDir, sourceName, projectID, series))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(watermarks))
+	for _, w := range watermarks {
+		out[w.Target] = w.Date
+	}
+	return out, nil
 }

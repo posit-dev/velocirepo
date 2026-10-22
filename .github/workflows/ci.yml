@@ -34,5 +34,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Install actionlint
+        # The tests lint the workflows install-ci generates with it.
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
       - name: Test
         run: go test -race ./...

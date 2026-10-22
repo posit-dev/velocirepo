@@ -46,6 +46,27 @@ func lastRecordedTotals(dir string) (map[string]int64, error) {
 // fetched again. For the same date, a daily file wins over a period file: it
 // was written later.
 func lastRecordedTotalsFor(dir string, wantedKeys map[string]struct{}, before string) (map[string]int64, error) {
+	states, err := lastRecordedTotalStates(dir, wantedKeys, before)
+	if err != nil || len(states) == 0 {
+		return nil, err
+	}
+	values := make(map[string]int64, len(states))
+	for key, state := range states {
+		values[key] = state.value
+	}
+	return values, nil
+}
+
+// totalState is the latest recorded value of a total_* series, and its date.
+type totalState struct {
+	value int64
+	date  string
+	daily bool
+}
+
+// lastRecordedTotalStates is lastRecordedTotalsFor with the dates of the
+// values.
+func lastRecordedTotalStates(dir string, wantedKeys map[string]struct{}, before string) (map[string]totalState, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -81,12 +102,6 @@ func lastRecordedTotalsFor(dir string, wantedKeys map[string]struct{}, before st
 		}
 		return files[i].daily && !files[j].daily
 	})
-
-	type totalState struct {
-		value int64
-		date  string
-		daily bool
-	}
 
 	totals := make(map[string]totalState)
 	for _, f := range files {
@@ -129,12 +144,7 @@ func lastRecordedTotalsFor(dir string, wantedKeys map[string]struct{}, before st
 	if len(totals) == 0 {
 		return nil, nil
 	}
-
-	values := make(map[string]int64, len(totals))
-	for key, total := range totals {
-		values[key] = total.value
-	}
-	return values, nil
+	return totals, nil
 }
 
 // periodSpan returns the first and last date a data file can hold, judging by

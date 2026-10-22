@@ -121,6 +121,13 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(migrate)
 	rootCmd.AddCommand(buildDBCmd())
 	rootCmd.AddCommand(validateDataCmd())
+	rootCmd.AddCommand(checkCmd())
+	rootCmd.AddCommand(replayCmd())
+	rootCmd.AddCommand(gateCmd())
+	rootCmd.AddCommand(checkHeartbeatCmd())
+	rootCmd.AddCommand(digestCmd())
+	rootCmd.AddCommand(uploadArchiveCmd())
+	rootCmd.AddCommand(downloadArchiveCmd())
 
 	// MCP
 	mcp := mcpCmd()

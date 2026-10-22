@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 )
 
 func TestPlausibleFetch(t *testing.T) {
@@ -300,5 +301,57 @@ func TestPlausibleAPIError(t *testing.T) {
 	_, err := p.Fetch(context.Background(), juneFetchOptions("mysite", 1, 1))
 	if err == nil {
 		t.Fatal("expected error for 401 response")
+	}
+}
+
+// A site's days end in its own time zone, which Plausible's Sites API
+// reports. A configured zone overrides it, and without either the latest time
+// zone there is, UTC-12, is assumed, so no partial day is ever stored.
+func TestPlausibleDayZone(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.URL.Path {
+		case "/api/v1/sites/plotnine.org":
+			_, _ = w.Write([]byte(`{"domain":"plotnine.org","timezone":"America/Los_Angeles"}`))
+		case "/api/v1/sites/posit-dev.github.io/chatlas":
+			_, _ = w.Write([]byte(`{"domain":"posit-dev.github.io/chatlas","timezone":"America/New_York"}`))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer server.Close()
+
+	zone := func(p *Plausible) string {
+		t.Helper()
+		loc, err := p.DayZone(context.Background(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loc.String()
+	}
+
+	p := &Plausible{Client: server.Client(), APIKey: "k", SiteID: "plotnine.org", BaseURL: server.URL}
+	if got := zone(p); got != "America/Los_Angeles" {
+		t.Errorf("zone = %s, want America/Los_Angeles", got)
+	}
+	_ = zone(p)
+	if requests != 1 {
+		t.Errorf("made %d Sites API requests for two lookups, want 1", requests)
+	}
+
+	if got := zone(&Plausible{Client: server.Client(), APIKey: "k", SiteID: "posit-dev.github.io/chatlas", BaseURL: server.URL}); got != "America/New_York" {
+		t.Errorf("zone of a site with a path = %s, want America/New_York", got)
+	}
+	if got := zone(&Plausible{Client: server.Client(), APIKey: "k", SiteID: "plotnine.org", BaseURL: server.URL, TimeZone: "Europe/Amsterdam"}); got != "Europe/Amsterdam" {
+		t.Errorf("configured zone = %s, want Europe/Amsterdam", got)
+	}
+
+	fallback, err := (&Plausible{Client: server.Client(), APIKey: "k", SiteID: "secret.example", BaseURL: server.URL}).DayZone(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, offset := time.Date(2026, 1, 15, 12, 0, 0, 0, fallback).Zone(); offset != -12*3600 {
+		t.Errorf("fallback offset = %d, want UTC-12", offset)
 	}
 }

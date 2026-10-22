@@ -1,0 +1,22 @@
+# Words that mark a changelog entry as being about an endpoint velocirepo
+# uses, matched case-insensitively against titles and descriptions. Keep
+# them specific: general words such as "deprecated" flag every Copilot
+# model that's retired.
+stargazer
+star history
+starred
+traffic
+graphql
+rate limit
+search api
+issues api
+issue comments
+pull requests api
+reactions
+forks api
+releases api
+artifacts api
+actions api
+stats api
+sites api
+plausible api

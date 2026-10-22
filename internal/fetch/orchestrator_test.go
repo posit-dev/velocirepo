@@ -39,36 +39,6 @@ func TestFetchRejectsStartDateAfterEndDate(t *testing.T) {
 	}
 }
 
-// Plausible reports days in the site's time zone, so its default end date is
-// one day earlier than other sources'. An explicit end date is respected.
-func TestDefaultEndDateSettlesPlausible(t *testing.T) {
-	now := time.Date(2025, 3, 10, 1, 0, 0, 0, time.UTC)
-	tests := []struct {
-		sourceName string
-		endDate    string
-		want       string
-	}{
-		{"plausible", "", "2025-03-08"},
-		{"pypi", "", "2025-03-09"},
-		{"plausible", "2025-03-09", "2025-03-09"},
-	}
-	for _, tt := range tests {
-		var got time.Time
-		cfg := &config.Config{Data: config.DataConfig{Dir: t.TempDir()}, Projects: map[string]config.Project{"proj": {}}}
-		if _, err := Source(context.Background(), cfg, Tokens{}, tt.sourceName,
-			Options{EndDate: tt.endDate, StartDate: "2025-03-01", Now: func() time.Time { return now }},
-			func(string, config.Project) []source.Source {
-				return []source.Source{endDateSource{name: tt.sourceName, got: &got}}
-			},
-		); err != nil {
-			t.Fatal(err)
-		}
-		if got.Format("2006-01-02") != tt.want {
-			t.Errorf("%s with end date %q fetched through %s, want %s", tt.sourceName, tt.endDate, got.Format("2006-01-02"), tt.want)
-		}
-	}
-}
-
 func TestTrafficGapIsLogged(t *testing.T) {
 	var logs bytes.Buffer
 	previous := slog.Default()
@@ -215,24 +185,4 @@ func (optsEvents) Name() string { return "github" }
 func (s optsEvents) FetchEvents(_ context.Context, opts source.FetchOptions) ([]source.Event, error) {
 	*s.got = opts
 	return nil, nil
-}
-
-// Repositories without stored daily stars get their whole star history read
-// once; the others only the fetch window.
-func TestEventJobBackfillsStarHistoryOfNewRepositories(t *testing.T) {
-	dataDir := t.TempDir()
-	cfg := &config.Config{Data: config.DataConfig{Dir: dataDir}}
-	stored := []source.Record{{Metric: "daily_stars", ProjectID: "proj", Target: "org/a", Date: "2025-02-01", Value: 1}}
-	if _, err := store.WriteRecords(dataDir, "github", "proj", stored); err != nil {
-		t.Fatal(err)
-	}
-
-	var got source.FetchOptions
-	if _, err := runJobs(context.Background(), cfg, Options{StartDate: "2025-03-01", EndDate: "2025-03-09"},
-		eventJob([]string{"org/a", "org/b"}, optsEvents{&got}), 1); err != nil {
-		t.Fatal(err)
-	}
-	if want := map[string]bool{"org/b": true}; len(got.StarHistoryBackfill) != 1 || !got.StarHistoryBackfill["org/b"] {
-		t.Errorf("StarHistoryBackfill = %v, want %v", got.StarHistoryBackfill, want)
-	}
 }

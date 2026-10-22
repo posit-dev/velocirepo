@@ -57,10 +57,34 @@ type FetchOptions struct {
 	StartDate time.Time
 	EndDate   time.Time
 	DataDir   string
-	// StarHistoryBackfill lists the GitHub repositories whose whole star
-	// history is read, regardless of StartDate, because none of it is stored
-	// yet.
-	StarHistoryBackfill map[string]bool
+	// Windows holds the days to fetch per series, for sources with more
+	// than one: GitHub's star history ("stars") ends its days in US Pacific
+	// time, so it has its own window. A series without one uses StartDate
+	// and EndDate.
+	Windows map[string]Window
+	// SkipSnapshots leaves out the requests of values that can't be fetched
+	// for a past day, such as GitHub's star and reaction counts: a repair of
+	// a past range would store today's values on past dates.
+	SkipSnapshots bool
+}
+
+// Window is a range of days to fetch. A zero Start means from the beginning.
+type Window struct {
+	Start time.Time
+	End   time.Time
+}
+
+// Empty reports whether the window holds no day, because it's up to date.
+func (w Window) Empty() bool {
+	return !w.Start.IsZero() && w.Start.After(w.End)
+}
+
+// Window returns the days to fetch for a series.
+func (o FetchOptions) Window(series string) Window {
+	if w, ok := o.Windows[series]; ok {
+		return w
+	}
+	return Window{Start: o.StartDate, End: o.EndDate}
 }
 
 type Source interface {

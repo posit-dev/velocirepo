@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/posit-dev/velocirepo/internal/archive"
 	"github.com/posit-dev/velocirepo/internal/config"
 	"github.com/posit-dev/velocirepo/internal/fetch"
 	"github.com/posit-dev/velocirepo/internal/store"
@@ -22,6 +24,11 @@ var (
 	fetchStartDate string
 	fetchEndDate   string
 	noConcatenate  bool
+	fetchResults   string
+	fetchArchive   string
+
+	// activeArchive is the archive of the running fetch, if any.
+	activeArchive *archive.Writer
 )
 
 func addFetchFlags(cmd *cobra.Command) {
@@ -29,13 +36,15 @@ func addFetchFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&fetchStartDate, "start-date", "", "start date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&fetchEndDate, "end-date", "", "end date (YYYY-MM-DD, default: yesterday)")
 	cmd.Flags().BoolVar(&noConcatenate, "no-concatenate", false, "skip concatenation after fetch")
+	cmd.Flags().StringVar(&fetchResults, "results", "", "write what every job did to this JSON file")
+	cmd.Flags().StringVar(&fetchArchive, "archive", "", "archive the responses of data that can't be fetched again in this directory")
 	cmd.GroupID = "fetch"
 }
 
 func fetchOpts() fetch.Options {
 	stats := fetch.NewStats(0)
 	var completed atomic.Int32
-	return fetch.Options{
+	opts := fetch.Options{
 		Project:       fetchProject,
 		StartDate:     fetchStartDate,
 		EndDate:       fetchEndDate,
@@ -47,6 +56,43 @@ func fetchOpts() fetch.Options {
 			renderResultWithProgress(r, n, stats.TotalJobs)
 		},
 	}
+	activeArchive = nil
+	if fetchArchive != "" && cfg.Settings.ArchiveEnabled() {
+		now := time.Now()
+		w, err := archive.NewWriter(fetchArchive, archive.NewRunID(now, os.Getenv), version.Version, now)
+		if err != nil {
+			slog.Warn("archive", "error", err)
+		} else {
+			fetch.AttachArchive(&opts, w)
+			activeArchive = w
+		}
+	}
+	return opts
+}
+
+// closeArchive finishes the run's archive. An archive that contains one of
+// the tokens is deleted: it would leak the token wherever it's uploaded.
+func closeArchive() {
+	if activeArchive == nil {
+		return
+	}
+	w := activeArchive
+	activeArchive = nil
+	if _, err := w.Close(); err != nil {
+		slog.Warn("close archive", "error", err)
+	}
+	tokens := fetch.TokensFromEnv()
+	found, err := archive.FindSecrets(w.Dir(), []string{tokens.GitHub, tokens.Plausible, tokens.YouTube, tokens.LinkedIn})
+	if err != nil {
+		slog.Warn("check archive for secrets", "error", err)
+		return
+	}
+	if len(found) > 0 {
+		_ = os.RemoveAll(w.Dir())
+		ui.Errorf("the archive contained a token (in %s), so it was deleted", strings.Join(found, ", "))
+		return
+	}
+	ui.Infof("Archived responses in %s", w.Dir())
 }
 
 func renderResultWithProgress(r fetch.Result, completed, total int) {
@@ -100,6 +146,12 @@ func renderFetchResults(results []fetch.Result) {
 func finishFetch(opts fetch.Options, results []fetch.Result, fetchErr error, command string) error {
 	renderFetchResults(results)
 	writeFetchLog(results, command)
+	closeArchive()
+	if fetchResults != "" {
+		if err := fetch.WriteResults(fetchResults, results, time.Now(), opts.Stats); err != nil {
+			slog.Warn("write results", "error", err)
+		}
+	}
 
 	if opts.Stats != nil {
 		ui.FetchSummary(ui.FetchStats{

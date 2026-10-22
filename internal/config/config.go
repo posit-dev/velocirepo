@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/posit-dev/velocirepo/internal/sourceinfo"
@@ -146,6 +147,60 @@ type DataConfig struct {
 type SettingsConfig struct {
 	EndDate                  string `toml:"end_date"`
 	IncludeDefaultIndicators *bool  `toml:"include_default_indicators"`
+	// Gate is "report" (the default) or "enforce". Only an enforcing gate
+	// restores removed records and holds back new data that fails a check.
+	Gate string `toml:"gate"`
+	// Archive turns the raw response archive on or off; it's on by default.
+	Archive *bool `toml:"archive"`
+	// Timezones maps a Plausible site to the time zone its days end in, for
+	// accounts without access to Plausible's Sites API.
+	Timezones map[string]string `toml:"timezones"`
+	// ConcatenateOnDay is the day of the month from which the previous month
+	// is concatenated; 8 by default, so late corrections of a month's last
+	// days don't rewrite its monthly file.
+	ConcatenateOnDay int `toml:"concatenate_on_day"`
+	// Owners are assigned to the tracking issue (GitHub users) or mentioned
+	// in it (teams, @org/team).
+	Owners []string `toml:"owners"`
+}
+
+// DefaultConcatenateOnDay is the concatenation day without a setting.
+const DefaultConcatenateOnDay = 8
+
+// ConcatenationDay returns the day of the month from which the previous
+// month is concatenated.
+func (s SettingsConfig) ConcatenationDay() int {
+	if s.ConcatenateOnDay == 0 {
+		return DefaultConcatenateOnDay
+	}
+	return s.ConcatenateOnDay
+}
+
+// Enforce reports whether the gate enforces rather than only reports.
+func (s SettingsConfig) Enforce() bool {
+	return s.Gate == "enforce"
+}
+
+// ArchiveEnabled reports whether raw responses are archived.
+func (s SettingsConfig) ArchiveEnabled() bool {
+	return s.Archive == nil || *s.Archive
+}
+
+func (s SettingsConfig) validate() error {
+	switch s.Gate {
+	case "", "report", "enforce":
+	default:
+		return fmt.Errorf("settings.gate is %q; use \"report\" or \"enforce\"", s.Gate)
+	}
+	if s.ConcatenateOnDay < 0 || s.ConcatenateOnDay > 28 {
+		return fmt.Errorf("settings.concatenate_on_day is %d; use a day from 1 to 28", s.ConcatenateOnDay)
+	}
+	for site, zone := range s.Timezones {
+		if _, err := time.LoadLocation(zone); err != nil {
+			return fmt.Errorf("settings.timezones: %s: unknown time zone %q", site, zone)
+		}
+	}
+	return nil
 }
 
 type ViewsConfig struct {
@@ -258,6 +313,10 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+
+	if err := cfg.Settings.validate(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 
 	cfg.Dir = filepath.Dir(path)

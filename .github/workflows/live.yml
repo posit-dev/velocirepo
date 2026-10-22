@@ -1,0 +1,51 @@
+name: Live API tests
+
+# Fetches known targets from every API velocirepo uses, so that an API change
+# is noticed here before it reaches anyone's data.
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run the live tests
+        id: tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRAFFIC_TOKEN: ${{ secrets.LIVE_TRAFFIC_TOKEN }}
+          PLAUSIBLE_TOKEN: ${{ secrets.LIVE_PLAUSIBLE_TOKEN }}
+          PLAUSIBLE_TEST_SITE: ${{ vars.LIVE_PLAUSIBLE_SITE }}
+          YOUTUBE_TOKEN: ${{ secrets.LIVE_YOUTUBE_TOKEN }}
+        run: |
+          set -o pipefail
+          go test -tags live ./internal/source -run Live -v 2>&1 | tee live.log
+
+      - name: Report a failure
+        if: failure() && steps.tests.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="The live API tests failed: $RUN_URL
+
+          $(grep -E -- '--- FAIL|_test.go' live.log | head -40 | sed 's/^/    /')"
+          issue=$(gh issue list --label live-tests --state open --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "$body"
+          else
+            gh label create live-tests --color d73a4a --description "Live API tests" 2>/dev/null || true
+            gh issue create --title "Live API tests are failing" --label live-tests --body "$body"
+          fi

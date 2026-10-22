@@ -748,3 +748,7 @@ func renameMetricsInFile(path string, renames map[string]string) error {
 
 	return writeJSONLLinesAtomic(path, lines)
 }
+
+// SchemaVersionFile is the name of the schema version file in the data
+// directory.
+const SchemaVersionFile = schemaVersionFile

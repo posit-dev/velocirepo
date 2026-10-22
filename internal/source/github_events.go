@@ -20,6 +20,7 @@ type GitHubEvents struct {
 
 	contentEntries map[string][]ContentEntry
 	records        []Record
+	snapshotRefs   []int
 }
 
 func (g *GitHubEvents) Name() string { return "github" }
@@ -46,6 +47,21 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 	}
 
 	g.contentEntries = make(map[string][]ContentEntry)
+	g.records = nil
+
+	stars := opts.Window("stars")
+	if !stars.Empty() {
+		starRecords, err := g.fetchStarHistory(ctx, owner, repo, opts, stars)
+		if err != nil {
+			return nil, fmt.Errorf("star history: %w", err)
+		}
+		g.records = starRecords
+	}
+
+	if opts.Window("").Empty() {
+		// Only the star history was behind.
+		return nil, nil
+	}
 
 	var events []Event
 
@@ -79,22 +95,52 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 	}
 	events = append(events, comments...)
 
-	allContent := append(issueContent, prContent...)
-	reactionRecords, err := g.fetchReactionCounts(ctx, owner, repo, opts, allContent)
-	if err != nil {
-		return nil, fmt.Errorf("reaction counts: %w", err)
+	// The issues and pull requests updated since StartDate, closed ones
+	// included, get their reaction counts refreshed: a count is otherwise
+	// only refreshed the next time its item shows up as updated.
+	var refs []int
+	for _, entry := range append(issueContent, prContent...) {
+		if entry.Ref != nil {
+			refs = append(refs, *entry.Ref)
+		}
 	}
-	g.records = reactionRecords
+	if !opts.SkipSnapshots {
+		if err := g.fetchSnapshots(ctx, owner, repo, opts, refs); err != nil {
+			return nil, err
+		}
+	}
 
-	starRecords, err := g.fetchStarHistory(ctx, owner, repo, opts)
-	if err != nil {
-		return nil, fmt.Errorf("star history: %w", err)
+	return events, nil
+}
+
+// FetchSnapshots fetches only the repository's snapshots: its repository info
+// (with total_stars) and the reaction counts of the given issues and pull
+// requests. Their values can't be fetched for a past day, so their requests
+// are archived, and replay uses this to repeat them without the event
+// requests, which aren't.
+func (g *GitHubEvents) FetchSnapshots(ctx context.Context, opts FetchOptions, refs []int) error {
+	owner, repo := splitOwnerRepo(g.Repo)
+	if owner == "" || repo == "" {
+		return fmt.Errorf("invalid github repo: %q", g.Repo)
 	}
-	g.records = append(g.records, starRecords...)
+	g.contentEntries = make(map[string][]ContentEntry)
+	g.records = nil
+	return g.fetchSnapshots(ctx, owner, repo, opts, refs)
+}
+
+// SnapshotRefs returns the issue and pull request numbers the last fetch
+// requested reaction counts for, for the archive's manifest.
+func (g *GitHubEvents) SnapshotRefs() []int {
+	return g.snapshotRefs
+}
+
+func (g *GitHubEvents) fetchSnapshots(ctx context.Context, owner, repo string, opts FetchOptions, refs []int) error {
+	ctx = WithArchiveMode(ctx, ArchiveFull)
+	g.snapshotRefs = append([]int(nil), refs...)
 
 	repoContent, starCount, err := g.fetchRepoInfo(ctx, owner, repo, opts)
 	if err != nil {
-		return nil, fmt.Errorf("repo info: %w", err)
+		return fmt.Errorf("repo info: %w", err)
 	}
 	if len(repoContent) > 0 {
 		g.contentEntries["repos.jsonl"] = repoContent
@@ -107,7 +153,12 @@ func (g *GitHubEvents) FetchEvents(ctx context.Context, opts FetchOptions) ([]Ev
 		Value:     starCount,
 	})
 
-	return events, nil
+	reactionRecords, err := g.fetchReactionCounts(ctx, owner, repo, opts, refs)
+	if err != nil {
+		return fmt.Errorf("reaction counts: %w", err)
+	}
+	g.records = append(g.records, reactionRecords...)
+	return nil
 }
 
 type githubPageReader func([]byte) ([]Event, pageInfo, bool, error)
@@ -138,25 +189,23 @@ func (g *GitHubEvents) fetchPaginatedEvents(ctx context.Context, owner, repo, qu
 	return events, nil
 }
 
-// starHistoryRereadDays is how many days before the end date each fetch
-// reads again. GitHub's star history uses US Pacific days, so the latest day
-// may still have been in progress during the previous run, and stars that are
-// removed again lower the count of the day they were given.
-const starHistoryRereadDays = 7
+// starHistoryZone is the time zone GitHub's star history counts days in.
+const starHistoryZone = "America/Los_Angeles"
+
+// DayZone returns the time zone a series' days end in: US Pacific time for
+// the star history, UTC for the events.
+func (g *GitHubEvents) DayZone(ctx context.Context, series string) (*time.Location, error) {
+	if series == "stars" {
+		return time.LoadLocation(starHistoryZone)
+	}
+	return time.UTC, nil
+}
 
 // fetchStarHistory returns daily_stars records from the star history
-// endpoint. Unlike the stargazer list, GitHub provides it for every
-// repository. Days without stars are only stored within the reread window,
-// where they may replace an earlier count.
-func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string, opts FetchOptions) ([]Record, error) {
-	reread := opts.EndDate.AddDate(0, 0, -starHistoryRereadDays)
-	from := opts.StartDate
-	if opts.StarHistoryBackfill[g.Repo] {
-		from = time.Time{}
-	} else if reread.Before(from) {
-		from = reread
-	}
-
+// endpoint for the days in w. Unlike the stargazer list, GitHub provides it
+// for every repository. Days without stars aren't stored. Each day is fetched
+// once, after it has ended in US Pacific time, so no stored day is read again.
+func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string, opts FetchOptions, w Window) ([]Record, error) {
 	var records []Record
 	// GitHub serves at most 100 pages of 30 weeks.
 	for page := 1; page <= 100; page++ {
@@ -173,11 +222,11 @@ func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string,
 		}
 
 		older := false
-		for _, w := range weeks {
-			sunday := time.Unix(w.Week, 0).UTC()
-			for i, n := range w.Days {
+		for _, week := range weeks {
+			sunday := time.Unix(week.Week, 0).UTC()
+			for i, n := range week.Days {
 				day := sunday.AddDate(0, 0, i)
-				if !inDateRange(day, from, opts.EndDate) || (n == 0 && day.Before(reread)) {
+				if n == 0 || !inDateRange(day, w.Start, w.End) {
 					continue
 				}
 				records = append(records, Record{
@@ -189,7 +238,7 @@ func (g *GitHubEvents) fetchStarHistory(ctx context.Context, owner, repo string,
 				})
 			}
 			// Weeks come newest first, so the rest are older still.
-			if sunday.Before(from) {
+			if sunday.Before(w.Start) {
 				older = true
 			}
 		}
@@ -564,17 +613,7 @@ func (g *GitHubEvents) fetchComments(ctx context.Context, owner, repo string, op
 
 const reactionCountBatchSize = 10
 
-func (g *GitHubEvents) fetchReactionCounts(ctx context.Context, owner, repo string, opts FetchOptions, content []ContentEntry) ([]Record, error) {
-	// content holds the issues and pull requests updated since StartDate,
-	// closed ones included. Refresh all of their counts: a count is otherwise
-	// only refreshed the next time its item shows up as updated.
-	var numbers []int
-	for _, entry := range content {
-		if entry.Ref != nil {
-			numbers = append(numbers, *entry.Ref)
-		}
-	}
-
+func (g *GitHubEvents) fetchReactionCounts(ctx context.Context, owner, repo string, opts FetchOptions, numbers []int) ([]Record, error) {
 	if len(numbers) == 0 {
 		return nil, nil
 	}
@@ -1124,4 +1163,19 @@ func updatedBeforeWindow(opts FetchOptions, updatedAt, createdAt string, others 
 		return false
 	}
 	return t.Before(opts.StartDate)
+}
+
+func init() {
+	Register(Meta{
+		Name:      "github",
+		Freshness: map[string]int{"": 1, "stars": 2},
+		// Events, comments and the star history can be fetched again. The
+		// snapshot requests (repository info and reaction counts) mark themselves
+		// with WithArchiveMode, since their values can't be fetched for a past day.
+		Archive:        NotArchived,
+		Reconciles:     true,
+		ReferenceQuota: "api.github.com/graphql",
+		// Comments and forks are deleted by their authors.
+		RemovableEvents: []string{"comment", "fork"},
+	})
 }

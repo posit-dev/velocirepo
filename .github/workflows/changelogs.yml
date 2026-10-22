@@ -1,0 +1,55 @@
+name: Changelogs
+
+# Flags changelog entries of the APIs velocirepo depends on that mention an
+# endpoint it uses, so an announced change is noticed before it breaks a
+# fetch.
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  changelogs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Fetch the changelogs
+        working-directory: .github/changelogs
+        run: |
+          go build -o "$RUNNER_TEMP/velocirepo" ../../cmd/velocirepo
+          "$RUNNER_TEMP/velocirepo" fetch-rss --start-date "$(date -u -d '2 days ago' +%Y-%m-%d)"
+
+      - name: Flag entries about endpoints velocirepo uses
+        working-directory: .github/changelogs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pattern=$(grep -v '^#' endpoints.txt | grep -v '^$' | paste -sd '|' -)
+          since=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)
+          "$RUNNER_TEMP/velocirepo" query --json \
+            "SELECT title, url, published_at FROM content
+             WHERE published_at >= '$since'
+               AND regexp_matches(lower(title || ' ' || coalesce(description, '')), '$pattern')
+             ORDER BY published_at" > flagged.json
+          count=$(jq length flagged.json)
+          echo "$count entries mention an endpoint velocirepo uses"
+          if [ "$count" -eq 0 ]; then exit 0; fi
+          body=$(jq -r '.[] | "- [\(.title)](\(.url)) (\(.published_at))"' flagged.json)
+          gh label create changelog --force --description "API changelog entries to review" >/dev/null
+          issue=$(gh issue list --label changelog --state open --json number --jq '.[0].number')
+          if [ -z "$issue" ]; then
+            gh issue create --title "API changelog entries to review" --label changelog \
+              --body "Changelog entries that mention an endpoint velocirepo uses:"$'\n\n'"$body"
+          else
+            gh issue comment "$issue" --body "$body"
+          fi

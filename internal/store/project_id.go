@@ -19,7 +19,7 @@ func RewriteProjectID(root, oldID, newID string) error {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".jsonl") && entry.Name() != WatermarkFileName) {
+		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".jsonl") && !IsWatermarkFile(entry.Name())) {
 			return nil
 		}
 		if err := rewriteProjectIDFile(path, oldID, newID); err != nil {

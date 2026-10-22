@@ -1,0 +1,50 @@
+name: Fetch Metrics
+
+on:
+  schedule:
+    - cron: '30 9 * * *'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Land a project's held-back data: <source>/<project>"
+        required: false
+        default: ""
+      discard:
+        description: "Discard a project's held-back data: <source>/<project>"
+        required: false
+        default: ""
+      repair:
+        description: "Re-fetch or replay a range: <source>/<project> <from>..<to>"
+        required: false
+        default: ""
+
+# One run at a time: a run that is in progress is allowed to finish.
+concurrency:
+  group: velocirepo-gate
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # commit the data, and store the archive as release assets
+  issues: write    # the tracking issue
+  actions: read    # archives saved as artifacts by earlier runs
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The history back to the last commit the gate checked.
+          fetch-depth: 0
+
+      - uses: posit-dev/velocirepo@v1
+        with:
+          mode: gate
+          github-token: ${{ secrets.GH_TOKEN }}
+          plausible-token: ${{ secrets.PLAUSIBLE_TOKEN }}
+          youtube-token: ${{ secrets.YOUTUBE_TOKEN }}
+          release: ${{ inputs.release }}
+          discard: ${{ inputs.discard }}
+          repair: ${{ inputs.repair }}
+          # Optional: a Healthchecks ping URL, for a heartbeat outside GitHub.
+          healthchecks-url: ${{ secrets.HEALTHCHECKS_URL }}

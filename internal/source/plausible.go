@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/url"
+	"time"
 
 	"github.com/posit-dev/velocirepo/internal/dateutil"
 )
@@ -15,9 +18,64 @@ type Plausible struct {
 	APIKey  string
 	SiteID  string
 	BaseURL string // override for testing
+	// TimeZone is the site's time zone from the config, if set there. It
+	// overrides the Sites API.
+	TimeZone string
+
+	zone *time.Location
 }
 
 func (p *Plausible) Name() string { return "plausible" }
+
+// latestTimeZone is UTC-12, the latest time zone there is: once a day has
+// ended there, it has ended everywhere.
+var latestTimeZone = time.FixedZone("UTC-12", -12*3600)
+
+// DayZone returns the time zone the site's days end in. Plausible reports
+// days in each site's own time zone, which the Sites API returns. Without
+// access to it, and without a configured zone, the site is treated as being
+// in UTC-12, so that no partial day is ever stored.
+func (p *Plausible) DayZone(ctx context.Context, series string) (*time.Location, error) {
+	if p.zone != nil {
+		return p.zone, nil
+	}
+	if p.TimeZone != "" {
+		loc, err := time.LoadLocation(p.TimeZone)
+		if err != nil {
+			return nil, fmt.Errorf("time zone of %s: %w", p.SiteID, err)
+		}
+		p.zone = loc
+		return loc, nil
+	}
+
+	var site struct {
+		TimeZone string `json:"timezone"`
+	}
+	err := doJSONInto(ctx, p.Client, httpJSONRequest{
+		URL:          p.baseURL() + "/api/v1/sites/" + url.PathEscape(p.SiteID),
+		Headers:      map[string]string{"Authorization": "Bearer " + p.APIKey},
+		RequestError: "request plausible site",
+		StatusError:  "plausible sites API returned",
+	}, &site)
+	p.zone = latestTimeZone
+	if err == nil && site.TimeZone != "" {
+		if loc, lerr := time.LoadLocation(site.TimeZone); lerr == nil {
+			p.zone = loc
+		}
+	}
+	if p.zone == latestTimeZone {
+		slog.Warn("plausible site's time zone unknown; assuming UTC-12, so its days arrive a day later",
+			"site", p.SiteID, "hint", "set it under [settings.timezones]")
+	}
+	return p.zone, nil
+}
+
+func (p *Plausible) baseURL() string {
+	if p.BaseURL != "" {
+		return p.BaseURL
+	}
+	return "https://plausible.io"
+}
 
 func (p *Plausible) Fetch(ctx context.Context, opts FetchOptions) ([]Record, error) {
 	type metricSet struct {
@@ -125,14 +183,9 @@ func (p *Plausible) query(ctx context.Context, payload interface{}, result inter
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	baseURL := "https://plausible.io"
-	if p.BaseURL != "" {
-		baseURL = p.BaseURL
-	}
-
 	return doJSONInto(ctx, p.Client, httpJSONRequest{
 		Method: http.MethodPost,
-		URL:    baseURL + "/api/v2/query",
+		URL:    p.baseURL() + "/api/v2/query",
 		Headers: map[string]string{
 			"Authorization": "Bearer " + p.APIKey,
 			"Content-Type":  "application/json",
@@ -141,4 +194,14 @@ func (p *Plausible) query(ctx context.Context, payload interface{}, result inter
 		RequestError: "request plausible",
 		StatusError:  "plausible returned",
 	}, result)
+}
+
+func init() {
+	Register(Meta{
+		Name:      "plausible",
+		Freshness: map[string]int{"": 2},
+		// Plausible keeps the full history.
+		Archive:    NotArchived,
+		Reconciles: true,
+	})
 }

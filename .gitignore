@@ -21,3 +21,7 @@ _great_docs_build/
 .great-docs-build/
 .great-docs-cache/
 .great-docs/
+
+# Data of the changelog monitoring workflow
+.github/changelogs/data/
+.github/changelogs/*.duckdb

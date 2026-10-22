@@ -450,3 +450,13 @@ type videoStats struct {
 	LikeCount    *int64 `json:"likeCount,string"`
 	CommentCount *int64 `json:"commentCount,string"`
 }
+
+func init() {
+	Register(Meta{
+		Name:      "youtube",
+		Freshness: map[string]int{"": 2},
+		// View, like and subscriber totals are snapshots.
+		Archive:           ArchiveFull,
+		NoReferenceTotals: "its totals are the data itself",
+	})
+}

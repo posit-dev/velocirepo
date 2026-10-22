@@ -1,0 +1,135 @@
+---
+title: Keeping the data right
+---
+
+Third-party APIs change, break and return less than they should, and a bug or a hand-made commit can remove history that can't be fetched again. velocirepo's nightly workflow is built so that the worst outcome of any of that is new data that waits, not data that's lost.
+
+## The nightly gate
+
+`velocirepo install-ci` generates three workflows:
+
+| Workflow | Runs | Does |
+|---|---|---|
+| `velocirepo.yml` | nightly | the gate: fetch, check, commit, push |
+| `velocirepo-heartbeat.yml` | three hours later | reports a nightly run that didn't start |
+| `velocirepo-digest.yml` | weekly | posts a digest of the data |
+
+They use the workflow's own token for everything in the data repository. `GITHUB_TOKEN`, passed as `github-token`, stays the token velocirepo fetches with. No repository setting has to change.
+
+The gate, `velocirepo gate`, does this every night:
+
+1. **Checks the commits made since its last run**, such as a re-fetch run by hand and pushed. It remembers the last commit it checked in `refs/velocirepo/checked`.
+2. **Fetches**, through yesterday in every source's time zone.
+3. **Checks the night's changes** with `velocirepo check`.
+4. **Commits the data**, as "Fetch metrics on 2026-10-21", with how far each source is stored in the commit message.
+5. **Concatenates** on or after the 8th of the month, in a commit of its own.
+6. **Pushes**, and reports in a tracking issue.
+
+### The rule
+
+A night only adds data. It never removes a stored record and never changes a stored value; content files, which are updated in place, are the exception.
+
+The gate reports by default: it commits everything, and its job summary says what it would have done. With
+
+```toml
+[settings]
+gate = "enforce"
+```
+
+it enforces the rule:
+
+- **Removed records** are restored, and reported as `diff.records-removed`.
+- **Changed values** keep their stored value, and are reported as `diff.values-changed`.
+- **New records** of a source and project with an error about them are held back, until the error is fixed or accepted. The other sources and projects land.
+
+### Held-back data
+
+Held-back data is kept in `velocirepo/held-back/<source>/<project>/`, outside the data, so queries and views don't see it, while the project's data stays as it was. Its watermarks are held back with it, so nothing is skipped: the next night fetches on from the held-back data, and checks it again together with the new night. Once it passes, all of it lands.
+
+Run the nightly workflow by hand to deal with held-back data yourself:
+
+- **`release: github/positron`** lands it regardless of its findings.
+- **`discard: github/positron`** deletes it, so it's fetched again where the API still has it.
+
+## Findings
+
+Every check reports findings with a severity and a stable ID:
+
+| Check | Reports |
+|---|---|
+| `fetch.failed` | a job failed; it stored nothing, and the next night fetches the same days again |
+| `fetch.deprecated` | an API endpoint announced its removal |
+| `diff.records-removed`, `diff.values-changed`, `diff.content-removed` | the data lost records, values or content entries compared with the previous commit |
+| `diff.repaired` | the changes of a repair |
+| `data.integrity` | duplicates, overlapping period files or temporary files; an error for duplicates added tonight |
+| `data.freshness` | a target that's further behind than its source allows |
+| `data.volume` | a target that usually has data and suddenly has none |
+| `reconcile.totals` | stored totals that differ from the API's own totals |
+| `reconcile.unavailable` | an API's own totals couldn't be read |
+| `concatenate.records-moved` | concatenation changed the records instead of only moving them |
+
+Only errors about the night's new records hold data back. Warnings never do, and neither do findings about data that was stored already: they're reported until they're resolved.
+
+Run the same checks locally, against `HEAD` or between two commits:
+
+```bash
+velocirepo check
+velocirepo check --base 03f2f5e66^ --head 03f2f5e66
+```
+
+### Accepting a finding
+
+A known false positive is accepted in `velocirepo/checks.toml`, next to the data, so accepting it is a reviewed change:
+
+```toml
+[[accept]]
+id = "952675f07b21"
+reason = "Two bot comments in the same second"
+expires = "2027-01-01"
+```
+
+### The tracking issue
+
+The gate keeps one issue, labelled `velocirepo-health`, with the findings that are open. Its body is rewritten every night; it's commented on only when findings change, and closed when none are left. `[settings] owners` are assigned to it, or mentioned for teams.
+
+## Reconciliation
+
+Missing or duplicated history looks like normal data to every other check, so `check` compares stored totals with the totals the APIs compute themselves:
+
+- **Every night**, GitHub's all-time numbers of issues, pull requests, merged pull requests, forks and stars, 40 repositories per GraphQL query.
+- **Each repository once a week**, its last complete month: GitHub's search counts of issues and pull requests opened, closed and merged, cranlogs' monthly downloads, and Plausible's monthly pageviews and visits.
+
+It uses at most 10% of each shared API quota, and the search API at most 270 times a night. What doesn't fit is reported as `quota.low` and checked on a later night.
+
+## The archive
+
+Some data can't be fetched again: snapshots such as star and reaction counts, GitHub traffic after 14 days, Homebrew, Open VSX and YouTube totals. The gate archives the raw responses of those requests, with the tokens left out, as assets of a monthly `raw-YYYY-MM` pre-release of the data repository. They're never committed, so the repository doesn't grow. `[settings] archive = false` turns this off.
+
+A bug in how responses were processed is repaired by replaying them:
+
+```bash
+velocirepo download-archive 20261021T093105Z-12345-1 --archive raw/
+velocirepo replay 20261021T093105Z-12345-1 --archive raw/
+```
+
+`replay` runs the original requests against the archived responses, never the network, with the options the run had.
+
+## Repairs
+
+Run the nightly workflow by hand with `repair: plausible/dplyr 2026-06-22..2026-10-16` to repair a range:
+
+- What the API still has is re-fetched: events, the star history, CRAN, Plausible, and traffic and PyPI while they're within the APIs' 14 and about 180 days.
+- What it doesn't is replayed from the archived runs of the range.
+- Snapshots are never re-fetched for a past range: that would store today's values on past dates.
+
+The repair's changes are reported as `diff.repaired`, and committed as "Repair plausible/dplyr 2026-06-22..2026-10-16" with a `Velocirepo-Repair:` trailer. A commit you make by hand with that trailer is treated the same way.
+
+## When the nightly run doesn't run
+
+A workflow that doesn't run can't report it. The heartbeat workflow checks three hours after the nightly run that it started, and comments on the tracking issue, or opens it, when it didn't. GitHub disables the schedules of repositories without activity for 60 days.
+
+For a heartbeat outside GitHub, set a [Healthchecks](https://github.com/healthchecks/healthchecks) ping URL as the `HEALTHCHECKS_URL` secret: the gate pings it when it starts and ends, and Healthchecks alerts on a missing ping.
+
+## The weekly digest
+
+Every week, a sparkline per source and project over the last 8 weeks, with the week's findings, is posted on an issue labelled `velocirepo-digest`. It's for the problems no check was written for: three months of zero events stand out in the first week.

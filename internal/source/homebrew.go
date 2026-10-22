@@ -59,3 +59,13 @@ func (h *Homebrew) Fetch(ctx context.Context, opts FetchOptions) ([]Record, erro
 
 	return records, nil
 }
+
+func init() {
+	Register(Meta{
+		Name:      "homebrew",
+		Freshness: map[string]int{"": 2},
+		// Install counts are snapshots.
+		Archive:           ArchiveFull,
+		NoReferenceTotals: "its install counts are the data itself",
+	})
+}

@@ -155,7 +155,7 @@ func validateRecordsDir(dir, sourceName, projectID string, result *ValidationRes
 			continue
 		}
 		name := entry.Name()
-		if name == WatermarkFileName {
+		if IsWatermarkFile(name) {
 			continue
 		}
 		path := filepath.Join(dir, name)

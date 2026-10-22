@@ -308,3 +308,44 @@ func extractKey(line string) string {
 	}
 	return strings.TrimSpace(parts[0])
 }
+
+// SetSettingList sets a list in [settings], keeping the rest of the file as
+// it is. A missing [settings] section is added before the projects.
+func SetSettingList(path, key string, values []string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	quoted := make([]string, len(values))
+	for i, v := range values {
+		quoted[i] = fmt.Sprintf("%q", v)
+	}
+	line := fmt.Sprintf("%s = [%s]", key, strings.Join(quoted, ", "))
+
+	lines := strings.Split(string(data), "\n")
+	start, end, found := FindSection(lines, "settings")
+	if !found {
+		at := len(lines)
+		for i, l := range lines {
+			if strings.HasPrefix(strings.TrimSpace(l), "[projects") {
+				at = i
+				break
+			}
+		}
+		section := []string{"[settings]", line, ""}
+		lines = append(lines[:at], append(section, lines[at:]...)...)
+		return writeFileAtomically(path, []byte(strings.Join(lines, "\n")), 0)
+	}
+	for i := start + 1; i < end; i++ {
+		if extractKey(lines[i]) == key {
+			lines[i] = line
+			return writeFileAtomically(path, []byte(strings.Join(lines, "\n")), 0)
+		}
+	}
+	insert := start + 1
+	for insert < end && extractKey(lines[insert]) != "" {
+		insert++
+	}
+	lines = append(lines[:insert], append([]string{line}, lines[insert:]...)...)
+	return writeFileAtomically(path, []byte(strings.Join(lines, "\n")), 0)
+}

@@ -5,6 +5,12 @@ branding:
   color: green
 
 inputs:
+  mode:
+    description: >-
+      What to run: fetch (velocirepo fetch, the default), gate (the nightly
+      run that only adds data), check-heartbeat or digest
+    required: false
+    default: fetch
   github-token:
     description: GitHub token for API access
     required: false
@@ -19,6 +25,45 @@ inputs:
     description: "velocirepo version to install (default: latest)"
     required: false
     default: latest
+  fetch-args:
+    description: "Extra arguments for velocirepo fetch"
+    required: false
+    default: ""
+  archive:
+    description: >-
+      Archive the responses of data that can't be fetched again, as assets of
+      this repository's monthly raw-YYYY-MM pre-release, for replays. Needs
+      the permissions contents: write and actions: read.
+    required: false
+    default: "false"
+  release:
+    description: "In gate mode: land a project's held-back data, <source>/<project>"
+    required: false
+    default: ""
+  discard:
+    description: "In gate mode: discard a project's held-back data, <source>/<project>"
+    required: false
+    default: ""
+  repair:
+    description: "In gate mode: re-fetch or replay a range, <source>/<project> <from>..<to>"
+    required: false
+    default: ""
+  healthchecks-url:
+    description: >-
+      Optional: a Healthchecks ping URL. The gate pings it when it starts and
+      when it ends, with its outcome, so a heartbeat outside GitHub notices a
+      run that didn't happen
+    required: false
+    default: ""
+  repo-token:
+    description: "Token for this repository, to store the archive (default: the workflow token)"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  pending-archive:
+    description: The path of an archive whose upload failed, saved as a workflow artifact for the next run
+    value: ${{ steps.upload-archive.outputs.pending-archive || steps.gate.outputs.pending-archive }}
 
 runs:
   using: composite
@@ -85,9 +130,91 @@ runs:
       run: velocirepo version
 
     - name: Fetch all sources
+      if: ${{ inputs.mode == 'fetch' }}
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         PLAUSIBLE_TOKEN: ${{ inputs.plausible-token }}
         YOUTUBE_TOKEN: ${{ inputs.youtube-token }}
-      run: velocirepo fetch
+        # Passed through the environment, not interpolated into the script.
+        VELOCIREPO_FETCH_ARGS: ${{ inputs.fetch-args }}
+        VELOCIREPO_ARCHIVE: ${{ inputs.archive }}
+      # Word splitting of the arguments is intended.
+      run: |
+        ARCHIVE_ARGS=""
+        if [ "$VELOCIREPO_ARCHIVE" = "true" ]; then
+          # Outside the work tree, so it's never committed.
+          ARCHIVE_ARGS="--archive $RUNNER_TEMP/velocirepo-archive"
+        fi
+        velocirepo fetch $ARCHIVE_ARGS $VELOCIREPO_FETCH_ARGS
+
+    - name: Upload the archive
+      id: upload-archive
+      # Also after a failed fetch: what it archived can't be fetched again.
+      if: ${{ !cancelled() && inputs.mode == 'fetch' && inputs.archive == 'true' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PLAUSIBLE_TOKEN: ${{ inputs.plausible-token }}
+        YOUTUBE_TOKEN: ${{ inputs.youtube-token }}
+        VELOCIREPO_REPO_TOKEN: ${{ inputs.repo-token }}
+      run: |
+        shopt -s nullglob
+        velocirepo upload-archive --pending --output "$GITHUB_OUTPUT" "$RUNNER_TEMP"/velocirepo-archive/*/
+
+    - name: Ping Healthchecks at the start
+      if: ${{ inputs.mode == 'gate' && inputs.healthchecks-url != '' }}
+      shell: bash
+      env:
+        HEALTHCHECKS_URL: ${{ inputs.healthchecks-url }}
+      # A ping that fails never fails the run.
+      run: curl -fsS -m 10 --retry 3 -o /dev/null "$HEALTHCHECKS_URL/start" || true
+
+    - name: Run the gate
+      id: gate
+      if: ${{ inputs.mode == 'gate' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PLAUSIBLE_TOKEN: ${{ inputs.plausible-token }}
+        YOUTUBE_TOKEN: ${{ inputs.youtube-token }}
+        VELOCIREPO_REPO_TOKEN: ${{ inputs.repo-token }}
+        VELOCIREPO_FETCH_ARGS: ${{ inputs.fetch-args }}
+        VELOCIREPO_RELEASE: ${{ inputs.release }}
+        VELOCIREPO_DISCARD: ${{ inputs.discard }}
+        VELOCIREPO_REPAIR: ${{ inputs.repair }}
+      # Word splitting of the arguments is intended.
+      run: velocirepo gate $VELOCIREPO_FETCH_ARGS
+
+    - name: Ping Healthchecks at the end
+      if: ${{ !cancelled() && inputs.mode == 'gate' && inputs.healthchecks-url != '' }}
+      shell: bash
+      env:
+        HEALTHCHECKS_URL: ${{ inputs.healthchecks-url }}
+        OUTCOME: ${{ steps.gate.outcome }}
+      run: |
+        if [ "$OUTCOME" = "success" ]; then url="$HEALTHCHECKS_URL"; else url="$HEALTHCHECKS_URL/fail"; fi
+        curl -fsS -m 10 --retry 3 -o /dev/null "$url" || true
+
+    - name: Check that the nightly run ran
+      if: ${{ inputs.mode == 'check-heartbeat' }}
+      shell: bash
+      env:
+        VELOCIREPO_REPO_TOKEN: ${{ inputs.repo-token }}
+        VELOCIREPO_FETCH_ARGS: ${{ inputs.fetch-args }}
+      run: velocirepo check-heartbeat $VELOCIREPO_FETCH_ARGS
+
+    - name: Post the digest
+      if: ${{ inputs.mode == 'digest' }}
+      shell: bash
+      env:
+        VELOCIREPO_REPO_TOKEN: ${{ inputs.repo-token }}
+      run: velocirepo digest
+
+    - name: Save the archive for the next run
+      if: ${{ !cancelled() && (steps.upload-archive.outputs.pending-archive != '' || steps.gate.outputs.pending-archive != '') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.upload-archive.outputs.pending-name || steps.gate.outputs.pending-name }}
+        path: ${{ steps.upload-archive.outputs.pending-archive || steps.gate.outputs.pending-archive }}
+        retention-days: 7
