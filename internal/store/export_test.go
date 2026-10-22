@@ -30,8 +30,8 @@ func TestExportParquet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(written) != 5 {
-		t.Fatalf("expected 5 files, got %d", len(written))
+	if len(written) != len(ExportTables) {
+		t.Fatalf("expected %d files, got %d", len(ExportTables), len(written))
 	}
 
 	metricsPath := filepath.Join(outDir, "metrics.parquet")
@@ -66,8 +66,8 @@ func TestExportCSV(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(written) != 5 {
-		t.Fatalf("expected 5 files, got %d", len(written))
+	if len(written) != len(ExportTables) {
+		t.Fatalf("expected %d files, got %d", len(ExportTables), len(written))
 	}
 
 	data, err := os.ReadFile(filepath.Join(outDir, "metrics.csv"))
@@ -108,11 +108,21 @@ func TestExportWithSourceFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(written) != 1 {
-		t.Fatalf("expected 1 file with source filter, got %d", len(written))
+	if len(written) != len(ExportTables) {
+		t.Fatalf("expected %d files with source filter, got %d", len(ExportTables), len(written))
 	}
-	if filepath.Base(written[0]) != "events.parquet" {
-		t.Errorf("expected events.parquet, got %s", filepath.Base(written[0]))
+	count := func(table string) int64 {
+		results, _, err := QueryLive(dataDir, nil, nil, "SELECT COUNT(*) AS cnt FROM '"+filepath.Join(outDir, table+".parquet")+"'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return results[0]["cnt"].(int64)
+	}
+	if n := count("events"); n != 1 {
+		t.Errorf("events has %d rows, want the github event", n)
+	}
+	if n := count("metrics"); n != 0 {
+		t.Errorf("metrics has %d rows, want none: the pypi record isn't github's", n)
 	}
 }
 
@@ -217,7 +227,7 @@ func TestExportEmptyData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(written) != 5 {
-		t.Fatalf("expected 5 files even for empty data, got %d", len(written))
+	if len(written) != len(ExportTables) {
+		t.Fatalf("expected %d files even for empty data, got %d", len(ExportTables), len(written))
 	}
 }
