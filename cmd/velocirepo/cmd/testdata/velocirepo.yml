@@ -32,7 +32,7 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # The history back to the last commit the gate checked.
           fetch-depth: 0

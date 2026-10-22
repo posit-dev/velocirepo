@@ -62,7 +62,7 @@ In `../devrel-io`, on a new branch `gate` (`git switch -c gate`):
    - pins the action to `@v1` instead of `@main`;
    - replaces the shell commit step with the gate.
    
-   Keep `actions/checkout@v4` as the template has it, or match devrel-io's `@v6`; either works.
+   The template has `actions/checkout@v6` since 2026-10-22 (it had `@v4`, which runs on Node 20, deprecated on GitHub).
 
 4. Check the workflows with `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7` in `../devrel-io`.
 5. Commit, for example "Run the nightly fetch through velocirepo's gate", push the branch, and open a PR. **Ask Jeroen before pushing, and again before merging.** Merge only after that day's nightly run has finished.

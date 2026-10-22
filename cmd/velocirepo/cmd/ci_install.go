@@ -54,7 +54,7 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # The history back to the last commit the gate checked.
           fetch-depth: 0
@@ -94,7 +94,7 @@ jobs:
   heartbeat:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           sparse-checkout: .github/workflows
 
@@ -121,7 +121,7 @@ jobs:
   digest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: posit-dev/velocirepo@{{.Version}}
         with:
@@ -151,7 +151,7 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: posit-dev/velocirepo@{{.Version}}
         with:

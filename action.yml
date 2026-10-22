@@ -213,7 +213,7 @@ runs:
 
     - name: Save the archive for the next run
       if: ${{ !cancelled() && (steps.upload-archive.outputs.pending-archive != '' || steps.gate.outputs.pending-archive != '') }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: ${{ steps.upload-archive.outputs.pending-name || steps.gate.outputs.pending-name }}
         path: ${{ steps.upload-archive.outputs.pending-archive || steps.gate.outputs.pending-archive }}
