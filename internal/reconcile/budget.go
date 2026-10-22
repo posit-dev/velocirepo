@@ -14,11 +14,12 @@ const budgetShare = 0.10
 
 // SearchQuota is the search API's quota, which only reconciliation uses:
 // fetch makes no search requests. It has its own budget per night, at no
-// more than searchesPerMinute.
+// more than searchesPerMinute. GitHub allows 30 searches a minute; the
+// margin keeps a minute that resets a little late from refusing the last.
 const (
 	SearchQuota       = "api.github.com/search"
 	SearchBudget      = 270
-	searchesPerMinute = 30
+	searchesPerMinute = 25
 )
 
 // Budget tracks how much of each quota reconciliation may still use in a run.

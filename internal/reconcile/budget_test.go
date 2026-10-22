@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -61,11 +62,11 @@ func TestPacer(t *testing.T) {
 	p := NewSearchPacer()
 	p.Now = func() time.Time { return now }
 	p.Sleep = func(_ context.Context, d time.Duration) error { slept += d; now = now.Add(d); return nil }
-	for i := 0; i < 31; i++ {
+	for i := 0; i <= searchesPerMinute; i++ {
 		_ = p.Wait(context.Background())
 	}
 	if slept != time.Minute {
-		t.Errorf("31 searches took %s, want a minute for the last 30", slept)
+		t.Errorf("%d searches took %s, want a minute for the last %d", searchesPerMinute+1, slept, searchesPerMinute)
 	}
 }
 
@@ -123,5 +124,24 @@ func TestMonthlyWindows(t *testing.T) {
 	}
 	if results := run(10); !results[0].Differs() {
 		t.Errorf("a missing week in September wasn't found: %+v", results)
+	}
+}
+
+// When the reference requests stop early, the totals that came back are
+// still compared, and only the targets without any are unavailable.
+func TestCompareKeepsTotalsBeforeAnError(t *testing.T) {
+	from, through := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	refs := []source.ReferenceTotal{{Target: "org/a", Kind: "events", Metric: "issue_open", Label: "issues opened", Value: 0, From: from, Through: through}}
+	projectsOf := map[string][]string{"org/a": {"a"}, "org/b": {"b"}}
+	results, err := compare(t.TempDir(), "github", projectsOf, []string{"org/a", "org/b"}, refs, errors.New("rate limit exceeded"), time.Now(), from, through)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range results {
+		got[r.Reference.Target] = r.Unavailable
+	}
+	if len(results) != 2 || got["org/a"] != "" || got["org/b"] != "rate limit exceeded" {
+		t.Errorf("results = %+v, want org/a compared and org/b unavailable", results)
 	}
 }

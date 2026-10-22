@@ -142,7 +142,7 @@ func (g *GitHubEvents) MonthlyReferenceTotals(ctx context.Context, targets []str
 			}
 			u := g.restBaseURL() + "/search/issues?per_page=1&q=" + url.QueryEscape(q)
 			total := ReferenceTotal{Target: repo, Kind: "events", Metric: s.metric, Label: s.label, From: from, Through: through}
-			if err := g.getREST(ctx, u, &resp); err != nil {
+			if err := g.searchREST(ctx, u, &resp); err != nil {
 				var status *HTTPStatusError
 				if errors.As(err, &status) && status.Code == 422 {
 					// The repository doesn't exist (anymore).
@@ -158,6 +158,37 @@ func (g *GitHubEvents) MonthlyReferenceTotals(ctx context.Context, targets []str
 		}
 	}
 	return out, nil
+}
+
+// githubSearchRetryDelay is how long a search waits after GitHub refused it
+// for its rate limit: the search API's limit is per minute.
+var githubSearchRetryDelay = time.Minute + 5*time.Second
+
+// githubSearchRetries is how often a refused search is tried again.
+const githubSearchRetries = 2
+
+// searchREST makes a search request, and waits and tries again when GitHub
+// refuses it for its rate limit, which can happen even when the searches
+// are paced, for example when other tools search with the same user.
+func (g *GitHubEvents) searchREST(ctx context.Context, u string, out any) error {
+	for attempt := 0; ; attempt++ {
+		err := g.getREST(ctx, u, out)
+		var status *HTTPStatusError
+		if attempt == githubSearchRetries || !errors.As(err, &status) || !isRateLimited(status) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(githubSearchRetryDelay):
+		}
+	}
+}
+
+// isRateLimited reports whether GitHub refused a request for a rate limit,
+// its primary or a secondary one.
+func isRateLimited(err *HTTPStatusError) bool {
+	return (err.Code == 403 || err.Code == 429) && strings.Contains(strings.ToLower(err.Message), "rate limit")
 }
 
 // ReferenceRequests is how many queries the all-time totals of n

@@ -388,7 +388,7 @@ Two levels:
 
 **Quota:**
 - **Shared quotas** (GitHub's REST and GraphQL limits of 5,000 an hour, Plausible's): reconciliation may use at most 10% per run, and gives way first when the quota runs low (see the quota budget in measure 4).
-- **The search API** has its own limit of 30 requests a minute, and only reconciliation uses it: `fetch` makes no search requests. So its budget is stated separately, as at most 270 searches a night at no more than 30 a minute. That covers the 1,860 weekly searches in seven nights, taking about 9 minutes a night.
+- **The search API** has its own limit of 30 requests a minute, and only reconciliation uses it: `fetch` makes no search requests. So its budget is stated separately, as at most 270 searches a night at no more than 25 a minute, leaving a margin below GitHub's 30. That covers the 1,860 weekly searches in seven nights, taking about 11 minutes a night. A search that GitHub still refuses for its rate limit waits a minute and tries again.
 
 | Source | Reference total | Verified |
 |---|---|---|

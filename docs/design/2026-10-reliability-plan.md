@@ -453,7 +453,7 @@ Worktree `reliability/reconcile-monthly`. Size: medium.
 
 | Task | Files |
 |---|---|
-| The quota budget: reconciliation uses at most 10% of each shared quota (GitHub REST and GraphQL, Plausible) and gives way first, with `quota.low`. The search API, which only reconciliation uses, has its own budget of 270 searches a night at no more than 30 a minute | `internal/reconcile/budget.go` |
+| The quota budget: reconciliation uses at most 10% of each shared quota (GitHub REST and GraphQL, Plausible) and gives way first, with `quota.low`. The search API, which only reconciliation uses, has its own budget of 270 searches a night at no more than 25 a minute (30 until 2026-10-22, which GitHub refused at the 31st search when its minute reset late; a refused search now waits and tries again) | `internal/reconcile/budget.go` |
 | Per-month search counts for the last complete month, rotated over seven nights | `internal/source/github_reconcile.go`, `internal/reconcile/rotation.go` |
 
 **Tests:** the remaining [reconciliation tests](2026-10-reliability.md#reconciliation-tests):

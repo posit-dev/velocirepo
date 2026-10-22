@@ -173,12 +173,23 @@ func Run(ctx context.Context, cfg *config.Config, dataDir string, opts Options, 
 func compare(dataDir, name string, projectsOf map[string][]string, targets []string, refs []source.ReferenceTotal, refErr error, now, from, through time.Time) ([]Result, error) {
 	var out []Result
 	if refErr != nil {
+		// The totals that came back before the error are compared; only
+		// the targets without any are unavailable.
+		got := map[string]bool{}
+		for _, ref := range refs {
+			got[ref.Target] = true
+		}
 		for _, t := range targets {
+			if got[t] {
+				continue
+			}
 			for _, p := range projectsOf[t] {
 				out = append(out, Result{Source: name, Project: p, Reference: source.ReferenceTotal{Target: t, From: from, Through: through}, Unavailable: refErr.Error()})
 			}
 		}
-		return out, nil
+		if len(refs) == 0 {
+			return out, nil
+		}
 	}
 	stored, err := storedTotals(dataDir, name, refs, now, from, through)
 	if err != nil {
