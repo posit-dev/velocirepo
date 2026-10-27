@@ -909,12 +909,14 @@ func (g *GitHubEvents) getREST(ctx context.Context, url string, out any) error {
 	if g.Token != "" {
 		headers["Authorization"] = "Bearer " + g.Token
 	}
-	return doJSONInto(ctx, g.Client, httpJSONRequest{
-		URL:          url,
-		Headers:      headers,
-		RequestError: "github REST request",
-		StatusError:  "github REST API returned",
-	}, out)
+	return withGitHubRateLimit(ctx, url, func() error {
+		return doJSONInto(ctx, g.Client, httpJSONRequest{
+			URL:          url,
+			Headers:      headers,
+			RequestError: "github REST request",
+			StatusError:  "github REST API returned",
+		}, out)
+	})
 }
 
 func extractIssueNumber(issueURL string) *int {
@@ -1093,25 +1095,32 @@ func (g *GitHubEvents) doGraphQL(ctx context.Context, query string, vars map[str
 	if g.Token != "" {
 		headers["Authorization"] = "Bearer " + g.Token
 	}
-	data, err := doRequest(ctx, g.Client, httpJSONRequest{
-		Method:       http.MethodPost,
-		URL:          g.graphqlURL(),
-		Headers:      headers,
-		Body:         bytes.NewReader(body),
-		RequestError: "graphql request",
-		StatusError:  "graphql returned",
+	var data []byte
+	err = withGitHubRateLimit(ctx, "graphql", func() error {
+		var header http.Header
+		var err error
+		data, header, err = doRequestHeader(ctx, g.Client, httpJSONRequest{
+			Method:       http.MethodPost,
+			URL:          g.graphqlURL(),
+			Headers:      headers,
+			Body:         bytes.NewReader(body),
+			RequestError: "graphql request",
+			StatusError:  "graphql returned",
+		})
+		if err != nil {
+			return err
+		}
+		var errResp struct {
+			Errors []graphQLErrorEntry `json:"errors"`
+		}
+		if json.Unmarshal(data, &errResp) == nil && len(errResp.Errors) > 0 {
+			return &graphQLError{errors: errResp.Errors, body: data, header: header}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	var errResp struct {
-		Errors []graphQLErrorEntry `json:"errors"`
-	}
-	if json.Unmarshal(data, &errResp) == nil && len(errResp.Errors) > 0 {
-		return nil, &graphQLError{errors: errResp.Errors, body: data}
-	}
-
 	return data, nil
 }
 
@@ -1126,6 +1135,7 @@ type graphQLErrorEntry struct {
 type graphQLError struct {
 	errors []graphQLErrorEntry
 	body   []byte
+	header http.Header
 }
 
 func (e *graphQLError) Error() string {

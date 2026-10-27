@@ -16,9 +16,12 @@ const budgetShare = 0.10
 // fetch makes no search requests. It has its own budget per night, at no
 // more than searchesPerMinute. GitHub allows 30 searches a minute; the
 // margin keeps a minute that resets a little late from refusing the last.
+// The search API has no daily limit, so the budget only bounds how long a
+// night searches: an hour, enough for 4 searches a week of about 2,600
+// repositories.
 const (
 	SearchQuota       = "api.github.com/search"
-	SearchBudget      = 270
+	SearchBudget      = 1500
 	searchesPerMinute = 25
 )
 

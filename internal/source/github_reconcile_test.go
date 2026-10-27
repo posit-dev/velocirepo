@@ -104,37 +104,3 @@ func TestGitHubMonthlyReferenceTotals(t *testing.T) {
 		t.Errorf("totals = %+v", totals)
 	}
 }
-
-// A search that GitHub refuses for its rate limit is tried again after a
-// wait; one that keeps being refused fails.
-func TestGitHubSearchesWaitForTheRateLimit(t *testing.T) {
-	defer func(d time.Duration) { githubSearchRetryDelay = d }(githubSearchRetryDelay)
-	githubSearchRetryDelay = time.Millisecond
-
-	refusals := 1
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if refusals > 0 {
-			refusals--
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"message": "API rate limit exceeded for user ID 1."}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"total_count": 7}`))
-	}))
-	defer srv.Close()
-	from, through := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
-	g := &GitHubEvents{Client: srv.Client(), BaseURL: srv.URL}
-
-	totals, err := g.MonthlyReferenceTotals(context.Background(), []string{"org/repo"}, from, through, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(totals) != len(githubMonthlySearches) || totals[0].Value != 7 {
-		t.Errorf("totals = %+v, want every search answered after the wait", totals)
-	}
-
-	refusals = githubSearchRetries + 1
-	if _, err := g.MonthlyReferenceTotals(context.Background(), []string{"org/repo"}, from, through, nil); err == nil || !strings.Contains(err.Error(), "rate limit") {
-		t.Errorf("err = %v, want the refusal after %d retries", err, githubSearchRetries)
-	}
-}

@@ -11,6 +11,9 @@ import (
 type HTTPStatusError struct {
 	Code    int
 	Message string
+	// Header is the response's, such as the rate limit headers of a
+	// refused request.
+	Header http.Header
 }
 
 func (e *HTTPStatusError) Error() string { return e.Message }
@@ -45,6 +48,12 @@ func doJSONInto(ctx context.Context, client *http.Client, spec httpJSONRequest, 
 }
 
 func doRequest(ctx context.Context, client *http.Client, spec httpJSONRequest) ([]byte, error) {
+	body, _, err := doRequestHeader(ctx, client, spec)
+	return body, err
+}
+
+// doRequestHeader is doRequest that also returns the response's header.
+func doRequestHeader(ctx context.Context, client *http.Client, spec httpJSONRequest) ([]byte, http.Header, error) {
 	method := spec.Method
 	if method == "" {
 		method = http.MethodGet
@@ -56,7 +65,7 @@ func doRequest(ctx context.Context, client *http.Client, spec httpJSONRequest) (
 
 	req, err := http.NewRequestWithContext(ctx, method, spec.URL, spec.Body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for key, value := range spec.Headers {
 		req.Header.Set(key, value)
@@ -65,9 +74,9 @@ func doRequest(ctx context.Context, client *http.Client, spec httpJSONRequest) (
 	resp, err := client.Do(req)
 	if err != nil {
 		if spec.RequestError != "" {
-			return nil, fmt.Errorf("%s: %w", spec.RequestError, err)
+			return nil, nil, fmt.Errorf("%s: %w", spec.RequestError, err)
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -83,12 +92,12 @@ func doRequest(ctx context.Context, client *http.Client, spec httpJSONRequest) (
 		} else {
 			msg = fmt.Sprintf("%s returned %d", req.URL.Path, resp.StatusCode)
 		}
-		return nil, &HTTPStatusError{Code: resp.StatusCode, Message: msg}
+		return nil, resp.Header, &HTTPStatusError{Code: resp.StatusCode, Message: msg, Header: resp.Header}
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, resp.Header, fmt.Errorf("read response: %w", err)
 	}
-	return body, nil
+	return body, resp.Header, nil
 }

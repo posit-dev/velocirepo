@@ -118,12 +118,14 @@ func (g *GitHubTraffic) get(ctx context.Context, url string, result interface{})
 	if g.Token != "" {
 		headers["Authorization"] = "Bearer " + g.Token
 	}
-	return doJSONInto(ctx, g.Client, httpJSONRequest{
-		URL:          url,
-		Headers:      headers,
-		RequestError: "request " + url,
-		StatusError:  "github traffic API returned",
-	}, result)
+	return withGitHubRateLimit(ctx, url, func() error {
+		return doJSONInto(ctx, g.Client, httpJSONRequest{
+			URL:          url,
+			Headers:      headers,
+			RequestError: "request " + url,
+			StatusError:  "github traffic API returned",
+		}, result)
+	})
 }
 
 func init() {
