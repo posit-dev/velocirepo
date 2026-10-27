@@ -99,7 +99,9 @@ Missing or duplicated history looks like normal data to every other check, so `c
 - **Every night**, GitHub's all-time numbers of issues, pull requests, merged pull requests, forks and stars, 40 repositories per GraphQL query.
 - **Each repository once a week**, its last complete month: GitHub's search counts of issues and pull requests opened, closed and merged, cranlogs' monthly downloads, and Plausible's monthly pageviews and visits.
 
-It uses at most 10% of each shared API quota, and the search API at most 270 times a night. What doesn't fit is reported as `quota.low` and checked on a later night.
+It uses at most 10% of each shared API quota, and the search API at most 1,500 times a night, at 25 searches a minute. What doesn't fit is reported as `quota.low` and checked on a later night.
+
+When GitHub refuses a request because a rate limit is reached, during a fetch or reconciliation, velocirepo waits until the limit resets (at most 65 minutes, as GitHub's response says) and tries again, so a large first fetch of many repositories with long histories completes instead of starting over the next night.
 
 ## The archive
 
