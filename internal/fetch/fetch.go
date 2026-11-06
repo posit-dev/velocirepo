@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/posit-dev/velocirepo/internal/auth"
@@ -51,6 +53,72 @@ type Options struct {
 	// Concatenate replaces the concatenation after the fetch; nil uses
 	// ConcatenationPolicy. It isn't called with NoConcatenate.
 	Concatenate func(dataDir string, now time.Time) error
+	// OnRunning is called every RunningEvery (30 seconds when zero) while
+	// jobs run, with the jobs that are running, longest first, so a long
+	// fetch shows what it's busy with between results.
+	OnRunning    func([]RunningJob)
+	RunningEvery time.Duration
+	// OnConcatenate is called before the concatenation after the fetch, and
+	// again when it's done, with how long it took.
+	OnConcatenate func(done bool, took time.Duration)
+}
+
+// RunningJob is a job that's being fetched, and since when.
+type RunningJob struct {
+	Source  string
+	Project string
+	Since   time.Time
+}
+
+// runningJobs tracks the jobs that are being fetched.
+type runningJobs struct {
+	mu   sync.Mutex
+	jobs map[jobKey]time.Time
+}
+
+func (r *runningJobs) start(k jobKey) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.jobs[k] = time.Now()
+}
+
+func (r *runningJobs) stop(k jobKey) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.jobs, k)
+}
+
+// snapshot returns the running jobs, longest-running first.
+func (r *runningJobs) snapshot() []RunningJob {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]RunningJob, 0, len(r.jobs))
+	for k, since := range r.jobs {
+		out = append(out, RunningJob{Source: k.sourceName, Project: k.projectID, Since: since})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Since.Equal(out[j].Since) {
+			return out[i].Since.Before(out[j].Since)
+		}
+		return out[i].Project < out[j].Project
+	})
+	return out
+}
+
+// reportRunning calls onRunning every interval until stop is closed.
+func reportRunning(running *runningJobs, every time.Duration, onRunning func([]RunningJob), stop <-chan struct{}) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if jobs := running.snapshot(); len(jobs) > 0 {
+				onRunning(jobs)
+			}
+		}
+	}
 }
 
 // JobInfo describes one target of a fetch job and the options it runs with.
@@ -249,9 +317,22 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
 
+	running := &runningJobs{jobs: map[jobKey]time.Time{}}
+	stopRunning := make(chan struct{})
+	if opts.OnRunning != nil {
+		every := opts.RunningEvery
+		if every <= 0 {
+			every = 30 * time.Second
+		}
+		go reportRunning(running, every, opts.OnRunning, stopRunning)
+	}
+
 	for _, job := range jobs {
 		job := job
 		g.Go(func() error {
+			key := jobKey{sourceName: job.sourceName, projectID: job.projectID}
+			running.start(key)
+			defer running.stop(key)
 			resultsCh <- runJob(gctx, plan, job, hooks{onJob: opts.OnJob, onDone: opts.OnTargetDone})
 			return nil
 		})
@@ -275,6 +356,7 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 	}()
 
 	_ = g.Wait()
+	close(stopRunning)
 	close(resultsCh)
 	<-done
 
@@ -285,8 +367,15 @@ func runJobsWithCallback(ctx context.Context, cfg *config.Config, opts Options, 
 		if opts.Concatenate != nil {
 			concatenate = opts.Concatenate
 		}
+		if opts.OnConcatenate != nil {
+			opts.OnConcatenate(false, 0)
+		}
+		started := time.Now()
 		if err := concatenate(dataDir, opts.now()); err != nil {
 			return results, fmt.Errorf("concatenation: %w", err)
+		}
+		if opts.OnConcatenate != nil {
+			opts.OnConcatenate(true, time.Since(started))
 		}
 	}
 

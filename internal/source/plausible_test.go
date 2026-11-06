@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -353,5 +354,60 @@ func TestPlausibleDayZone(t *testing.T) {
 	}
 	if _, offset := time.Date(2026, 1, 15, 12, 0, 0, 0, fallback).Zone(); offset != -12*3600 {
 		t.Errorf("fallback offset = %d, want UTC-12", offset)
+	}
+}
+
+// A query refused for Plausible's burst limit waits a burst window more each
+// time, or as long as Retry-After says, and is tried again; one that keeps
+// being refused fails after all.
+func TestPlausibleWaitsForTheRateLimit(t *testing.T) {
+	var waits []time.Duration
+	prev := plausibleSleep
+	plausibleSleep = func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil }
+	t.Cleanup(func() { plausibleSleep = prev })
+
+	refuse := func(w http.ResponseWriter, retryAfter string) {
+		if retryAfter != "" {
+			w.Header().Set("Retry-After", retryAfter)
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"Too many API requests in a short period of time. The limit is 60 per 10 seconds. Please throttle your requests."}`))
+	}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch calls {
+		case 1, 2:
+			refuse(w, "")
+			return
+		case 3:
+			refuse(w, "3")
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{{"dimensions": []string{"2025-06-01"}, "metrics": []int64{1, 1, 1}}},
+			"meta":    map[string]int{"total_rows": 1},
+		})
+	}))
+	defer server.Close()
+
+	p := &Plausible{Client: server.Client(), APIKey: "test-key", SiteID: "example.com", BaseURL: server.URL}
+	if _, err := p.Fetch(context.Background(), juneFetchOptions("mysite", 1, 1)); err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+	want := []time.Duration{10 * time.Second, 20 * time.Second, 3 * time.Second}
+	if fmt.Sprint(waits) != fmt.Sprint(want) {
+		t.Errorf("waits = %v, want %v", waits, want)
+	}
+
+	waits = nil
+	always := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuse(w, "1") }))
+	defer always.Close()
+	p = &Plausible{Client: always.Client(), APIKey: "test-key", SiteID: "example.com", BaseURL: always.URL}
+	if _, err := p.Fetch(context.Background(), juneFetchOptions("mysite", 1, 1)); err == nil || !strings.Contains(err.Error(), "429") {
+		t.Errorf("err = %v, want the 429", err)
+	}
+	if len(waits) != plausibleRateLimitRetries {
+		t.Errorf("waited %d times, want %d", len(waits), plausibleRateLimitRetries)
 	}
 }

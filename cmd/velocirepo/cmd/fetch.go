@@ -55,6 +55,16 @@ func fetchOpts() fetch.Options {
 			n := int(completed.Add(1))
 			renderResultWithProgress(r, n, stats.TotalJobs)
 		},
+		OnRunning: func(jobs []fetch.RunningJob) {
+			ui.Info(runningLine(jobs, int(completed.Load()), stats.TotalJobs, time.Now()))
+		},
+		OnConcatenate: func(done bool, took time.Duration) {
+			if done {
+				ui.Infof("Concatenated in %s", took.Round(time.Second))
+				return
+			}
+			ui.Info("Concatenating daily files into monthly and yearly files…")
+		},
 	}
 	activeArchive = nil
 	if fetchArchive != "" && cfg.Settings.ArchiveEnabled() {
@@ -105,6 +115,16 @@ func renderResultWithProgress(r fetch.Result, completed, total int) {
 		detail := fmt.Sprintf("%d records  %s", r.Records, fmtDuration(r.Duration))
 		ui.FetchProgress(completed, total, "✓", r.Source, r.ProjectID, detail, "\033[32m")
 	}
+}
+
+// runningLine says which jobs a fetch is still busy with, longest-running
+// first, between the lines of the jobs that finish.
+func runningLine(jobs []fetch.RunningJob, completed, total int, now time.Time) string {
+	parts := make([]string, len(jobs))
+	for i, j := range jobs {
+		parts[i] = fmt.Sprintf("%s/%s %s", j.Project, j.Source, now.Sub(j.Since).Round(time.Second))
+	}
+	return fmt.Sprintf(" [%d/%d] … running: %s", completed, total, strings.Join(parts, ", "))
 }
 
 func fmtDuration(d time.Duration) string {

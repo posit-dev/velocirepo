@@ -67,32 +67,41 @@ func TestGitHubRESTWaitsForTheRateLimit(t *testing.T) {
 	}
 }
 
-// GraphQL reports a used-up limit with HTTP 200 and a RATE_LIMITED error.
+// GraphQL reports a used-up limit with HTTP 200: RATE_LIMITED for the request
+// that uses it up, and RATE_LIMIT for the ones after it (the second body is
+// GitHub's response from a backfill).
 func TestGitHubGraphQLWaitsForTheRateLimit(t *testing.T) {
-	now, waits := stubGitHubClock(t)
-	refused := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !refused {
-			refused = true
-			w.Header().Set("X-RateLimit-Remaining", "0")
-			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(now.Add(10*time.Minute).Unix(), 10))
-			_, _ = w.Write([]byte(`{"errors": [{"type": "RATE_LIMITED", "message": "API rate limit exceeded for user ID 1."}]}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"data": {"ok": true}}`))
-	}))
-	defer srv.Close()
+	for _, body := range []string{
+		`{"errors": [{"type": "RATE_LIMITED", "message": "API rate limit exceeded for user ID 1."}]}`,
+		`{"errors":[{"type":"RATE_LIMIT","code":"graphql_rate_limit","message":"API rate limit already exceeded for user ID 1."}]}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			now, waits := stubGitHubClock(t)
+			refused := false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !refused {
+					refused = true
+					w.Header().Set("X-RateLimit-Remaining", "0")
+					w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(now.Add(10*time.Minute).Unix(), 10))
+					_, _ = w.Write([]byte(body))
+					return
+				}
+				_, _ = w.Write([]byte(`{"data": {"ok": true}}`))
+			}))
+			defer srv.Close()
 
-	g := &GitHubEvents{Client: srv.Client(), BaseURL: srv.URL}
-	data, err := g.doGraphQL(context.Background(), "query { ok }", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"ok": true`) {
-		t.Errorf("data = %s", data)
-	}
-	if len(*waits) != 1 || (*waits)[0] != 10*time.Minute+5*time.Second {
-		t.Errorf("waits = %v, want one of 10m5s", *waits)
+			g := &GitHubEvents{Client: srv.Client(), BaseURL: srv.URL}
+			data, err := g.doGraphQL(context.Background(), "query { ok }", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), `"ok": true`) {
+				t.Errorf("data = %s", data)
+			}
+			if len(*waits) != 1 || (*waits)[0] != 10*time.Minute+5*time.Second {
+				t.Errorf("waits = %v, want one of 10m5s", *waits)
+			}
+		})
 	}
 }
 

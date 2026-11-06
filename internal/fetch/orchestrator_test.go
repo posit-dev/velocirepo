@@ -186,3 +186,57 @@ func (s optsEvents) FetchEvents(_ context.Context, opts source.FetchOptions) ([]
 	*s.got = opts
 	return nil, nil
 }
+
+// blockingEvents fetches nothing until release is closed.
+type blockingEvents struct{ release <-chan struct{} }
+
+func (blockingEvents) Name() string { return "github" }
+
+func (s blockingEvents) FetchEvents(ctx context.Context, _ source.FetchOptions) ([]source.Event, error) {
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+	}
+	return nil, nil
+}
+
+// While a job runs, OnRunning says so, and the concatenation after the jobs
+// is announced before it starts and when it's done.
+func TestFetchReportsRunningJobsAndConcatenation(t *testing.T) {
+	cfg := &config.Config{Data: config.DataConfig{Dir: t.TempDir()}}
+	release := make(chan struct{})
+	var reported []RunningJob
+	var phases []bool
+	opts := Options{
+		StartDate: "2025-03-01", EndDate: "2025-03-09",
+		RunningEvery: 5 * time.Millisecond,
+		OnRunning: func(jobs []RunningJob) {
+			if reported == nil {
+				reported = jobs
+				close(release)
+			}
+		},
+		Concatenate:   func(string, time.Time) error { phases = append(phases, false); return nil },
+		OnConcatenate: func(done bool, _ time.Duration) { phases = append(phases, done) },
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := runJobs(context.Background(), cfg, opts, eventJob([]string{"org/repo"}, blockingEvents{release}), 1)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the job wasn't reported as running")
+	}
+	if len(reported) != 1 || reported[0].Project != "proj" || reported[0].Source != "github" || reported[0].Since.IsZero() {
+		t.Errorf("reported = %+v, want proj/github", reported)
+	}
+	// announced, concatenated, done
+	if want := []bool{false, false, true}; len(phases) != 3 || phases[0] != want[0] || phases[2] != want[2] {
+		t.Errorf("phases = %v, want %v", phases, want)
+	}
+}

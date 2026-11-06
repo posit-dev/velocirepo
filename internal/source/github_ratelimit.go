@@ -76,10 +76,13 @@ func githubRateLimitWait(err error, now time.Time) (time.Duration, bool) {
 			return 0, false
 		}
 	case errors.As(err, &gql):
-		// GraphQL reports a used-up primary limit with HTTP 200.
+		// GraphQL reports a used-up primary limit with HTTP 200: as
+		// RATE_LIMITED when a request uses up the limit, and as RATE_LIMIT
+		// with code graphql_rate_limit ("API rate limit already exceeded")
+		// for the requests after it.
 		limited := false
 		for _, e := range gql.errors {
-			if e.Type == "RATE_LIMITED" {
+			if e.Type == "RATE_LIMITED" || e.Type == "RATE_LIMIT" || e.Code == "graphql_rate_limit" {
 				limited = true
 			}
 		}
