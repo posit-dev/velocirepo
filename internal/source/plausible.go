@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/posit-dev/velocirepo/internal/dateutil"
@@ -177,23 +179,63 @@ type queryResult struct {
 	} `json:"meta"`
 }
 
+// Plausible refuses bursts with 429 ("Too many API requests in a short period
+// of time. The limit is 60 per 10 seconds."), which concurrent fetches of
+// many sites reach. A refused query waits, as long as Retry-After says or one
+// burst window more each time, and is tried again.
+const plausibleRateLimitRetries = 5
+
+// plausibleBurstWindow is the period Plausible's burst limit counts in.
+var plausibleBurstWindow = 10 * time.Second
+
+// plausibleRateLimitWaitMax is the longest a query waits: the hourly limit
+// resets within an hour.
+var plausibleRateLimitWaitMax = 65 * time.Minute
+
+// plausibleSleep waits, honouring the context; tests replace it.
+var plausibleSleep = func(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 func (p *Plausible) query(ctx context.Context, payload interface{}, result interface{}) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	return doJSONInto(ctx, p.Client, httpJSONRequest{
-		Method: http.MethodPost,
-		URL:    p.baseURL() + "/api/v2/query",
-		Headers: map[string]string{
-			"Authorization": "Bearer " + p.APIKey,
-			"Content-Type":  "application/json",
-		},
-		Body:         bytes.NewReader(body),
-		RequestError: "request plausible",
-		StatusError:  "plausible returned",
-	}, result)
+	for attempt := 0; ; attempt++ {
+		err := doJSONInto(ctx, p.Client, httpJSONRequest{
+			Method: http.MethodPost,
+			URL:    p.baseURL() + "/api/v2/query",
+			Headers: map[string]string{
+				"Authorization": "Bearer " + p.APIKey,
+				"Content-Type":  "application/json",
+			},
+			Body:         bytes.NewReader(body),
+			RequestError: "request plausible",
+			StatusError:  "plausible returned",
+		}, result)
+		var status *HTTPStatusError
+		if !errors.As(err, &status) || status.Code != http.StatusTooManyRequests || attempt == plausibleRateLimitRetries {
+			return err
+		}
+		wait := time.Duration(attempt+1) * plausibleBurstWindow
+		if s, perr := strconv.Atoi(status.Header.Get("Retry-After")); perr == nil && s > 0 {
+			wait = time.Duration(s) * time.Second
+		}
+		if wait > plausibleRateLimitWaitMax {
+			return err
+		}
+		slog.Warn("Plausible's rate limit was reached; waiting", "site", p.SiteID, "wait", wait.Round(time.Second))
+		if err := plausibleSleep(ctx, wait); err != nil {
+			return err
+		}
+	}
 }
 
 func init() {

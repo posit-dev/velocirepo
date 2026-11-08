@@ -1126,6 +1126,7 @@ func (g *GitHubEvents) doGraphQL(ctx context.Context, query string, vars map[str
 
 type graphQLErrorEntry struct {
 	Type    string `json:"type"`
+	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
